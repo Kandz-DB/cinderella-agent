@@ -1,5 +1,3 @@
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
-
 const API_KEY = process.env.ANTHROPIC_KEY;
 
 console.log("Cinderella is starting...");
