@@ -42,7 +42,7 @@ Return:
         "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
-        model: "claude-3-sonnet",
+        model: "claude-3-5-sonnet-latest",
         max_tokens: 500,
         messages: [{ role: "user", content: prompt }]
       })
