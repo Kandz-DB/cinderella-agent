@@ -50,9 +50,20 @@ Return:
 
     const data = await res.json();
 
-    console.log("\n==============================");
-    console.log("🧠 Cinderella thinking...\n");
-    console.log(data.content[0].text);
+console.log("\n==============================");
+console.log("🧠 Cinderella thinking...\n");
+
+// DEBUG FULL RESPONSE
+console.log("🔍 RAW RESPONSE:");
+console.log(JSON.stringify(data, null, 2));
+
+// SAFE ACCESS
+if (data && data.content && data.content.length > 0) {
+  console.log("\n✅ Parsed Output:\n");
+  console.log(data.content[0].text);
+} else {
+  console.log("\n❌ Unexpected response format");
+}
 
   } catch (err) {
     console.error("❌ Error:", err.message);
