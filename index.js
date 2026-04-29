@@ -1,9 +1,7 @@
-const API_KEY = process.env.ANTHROPIC_KEY;
-
 console.log("Cinderella is starting...");
 
+// Main loop
 async function think() {
-
   const emails = [
     { sender: "Marcus Webb", hoursOld: 26, subject: "Vendor contract approval" },
     { sender: "Karen Liu", hoursOld: 18, subject: "System access approval" }
@@ -37,38 +35,48 @@ Return:
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
-        "x-api-key": API_KEY,
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
+        "x-api-key": process.env.ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
       },
       body: JSON.stringify({
-       model: "claude-3-haiku-20240307",
+        model: "claude-3-haiku-20240307",
         max_tokens: 500,
-        messages: [{ role: "user", content: prompt }]
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: prompt
+              }
+            ]
+          }
+        ]
       })
     });
 
     const data = await res.json();
 
-console.log("\n==============================");
-console.log("🧠 Cinderella thinking...\n");
+    console.log("\n==============================");
+    console.log("🧠 Cinderella thinking...\n");
 
-// DEBUG FULL RESPONSE
-console.log("🔍 RAW RESPONSE:");
-console.log(JSON.stringify(data, null, 2));
+    // FULL DEBUG OUTPUT
+    console.log("🔍 RAW RESPONSE:");
+    console.log(JSON.stringify(data, null, 2));
 
-// SAFE ACCESS
-if (data && data.content && data.content.length > 0) {
-  console.log("\n✅ Parsed Output:\n");
-  console.log(data.content[0].text);
-} else {
-  console.log("\n❌ Unexpected response format");
-}
+    // SAFE PARSE
+    if (data && data.content && data.content.length > 0) {
+      console.log("\n✅ Parsed Output:\n");
+      console.log(data.content[0].text);
+    } else {
+      console.log("\n❌ Unexpected response format");
+    }
 
   } catch (err) {
     console.error("❌ Error:", err.message);
   }
 }
 
+// Run every 10 seconds
 setInterval(think, 10000);
-// redeploy trigger
