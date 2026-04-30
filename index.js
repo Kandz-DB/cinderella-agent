@@ -15,7 +15,14 @@ async function think() {
   const prompt = `
 You are Cinderella, an elite COO executive assistant.
 
-Analyse the situation below and return ONLY JSON.
+Analyse the situation below and return ONLY raw JSON.
+
+IMPORTANT RULES:
+- Do NOT include markdown, backticks, or explanation
+- Return valid JSON only
+- Capacity is percentage utilisation:
+  - 100% = fully overloaded
+  - 0% = fully available
 
 Emails:
 ${JSON.stringify(emails)}
@@ -23,11 +30,33 @@ ${JSON.stringify(emails)}
 Staff:
 ${JSON.stringify(staff)}
 
-Return:
+Return format:
+
 {
-  "priorities": [],
-  "risks": [],
-  "actions": []
+  "priorities": [
+    {
+      "id": "",
+      "task": "",
+      "owner": "",
+      "urgency": "low | medium | high",
+      "reason": ""
+    }
+  ],
+  "risks": [
+    {
+      "risk": "",
+      "impact": "",
+      "severity": "low | medium | high"
+    }
+  ],
+  "actions": [
+    {
+      "action": "",
+      "priority": "low | medium | high",
+      "owner": "",
+      "rationale": ""
+    }
+  ]
 }
 `;
 
