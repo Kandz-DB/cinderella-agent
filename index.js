@@ -1,7 +1,16 @@
+import express from "express";
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+let latestOutput = {};
+let isRunning = false;
 console.log("Cinderella is starting...");
 
 // Main loop
 async function think() {
+if (isRunning) return;
+  isRunning = true;
+  
   const emails = [
     { sender: "Marcus Webb", hoursOld: 26, subject: "Vendor contract approval" },
     { sender: "Karen Liu", hoursOld: 18, subject: "System access approval" }
@@ -84,28 +93,67 @@ Return format:
         ]
       })
     });
-
+if (!res.ok) {
+  console.error("❌ HTTP error:", res.status);
+  return;
+}
     const data = await res.json();
 
-    console.log("\n==============================");
-    console.log("🧠 Cinderella thinking...\n");
+if (!data) {
+  console.error("❌ Empty response from API");
+  return;
+}
+    
+if (data.type === "error") {
+  console.error("❌ Claude API error:", data.error?.message);
+  return;
+}
 
-    // FULL DEBUG OUTPUT
-    console.log("🔍 RAW RESPONSE:");
-    console.log(JSON.stringify(data, null, 2));
+console.log("\n==============================");
+console.log("🧠 Cinderella thinking...\n");
 
-    // SAFE PARSE
-    if (data && data.content && data.content.length > 0) {
-      console.log("\n✅ Parsed Output:\n");
-      console.log(data.content[0].text);
-    } else {
-      console.log("\n❌ Unexpected response format");
-    }
+// FULL DEBUG OUTPUT
+console.log("🔍 RAW RESPONSE:");
+console.log(JSON.stringify(data, null, 2));
 
-  } catch (err) {
+// SAFE PARSE
+if (data && data.content && data.content.length > 0) {
+  const clean = data.content[0].text
+    .replace(/```json/g, '')
+    .replace(/```/g, '')
+    .trim();
+
+  try {
+    latestOutput = JSON.parse(clean);
+
+    console.log("\n✅ Parsed Output:\n");
+    console.log(latestOutput);
+
+  } catch (e) {
+    console.log("❌ JSON parse error:");
+    console.log(clean);
+  }
+
+} else {
+  console.log("\n❌ Unexpected response format");
+}
+
+   } catch (err) {
     console.error("❌ Error:", err.message);
+  } finally {
+    isRunning = false;
   }
 }
 
-// Run every 10 seconds
-setInterval(think, 10000);
+think(); // run immediately on startup
+setInterval(think, 300000);
+app.get("/status", (req, res) => {
+  if (!latestOutput || Object.keys(latestOutput).length === 0) {
+    return res.json({ status: "initialising" });
+  }
+  res.json(latestOutput);
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
