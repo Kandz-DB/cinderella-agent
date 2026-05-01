@@ -47,7 +47,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .pnl{position:absolute;inset:0;overflow-y:auto;padding:20px;visibility:hidden;pointer-events:none;box-sizing:border-box}
 .pnl.active{visibility:visible;pointer-events:auto}
 .pnl-chat{position:absolute;inset:0;flex-direction:column;overflow:visable;visibility:hidden;pointer-events:none}
-.pnl-chat.active{visibility:visible;pointer-events:auto;display:flex}
+.pnl-chat.active{visibility:visible;pointer-events:auto;display:flex;height:100%}
 .mrow{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-bottom:16px}
 .met{background:var(--bg2);border-radius:var(--rm);padding:10px 12px;cursor:pointer;transition:all .1s}
 .met:hover{border:0.5px solid var(--g)}
@@ -149,7 +149,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .ch-title{font-size:13px;font-weight:500;color:var(--t1)}
 .ch-sub{font-size:10px;color:var(--t2)}
 .m365{font-size:9px;background:var(--bl2);color:#185FA5;padding:2px 5px;border-radius:3px;margin-left:5px}
-.msgs{flex:1;overflow-y:auto;padding:14px}
+.msgs{flex:1;overflow-y:auto;padding:14px;min-height:0}
 .msg{margin-bottom:12px;display:flex;flex-direction:column}
 .msg.u{align-items:flex-end}
 .msg.a{align-items:flex-start}
