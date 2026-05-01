@@ -909,8 +909,8 @@ function levenshtein(a,b){
 function renderSkillMatch(){
   const matches=findMatches();
   const mbadge=document.getElementById('matchBadge');
-  mbadge.textContent=matches.length;mbadge.style.display=matches.length>0?'inline-block':'none';
-  document.getElementById('sk-n').textContent=matches.length;
+  if(mbadge){mbadge.textContent=matches.length;mbadge.style.display=matches.length>0?'inline-block':'none';}
+  const skn=document.getElementById('sk-n');if(skn)skn.textContent=matches.length;
   const ml=document.getElementById('matchList');
   if(!ml)return;
   if(matches.length===0){
