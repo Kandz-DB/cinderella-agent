@@ -729,7 +729,7 @@ async function syncNow(){
     const t=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
     btn.textContent=`Synced ${t}`;btn.className='sync-btn ok';
     setSyncUI('on',`Last synced ${t} · ${SD.length} check-in${SD.length!==1?'s':''}`);
-    updateAll();
+    try { updateAll(); } catch(e) { console.warn('updateAll error:', e.message); }
   }catch(e){
     btn.textContent='Sync failed';btn.className='sync-btn';
     setSyncUI('warn',`Sync failed: ${e.message}`);
