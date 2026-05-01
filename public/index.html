@@ -22,7 +22,7 @@
 @media(prefers-color-scheme:dark){:root{--bg:#1c1c1a;--bg2:#252522;--bg3:#2e2e2b;--t1:#f0ede6;--t2:#a8a49c;--t3:#6a6660;--bl:rgba(255,255,255,0.07);--bm:rgba(255,255,255,0.12);--gl:#0F3D2E;--bl2:#0C3060;--al:#3D2E00;--rl:#3D0F0F}}
 html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--f);background:var(--bg3);color:var(--t1)}
 #appRoot{display:flex;flex-direction:column;height:100%;overflow:hidden}
-.tb{background:linear-gradient(135deg,#C2416A 0%,#E87FAB 60%,#D4547E 100%);border-bottom:none;padding:0 24px;height:56px;display:flex;align-items:center;gap:14px;z-index:100;box-shadow:0 2px 14px rgba(180,60,100,.3);flex-shrink:0}
+.tb{background:linear-gradient(90deg,#0A7A7A 0%,#0E9E9E 25%,#5DCFC9 45%,#F4C0D1 75%,#F9D4DF 100%);border-bottom:none;padding:0 24px;height:56px;display:flex;align-items:center;gap:14px;z-index:100;box-shadow:0 2px 14px rgba(10,120,120,.3);flex-shrink:0}
 .tb-logo{font-family:"Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;font-size:27px;color:#fff;font-style:italic;letter-spacing:.02em;text-shadow:0 1px 4px rgba(0,0,0,.18)}
 .tb-sub{font-size:10px;color:rgba(255,255,255,.8);letter-spacing:.09em;text-transform:uppercase;border-left:0.5px solid rgba(255,255,255,.3);padding-left:14px}
 .tb-r{margin-left:auto;display:flex;align-items:center;gap:8px}
@@ -936,7 +936,7 @@ async function autoBriefing(){
   const h=now.getHours();
   const greet=h<12?'morning':h<17?'afternoon':'evening';
   const staffCtx=SD.length>0?'\n\nLive staff check-ins this week:\n'+SD.map(s=>s.name+' ('+( s.role||'staff')+'): '+(s.capacity||0)+'% capacity, trend: '+(s.trend||'unknown')+', projects: '+(s.projects||'none')+', blockers: '+(s.blockers||'none')).join('\n'):'\n\nNo staff check-ins received yet this week.';
-  const briefingPrompt='Good '+greet+' Kandia. Please give me my briefing for right now. Cover: (1) my top 3 priorities today, (2) any emails that are overdue or need urgent reply, (3) any team capacity or blocker flags, (4) the single most important risk or compliance item to watch. Be concise and specific — I need to read this in 30 seconds.';
+  const briefingPrompt='Good '+greet+' Kandia. Give me my daily briefing in this exact format:\n\n**1. TOP PRIORITIES**\nThe top 3-5 things I must action today, ranked by urgency. Be specific - name the person, deadline or meeting.\n\n**2. EMAILS NEEDING A REPLY**\nAny emails needing my response, most overdue first. Name the sender, topic and how long it has been waiting.\n\n**3. TEAM FLAGS**\nAny staff capacity issues, blockers, burnout risks or availability problems from check-in data. If no check-ins, say so briefly.\n\n**4. CALENDAR TODAY**\nMy meetings today with times. Flag any that need prep or have no prep time blocked.\n\nKeep each section tight. Plain language. If a section has nothing to report, say so in one line.';
   setB(true);
   try{
     const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:800,system:SYS+staffCtx,messages:[{role:'user',content:briefingPrompt}]})});
