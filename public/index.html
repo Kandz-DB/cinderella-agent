@@ -753,22 +753,23 @@ function setSyncUI(state,msg){
 /* ── UPDATE ALL ── */
 function updateAll(){
   const n=SD.length;
-  document.getElementById('todayCount').textContent=n;
-  document.getElementById('todayCount').style.color=n>=8?'var(--g)':n>=4?'var(--a)':'var(--r)';
+  const tc=document.getElementById('todayCount');
+  if(tc){tc.textContent=n;tc.style.color=n>=8?'var(--g)':n>=4?'var(--a)':'var(--r)';}
   const badge=document.getElementById('staffBadge');
-  badge.textContent=n;badge.style.display=n>0?'inline-block':'none';
-  document.getElementById('briefingCheckin').textContent=n>0?`${n} of 12 check-ins this week. ${SD.filter(s=>s.capacity>=85).length} overloaded. ${SD.filter(s=>hasBlocker(s.blockers)).length} blockers.`:'No check-ins yet. Send the form to staff.';
+  if(badge){badge.textContent=n;badge.style.display=n>0?'inline-block':'none';}
+  const bc=document.getElementById('briefingCheckin');
+  if(bc){bc.textContent=n>0?`${n} of 12 check-ins this week. ${SD.filter(s=>s.capacity>=85).length} overloaded. ${SD.filter(s=>hasBlocker(s.blockers)).length} blockers.`:'No check-ins yet. Send the form to staff.';}
   renderStaff();renderSkillMatch();renderHR();
-  // Update metrics
   if(n>0){
     const avg=Math.round(SD.reduce((a,s)=>a+s.capacity,0)/n);
-    document.getElementById('sm-avg').textContent=avg+'%';
-    document.getElementById('sm-avg').style.color=avg>=80?'var(--a)':'var(--t1)';
-    document.getElementById('sm-n').textContent=n;
-    document.getElementById('sm-ov').textContent=SD.filter(s=>s.capacity>=85).length;
-    document.getElementById('sm-fr').textContent=SD.filter(s=>s.capacity<65).length;
-    document.getElementById('sk-ov').textContent=SD.filter(s=>s.capacity>=85).length;
-    document.getElementById('sk-fr').textContent=SD.filter(s=>s.capacity<70).length;
+    const els={
+      'sm-avg':avg+'%','sm-n':n,'sm-ov':SD.filter(s=>s.capacity>=85).length,
+      'sm-fr':SD.filter(s=>s.capacity<65).length,'sk-ov':SD.filter(s=>s.capacity>=85).length,
+      'sk-fr':SD.filter(s=>s.capacity<70).length
+    };
+    Object.entries(els).forEach(([id,val])=>{const el=document.getElementById(id);if(el)el.textContent=val;});
+    const smAvg=document.getElementById('sm-avg');
+    if(smAvg)smAvg.style.color=avg>=80?'var(--a)':'var(--t1)';
   }
   buildCharts();
 }
