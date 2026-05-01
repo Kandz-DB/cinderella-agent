@@ -1153,7 +1153,7 @@ async function send(){
   const sc=SD.length>0?'\n\nLive staff check-ins:\n'+SD.map(s=>`- ${s.name} (${s.role||'?'}): ${s.capacity}% capacity | trend: ${s.trend||'?'} | projects: ${s.projects||'none'} | blockers: ${s.blockers||'none'} | availability: ${s.availability||'?'} | skills: ${s.skills||'?'} | notes: ${s.notes||'none'}`).join('\n'):'\n\nNo staff check-ins this week.';
   addMsg('u',text);msgs.push({role:'user',content:text});setB(true);
   try{
-    const r=await fetch('/.netlify/functions/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,system:SYS+sc,messages:msgs})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,system:SYS+sc,messages:msgs})});
     const d=await r.json();
     if(d.error)throw new Error(d.error.message);
     const rep=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('\n')||'No response.';
@@ -1223,7 +1223,7 @@ async function generateEmailDraft(name,context,subject){
   const staffCtx=staffMember?`Staff member context: ${staffMember.name}, ${staffMember.role||'staff'}, ${staffMember.capacity}% capacity, projects: ${staffMember.projects||'none'}, blockers: ${staffMember.blockers||'none'}`:'';
   const prompt=`Draft a professional, warm and direct email from the COO of Risk 2 Solution to a staff member named ${name}.\n\nPurpose: ${context}\n${staffCtx}\n\nFormat your response as:\nSUBJECT: [subject line]\n\n[email body]\n\nKeep it concise (3-5 short paragraphs max), professional but human, action-oriented. Sign off as "Kandia" or "Kandia, COO" as appropriate.`;
   try{
-    const r=await fetch('/.netlify/functions/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,messages:[{role:'user',content:prompt}]})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,messages:[{role:'user',content:prompt}]})});
     const d=await r.json();
     if(d.error)throw new Error(d.error.message);
     const text=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('')||'';
@@ -1273,7 +1273,7 @@ async function refineEmail(){
   document.getElementById('dm-email-note').style.display='none';
   const prompt2=`Rewrite this email draft based on this instruction: "${instruction}"\n\nCurrent draft:\n${currentBody}\n\nReturn only the revised email body, no subject line.`;
   try{
-    const r=await fetch('/.netlify/functions/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:500,messages:[{role:'user',content:prompt2}]})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:500,messages:[{role:'user',content:prompt2}]})});
     const d=await r.json();
     const body=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('')||currentBody;
     showDraftResult(DM.name,document.getElementById('dm-subject').value,body.trim());
