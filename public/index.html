@@ -46,8 +46,8 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .main{flex:1;position:relative;overflow:hidden;height:100%}
 .pnl{position:absolute;inset:0;overflow-y:auto;padding:20px;visibility:hidden;pointer-events:none;box-sizing:border-box}
 .pnl.active{visibility:visible;pointer-events:auto}
-.pnl-chat{position:absolute;inset:0;flex-direction:column;overflow:visable;visibility:hidden;pointer-events:none}
-.pnl-chat.active{visibility:visible;pointer-events:auto;display:flex;height:100%}
+.pnl-chat{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;visibility:hidden;pointer-events:none}
+.pnl-chat.active{visibility:visible;pointer-events:auto;height:100%;}
 .mrow{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-bottom:16px}
 .met{background:var(--bg2);border-radius:var(--rm);padding:10px 12px;cursor:pointer;transition:all .1s}
 .met:hover{border:0.5px solid var(--g)}
@@ -160,7 +160,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .qas{padding:7px 14px;display:flex;flex-wrap:wrap;gap:5px;border-top:0.5px solid var(--bl);background:var(--bg)}
 .qa{font-size:10px;padding:4px 10px;border:0.5px solid var(--bm);border-radius:16px;cursor:pointer;background:none;color:var(--t2);font-family:var(--f);transition:all .1s}
 .qa:hover{background:var(--bg2);color:var(--t1)}
-.cin-wrap{border-top:0.5px solid var(--bl);padding:10px 14px;display:flex;gap:7px;align-items:flex-end;background:var(--bg)}
+.cin-wrap{border-top:0.5px solid var(--bl);padding:10px 14px;display:flex;gap:7px;align-items:flex-end;background:var(--bg);flex-shrink:0}
 .cin{flex:1;border:0.5px solid var(--bm);border-radius:var(--rl2);padding:7px 11px;font-size:12px;resize:none;max-height:90px;font-family:var(--f);background:var(--bg);color:var(--t1);line-height:1.5}
 .cin:focus{outline:none;border-color:var(--g)}
 .csend{background:var(--g);color:#fff;border:none;border-radius:var(--rm);padding:7px 14px;font-size:12px;cursor:pointer;font-weight:500;white-space:nowrap;height:34px;font-family:var(--f)}
