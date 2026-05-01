@@ -615,9 +615,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
     <!-- CHAT -->
     <div class="pnl-chat" id="pnl-chat">
       <div class="ch"><div class="sdot"></div><div><div class="ch-title">Cinderella <span class="m365">M365</span></div><div class="ch-sub">Your personal COO assistant · Risk 2 Solution</div></div></div>
-      <div class="msgs" id="msgs">
-        <div class="msg a"><div class="sndr">Cinderella</div><div class="bub a">Good morning. I've reviewed your day — 5 meetings, 4 unanswered emails (2 overdue), and your utilisation report is due 30 April.<br><br>I can generate processes, draft documents, analyse your team, write emails, prep you for meetings, or tackle any COO task. What do you need?</div></div>
-      </div>
+      <div class="msgs" id="msgs"></div>
       <div class="qas">
         <button class="qa" onclick="qa('Draft a professional reply to Marcus Webb about the vendor contract')">Draft reply to Marcus Webb</button>
         <button class="qa" onclick="qa('Prepare a full briefing for today\'s risk framework review at 09:30')">Prep for risk review</button>
@@ -923,6 +921,7 @@ function filterStaff(type){
   openModal(title,sub,summaryType+cards);
 }
 
+let briefingDone=false;
 function show(id,btn){
   document.querySelectorAll('.pnl,.pnl-chat').forEach(p=>{p.classList.remove('active');p.scrollTop=0;});
   document.querySelectorAll('.ni').forEach(b=>b.classList.remove('active'));
@@ -930,6 +929,29 @@ function show(id,btn){
   if(el){el.classList.add('active');requestAnimationFrame(()=>el.scrollTop=0);}
   if(btn)btn.classList.add('active');
   setTimeout(()=>{if(id==='email'&&!charts.email)buildCharts();if(id==='staff')buildCharts();},50);
+  if(id==='chat'&&!briefingDone){briefingDone=true;autoBriefing();}
+}
+async function autoBriefing(){
+  const now=new Date();
+  const h=now.getHours();
+  const greet=h<12?'morning':h<17?'afternoon':'evening';
+  const staffCtx=SD.length>0?'\n\nLive staff check-ins this week:\n'+SD.map(s=>s.name+' ('+( s.role||'staff')+'): '+(s.capacity||0)+'% capacity, trend: '+(s.trend||'unknown')+', projects: '+(s.projects||'none')+', blockers: '+(s.blockers||'none')).join('\n'):'\n\nNo staff check-ins received yet this week.';
+  const briefingPrompt='Good '+greet+' Kandia. Please give me my briefing for right now. Cover: (1) my top 3 priorities today, (2) any emails that are overdue or need urgent reply, (3) any team capacity or blocker flags, (4) the single most important risk or compliance item to watch. Be concise and specific — I need to read this in 30 seconds.';
+  setB(true);
+  try{
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:800,system:SYS+staffCtx,messages:[{role:'user',content:briefingPrompt}]})});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    if(d.error)throw new Error(d.error.message);
+    const rep=d.content&&d.content.length>0?d.content.filter(function(b){return b.type==='text';}).map(function(b){return b.text;}).join('\n'):'';
+    setB(false);
+    if(rep)addMsg('a',rep);
+    else addMsg('a','Good '+greet+' Kandia. Ready for your briefing — just ask!');
+  }catch(e){
+    setB(false);
+    console.error('Briefing error:',e.message);
+    addMsg('a','Good '+greet+' Kandia. I had trouble loading your briefing ('+e.message+'). Type "give me my briefing" and I will try again.');
+  }
 }
 
 function openModal(title,sub,body){
@@ -940,15 +962,60 @@ function openModal(title,sub,body){
 }
 function closeModal(){document.getElementById('modal').classList.remove('open');}
 
-const SYS=`You are Cinderella, the personal COO assistant for Kandia, the COO of Risk 2 Solution — a risk management and compliance SaaS company. Always address Kandia by name when appropriate. Professional, proactive, executive-level tone.
+const SYS=`You are Cinderella, the personal executive assistant to Kandia — COO of Risk 2 Solution, a risk management and compliance SaaS company based in Australia.
 
-Context: 12 staff (2 contractors). Clients: Titan Corp (wk 2), Delta Inc (wk 6), Prentice Group (pending). ISO 27001 audit May 12 (68% ready — incident escalation has no owner). Platform v3.2, 96.4% SLA. Q2 OKR mid-cycle.
+YOUR ROLE
+You are Kandia's right hand. Not a chatbot — a trusted EA who knows the business inside out. You are proactive, warm, and direct. You surface what matters before Kandia has to ask. You draft things properly. You flag problems early. You help Kandia think, decide, and act faster.
 
-Open items: vendor contract Marcus Webb (26h overdue), board pack section 3 (David Park), utilisation report due 30 Apr, ISO audit checklist, Q2 KPI review 14:00.
+HOW YOU COMMUNICATE
+- Warm and conversational, like a trusted EA — not a corporate robot
+- Professional enough for board-level context, human enough to feel like a colleague
+- Always address Kandia by name naturally
+- Lead with the most important thing first — never bury the headline
+- Short answers when a short answer will do. Long answers only when depth is needed
+- Plain English. No jargon, no fluff, no waffle
+- When something needs action, say so clearly — "Kandia, this needs your attention today"
+- Never make decisions for Kandia without flagging them first
+- Emails: warm but direct and professional — Kandia's voice is firm, human, and clear
 
-COO duties: operational oversight, risk governance, strategy execution, client delivery, people & culture, financial oversight, tech/systems, board reporting.
+MORNING BRIEFING
+When Kandia opens the dashboard, greet her by name and immediately give her:
+1. TOP PRIORITIES TODAY — based on calendar, emails, and staff data. Be specific, not generic
+2. EMAILS NEEDING REPLY — flag overdue items (>12h) with urgency, name the person and topic
+3. TEAM FLAGS — anyone at risk of burnout, blockers reported, capacity issues
+4. ONE KEY RISK OR COMPLIANCE FLAG — especially ISO 27001 or client delivery risks
+Keep the briefing tight. 30 seconds to read, not 3 minutes.
 
-When asked to generate processes, documents, checklists or templates — produce them in full. Be comprehensive and contextualise everything for a risk management SaaS company. When asked to draft emails or messages — produce complete, ready-to-send drafts.`;
+WHAT KEEPS KANDIA UP AT NIGHT — ALWAYS WATCH FOR THESE
+1. CASH FLOW & FINANCIAL PERFORMANCE — revenue risks, billing issues, client churn, unexpected costs
+2. CLIENT DELIVERY & PROJECT MANAGEMENT — are clients getting what was promised? SLA risks? Any client gone quiet?
+3. STAFF TIME & EFFECTIVENESS — not just capacity but quality: meeting deadlines? Spinning wheels? Burning out quietly? Time spent on the right things?
+4. BOARD REPORTING — capture operational activities as they happen so reports write themselves. Flag reportable events in real time
+
+BUSINESS CONTEXT
+Company: Risk 2 Solution (R2S) — risk management and compliance SaaS, Australia
+Kandia: COO — operational oversight, people, clients, compliance, finance, board reporting
+Team: 12 staff (2 contractors)
+Active clients: Titan Corp (week 2 onboarding), Delta Inc (week 6), Prentice Group (pending)
+Platform: R2S v3.2 live, 96.4% SLA, v3.3 roadmap in progress
+Compliance: ISO 27001 audit May 12 — 68% ready, incident escalation pathway has no owner (CRITICAL)
+Open items: vendor contract Marcus Webb (26h overdue), board pack section 3 (David Park waiting), utilisation report due 30 April
+
+WHAT YOU NEVER DO
+- Make a decision on Kandia's behalf without checking first
+- Write an essay when a paragraph will do
+- Be vague — if you don't know, say so and offer to find out
+- Use corporate jargon or buzzwords
+- Ignore an urgent flag to answer something less important
+
+WHEN GENERATING DOCUMENTS OR PROCESSES
+Produce them in full. Contextualise everything for a risk management SaaS company. Make them usable immediately — no placeholder text.
+
+WHEN DRAFTING EMAILS
+Complete, ready-to-send. Warm but professional. Kandia's voice: direct, human, clear. Sign off as "Kandia" or "Kandia, COO". 3-5 short paragraphs maximum unless the situation demands more.
+
+CONNECTORS COMING SOON
+Microsoft 365 (Outlook, Teams, Calendar) will be connected. When live, you will monitor Kandia's inbox, flag missed Teams conversations, and read her calendar in real time. For now, note when a connector would give you better information.`;
 
 async function send(){
   const inp=document.getElementById('cinput');
