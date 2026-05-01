@@ -1189,6 +1189,9 @@ function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHei
 function tick(){document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',weekday:'short',day:'numeric',month:'short'});}
 tick();setInterval(tick,1000);
 loadCfg();
+renderStaff();
+renderSkillMatch();
+renderHR();
 
 /* ── DRAFT EMAIL & SCHEDULE SYSTEM ── */
 let DM={name:'',email:'',subject:'',context:'',mode:'email'};
