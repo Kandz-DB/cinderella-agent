@@ -21,7 +21,6 @@
 }
 @media(prefers-color-scheme:dark){:root{--bg:#1c1c1a;--bg2:#252522;--bg3:#2e2e2b;--t1:#f0ede6;--t2:#a8a49c;--t3:#6a6660;--bl:rgba(255,255,255,0.07);--bm:rgba(255,255,255,0.12);--gl:#0F3D2E;--bl2:#0C3060;--al:#3D2E00;--rl:#3D0F0F}}
 html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--f);background:var(--bg3);color:var(--t1)}
-/* TOP BAR */
 .tb{background:linear-gradient(135deg,#C2416A 0%,#E87FAB 60%,#D4547E 100%);border-bottom:none;padding:0 24px;height:56px;display:flex;align-items:center;gap:14px;z-index:100;box-shadow:0 2px 14px rgba(180,60,100,.3)}
 .tb-logo{font-family:"Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;font-size:27px;color:#fff;font-style:italic;letter-spacing:.02em;text-shadow:0 1px 4px rgba(0,0,0,.18)}
 .tb-sub{font-size:10px;color:rgba(255,255,255,.8);letter-spacing:.09em;text-transform:uppercase;border-left:0.5px solid rgba(255,255,255,.3);padding-left:14px}
@@ -33,9 +32,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .sync-btn.ok{color:var(--g);border-color:var(--g)}
 .sync-btn.warn{color:var(--a);border-color:var(--a)}
 .clk{font-size:11px;color:rgba(255,255,255,.75);border-left:0.5px solid rgba(255,255,255,.25);padding-left:12px;font-variant-numeric:tabular-nums}
-/* LAYOUT */
 .app{display:flex;height:calc(100vh - 56px);overflow:hidden}
-/* SIDEBAR */
 .sb{width:200px;min-width:200px;height:100%;background:var(--bg);border-right:0.5px solid var(--bl);overflow-y:auto}
 .ng{padding:12px 14px 3px;font-size:9px;color:var(--t3);letter-spacing:.08em;text-transform:uppercase}
 .ni{display:flex;align-items:center;gap:8px;padding:7px 14px;font-size:12px;color:var(--t2);cursor:pointer;border:none;background:none;width:100%;text-align:left;transition:all .1s;border-right:2px solid transparent}
@@ -46,13 +43,11 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .nb-r{background:var(--rl);color:#A32D2D}
 .nb-a{background:var(--al);color:#854F0B}
 .nb-g{background:var(--gl);color:#0F6E56}
-/* MAIN */
 .main{flex:1;position:relative;overflow:hidden;height:100%}
 .pnl{position:absolute;inset:0;overflow-y:auto;padding:20px;visibility:hidden;pointer-events:none;box-sizing:border-box}
 .pnl.active{visibility:visible;pointer-events:auto}
-.pnl-chat{position:absolute;inset:0;flex-direction:column;overflow:hidden;visibility:hidden;pointer-events:none}
-.pnl-chat.active{visibility:visible;pointer-events:auto;display:flex}
-/* CARDS */
+.pnl-chat{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;visibility:hidden;pointer-events:none}
+.pnl-chat.active{visibility:visible;pointer-events:auto;height:100%;}
 .mrow{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-bottom:16px}
 .met{background:var(--bg2);border-radius:var(--rm);padding:10px 12px;cursor:pointer;transition:all .1s}
 .met:hover{border:0.5px solid var(--g)}
@@ -66,7 +61,6 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
 .sec{font-size:12px;font-weight:500;color:var(--t1);margin-bottom:12px;padding-bottom:7px;border-bottom:0.5px solid var(--bl)}
-/* CLICKABLE ROWS */
 .row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--bl);cursor:pointer;transition:background .1s;border-radius:4px;margin:0 -4px;padding-left:4px;padding-right:4px}
 .row:last-child{border-bottom:none}
 .row:hover{background:var(--bg2)}
@@ -86,13 +80,11 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .pm{background:var(--al);color:#854F0B}
 .pl{background:var(--gl);color:#0F6E56}
 .pt{font-size:12px;color:var(--t1);flex:1}
-/* INSIGHT */
 .ins{background:var(--bg2);border-radius:var(--rm);padding:9px 12px;margin-bottom:7px;cursor:pointer;transition:all .1s}
 .ins:last-child{margin-bottom:0}
 .ins:hover{border:0.5px solid var(--g)}
 .il{font-size:9px;color:var(--g);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
 .it{font-size:12px;color:var(--t1);line-height:1.5}
-/* EMAIL */
 .erow{display:flex;align-items:center;gap:9px;padding:8px 4px;border-bottom:0.5px solid var(--bl);cursor:pointer;border-radius:4px;transition:background .1s;margin:0 -4px}
 .erow:last-child{border-bottom:none}
 .erow:hover{background:var(--bg2)}
@@ -102,7 +94,6 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .es{font-size:10px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ea{font-size:9px;color:var(--t3);white-space:nowrap}
 .eu{color:var(--r);font-size:9px;font-weight:600;margin-left:4px}
-/* STAFF */
 .staff-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
 .sc{background:var(--bg);border:0.5px solid var(--bl);border-radius:var(--rl2);padding:12px 14px;cursor:pointer;transition:all .1s}
 .sc:hover{border-color:var(--g);box-shadow:0 2px 8px rgba(29,158,117,.1)}
@@ -126,7 +117,6 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .stag.up{background:var(--rl);color:#A32D2D}
 .stag.dn{background:var(--gl);color:#0F6E56}
 .snotes{font-size:10px;color:var(--t2);margin-top:5px;font-style:italic;line-height:1.4}
-/* SKILL MATCH */
 .smatch{background:var(--gl);border:0.5px solid #5DCAA5;border-radius:var(--rl2);padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:all .1s}
 .smatch:hover{border-color:var(--g)}
 .smatch-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
@@ -134,14 +124,12 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .smatch-names{font-size:12px;font-weight:500;color:#085041}
 .smatch-skills{font-size:11px;color:#0F6E56;margin-top:3px}
 .smatch-action{font-size:10px;color:#085041;margin-top:5px;font-weight:500}
-/* COO */
 .ci{padding:8px 4px;border-bottom:0.5px solid var(--bl);display:flex;align-items:flex-start;gap:7px;cursor:pointer;border-radius:4px;transition:background .1s;margin:0 -4px}
 .ci:last-child{border-bottom:none}
 .ci:hover{background:var(--bg2)}
 .cd{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:4px}
 .cn{font-size:12px;color:var(--t1);font-weight:500}
 .cs{font-size:10px;color:var(--t3);margin-top:1px}
-/* AUTOMATION */
 .auto-card{background:var(--bg);border:0.5px solid var(--bl);border-radius:var(--rl2);padding:14px 16px;margin-bottom:10px;cursor:pointer;transition:all .1s}
 .auto-card:hover{border-color:var(--b);box-shadow:0 2px 8px rgba(55,138,221,.1)}
 .auto-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
@@ -155,15 +143,14 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .at-a{background:var(--al);color:#854F0B}
 .at-r{background:var(--rl);color:#A32D2D}
 .auto-savings{font-size:11px;font-weight:500;color:var(--g);margin-top:6px}
-/* CHART */
 .chart-wrap{position:relative;height:220px;margin-top:8px}
 .chart-sm{position:relative;height:160px;margin-top:8px}
-/* CHAT */
-.ch{padding:12px 16px;border-bottom:0.5px solid var(--bl);display:flex;align-items:center;gap:9px;background:var(--bg)}
+/* FIX: flex-shrink:0 stops .ch from being squashed out of the chat panel */
+.ch{padding:12px 16px;border-bottom:0.5px solid var(--bl);display:flex;align-items:center;gap:9px;background:var(--bg);flex-shrink:0}
 .ch-title{font-size:13px;font-weight:500;color:var(--t1)}
 .ch-sub{font-size:10px;color:var(--t2)}
 .m365{font-size:9px;background:var(--bl2);color:#185FA5;padding:2px 5px;border-radius:3px;margin-left:5px}
-.msgs{flex:1;overflow-y:auto;padding:14px}
+.msgs{flex:1;overflow-y:auto;padding:14px;min-height:0}
 .msg{margin-bottom:12px;display:flex;flex-direction:column}
 .msg.u{align-items:flex-end}
 .msg.a{align-items:flex-start}
@@ -171,10 +158,11 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .bub.u{background:var(--g);color:#fff;border-bottom-right-radius:4px}
 .bub.a{background:var(--bg2);color:var(--t1);border-bottom-left-radius:4px;border:0.5px solid var(--bl)}
 .sndr{font-size:9px;color:var(--t3);margin-bottom:2px;padding:0 2px}
+/* FIX: flex-shrink:0 stops .qas pushing .cin-wrap off screen */
 .qas{padding:7px 14px;display:flex;flex-wrap:wrap;gap:5px;border-top:0.5px solid var(--bl);background:var(--bg);flex-shrink:0}
 .qa{font-size:10px;padding:4px 10px;border:0.5px solid var(--bm);border-radius:16px;cursor:pointer;background:none;color:var(--t2);font-family:var(--f);transition:all .1s}
 .qa:hover{background:var(--bg2);color:var(--t1)}
-.cin-wrap{border-top:0.5px solid var(--bl);padding:10px 14px;display:flex;gap:7px;align-items:flex-end;background:var(--bg)}
+.cin-wrap{border-top:0.5px solid var(--bl);padding:10px 14px;display:flex;gap:7px;align-items:flex-end;background:var(--bg);flex-shrink:0}
 .cin{flex:1;border:0.5px solid var(--bm);border-radius:var(--rl2);padding:7px 11px;font-size:12px;resize:none;max-height:90px;font-family:var(--f);background:var(--bg);color:var(--t1);line-height:1.5}
 .cin:focus{outline:none;border-color:var(--g)}
 .csend{background:var(--g);color:#fff;border:none;border-radius:var(--rm);padding:7px 14px;font-size:12px;cursor:pointer;font-weight:500;white-space:nowrap;height:34px;font-family:var(--f)}
@@ -184,7 +172,6 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .think span:nth-child(2){animation-delay:.2s}
 .think span:nth-child(3){animation-delay:.4s}
 @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
-/* MODAL */
 .mo{position:absolute;inset:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:500;padding:20px}
 .mo.open{display:flex}
 .mb{background:var(--bg);border-radius:16px;width:100%;max-width:560px;max-height:85vh;overflow-y:auto;border:0.5px solid var(--bm)}
@@ -211,7 +198,6 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .ab-text{font-size:11px;color:#A32D2D;line-height:1.4}
 .alert-box.warn .ab-text{color:#854F0B}
 .alert-box.ok .ab-text{color:#0F6E56}
-/* SETUP */
 .setup-mo{position:absolute;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:600;padding:20px}
 .setup-mb{background:var(--bg);border-radius:16px;padding:24px;width:100%;max-width:400px;border:0.5px solid var(--bm);max-height:90vh;overflow-y:auto}
 .setup-title{font-family:var(--fs);font-size:18px;color:var(--t1);margin-bottom:5px}
@@ -227,7 +213,6 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .stxt2 code{background:var(--bg2);padding:1px 4px;border-radius:3px;font-size:10px}
 .sbtn{background:var(--g);color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:12px;font-weight:500;cursor:pointer;width:100%;font-family:var(--f);margin-top:12px}
 .sskip{background:none;border:none;color:var(--t3);font-size:11px;cursor:pointer;margin-top:7px;font-family:var(--f);display:block;width:100%;text-align:center}
-/* EMAIL DRAFT MODAL */
 .dm{position:absolute;inset:0;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:700;padding:20px}
 .dm.open{display:flex}
 .dmb{background:var(--bg);border-radius:16px;width:100%;max-width:600px;max-height:88vh;overflow-y:auto;border:0.5px solid var(--bm)}
@@ -261,13 +246,11 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .ics-key{color:var(--t3);min-width:90px;font-weight:500;flex-shrink:0}
 .ics-val{color:var(--t1)}
 .dm-note{font-size:10px;color:var(--t3);padding:8px 20px;line-height:1.5}
-/* HR INSIGHTS */
 .hr-card{background:var(--bg);border:0.5px solid var(--bl);border-radius:var(--rl2);padding:14px 16px;margin-bottom:10px;cursor:pointer;transition:border-color .1s}
 .hr-card:hover{border-color:var(--b)}
 .hr-title{font-size:12px;font-weight:500;color:var(--t1);margin-bottom:3px}
 .hr-sub{font-size:11px;color:var(--t2);line-height:1.4}
 .hr-tag{display:inline-block;font-size:9px;padding:2px 7px;border-radius:8px;margin-top:5px}
-/* SYNC BAR */
 .sbar{background:var(--bg2);border-radius:var(--rm);padding:8px 12px;margin-bottom:12px;display:none;align-items:center;gap:8px;font-size:11px;color:var(--t2)}
 .sdot2{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .sdot2.on{background:var(--g)}
@@ -275,19 +258,19 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .sdot2.off{background:var(--t3)}
 </style>
 
-
 <div id="appRoot">
+
 <!-- SETUP MODAL -->
 <div class="setup-mo" id="setupMo" style="display:none">
   <div class="setup-mb">
     <div class="setup-title">Set up Cinderella</div>
-    <div class="setup-sub">Configure your API connections — takes about 3 minutes.</div>
+    <div class="setup-sub">Configure your API connections.</div>
     <label class="sl">Anthropic API key (for live chat)</label>
     <input class="si" type="password" id="s-api" placeholder="sk-ant-..." />
     <div class="sdiv"></div>
-    <div style="font-size:11px;font-weight:500;color:var(--t2);margin-bottom:10px">JSONBin (for automatic staff check-ins)</div>
+    <div style="font-size:11px;font-weight:500;color:var(--t2);margin-bottom:10px">JSONBin (for staff check-ins)</div>
     <div class="sstep"><div class="snum">1</div><div class="stxt2">Go to <a href="https://jsonbin.io" target="_blank">jsonbin.io</a> → create free account</div></div>
-    <div class="sstep"><div class="snum">2</div><div class="stxt2">Click <strong>Create Bin</strong> → type <code>[{"init":true}]</code> → Save Bin</div></div>
+    <div class="sstep"><div class="snum">2</div><div class="stxt2">Click <strong>Create Bin</strong> → type <code>[{"init":true}]</code> → Save</div></div>
     <div class="sstep"><div class="snum">3</div><div class="stxt2">Copy the <strong>Bin ID</strong> from the URL after <code>/b/</code></div></div>
     <div class="sstep"><div class="snum">4</div><div class="stxt2">Go to <strong>Account → API Keys</strong> → copy your <strong>Master Key</strong></div></div>
     <label class="sl">JSONBin Bin ID</label>
@@ -336,11 +319,11 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
           <div class="dm-field"><div class="dm-label">Message — edit before sending</div><textarea class="dm-value" id="dm-body" rows="10"></textarea></div>
         </div>
       </div>
-      <div class="dm-note" id="dm-email-note" style="display:none">✏️ Edit the draft above as needed, then open in Outlook or copy to clipboard.</div>
+      <div class="dm-note" id="dm-email-note" style="display:none">✏️ Edit the draft above, then open in Outlook or copy.</div>
       <div class="dm-actions" id="dm-email-actions" style="display:none">
         <button class="dm-btn outlook" onclick="openInOutlook()">📧 Open in Outlook</button>
         <button class="dm-btn copy" id="copyEmailBtn" onclick="copyEmail()">Copy email</button>
-        <button class="dm-btn refine" onclick="refineEmail()">✨ Refine with Cinderella</button>
+        <button class="dm-btn refine" onclick="refineEmail()">✨ Refine</button>
         <button class="dm-btn close-dm" onclick="closeDraft()">Close</button>
       </div>
     </div>
@@ -353,7 +336,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
           <div class="ics-row"><div class="ics-key">When</div><div class="ics-val"><input type="datetime-local" id="ics-when" style="background:var(--bg);border:0.5px solid var(--bm);border-radius:5px;padding:2px 6px;font-size:11px;color:var(--t1);font-family:var(--f)"></div></div>
           <div class="ics-row"><div class="ics-key">Notes</div><div class="ics-val"><textarea id="ics-notes" rows="3" style="width:100%;background:var(--bg);border:0.5px solid var(--bm);border-radius:5px;padding:5px 8px;font-size:11px;color:var(--t1);font-family:var(--f);resize:vertical;line-height:1.5"></textarea></div></div>
         </div>
-        <div style="font-size:11px;color:var(--t2);margin-top:8px;line-height:1.5">Downloading the .ics file will open it in Outlook as a new meeting invite. Add the staff member's email address in Outlook before sending.</div>
+        <div style="font-size:11px;color:var(--t2);margin-top:8px;line-height:1.5">Downloading the .ics file will open it in Outlook as a new meeting invite.</div>
       </div>
       <div class="dm-actions">
         <button class="dm-btn cal" onclick="downloadICS()">📅 Download calendar invite</button>
@@ -438,133 +421,121 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
     </div>
 
     <!-- EMAIL -->
-<!-- EMAIL -->
-   <div class="pnl" id="pnl-email">
-  <div class="sec">Email tracker — unanswered & overdue</div>
-
-  <div class="two">
-    <div>
-
-      <!-- NEEDS REPLY -->
-      <div class="card">
-        <div class="ct">
-          Needs your reply 
-          <span class="ct-action" onclick="qa('Draft replies to all my overdue emails')">
-            Draft all replies
-          </span>
-        </div>
-
-        <div class="erow">
-          <div class="ei">
-            <div class="ef">Marcus Webb</div>
-            <div class="es">Vendor contract approval</div>
+    <div class="pnl" id="pnl-email">
+      <div class="sec">Email tracker — unanswered &amp; overdue</div>
+      <div class="two">
+        <div>
+          <div class="card">
+            <div class="ct">Needs your reply <span class="ct-action" onclick="qa('Draft replies to all my overdue emails')">Draft all replies</span></div>
+            <div class="erow" onclick="omKey('email-marcus')"><div class="ei"><div class="ef">Marcus Webb</div><div class="es">Vendor contract approval</div></div><div class="ea">26h <span class="eu">Overdue</span></div></div>
+            <div class="erow" onclick="omKey('email-karen')"><div class="ei"><div class="ef">Karen Liu</div><div class="es">System access approval</div></div><div class="ea">18h</div></div>
+            <div class="erow" onclick="omKey('email-david')"><div class="ei"><div class="ef">David Park</div><div class="es">Board pack — COO narrative</div></div><div class="ea">5h</div></div>
+            <div class="erow" onclick="omKey('email-sofia')"><div class="ei"><div class="ef">Sofia Ng</div><div class="es">Process audit findings</div></div><div class="ea">3h</div></div>
           </div>
-          <div class="ea">26h <span class="eu">Overdue</span></div>
-        </div>
-
-        <div class="erow">
-          <div class="ei">
-            <div class="ef">Karen Liu</div>
-            <div class="es">System access approval</div>
-          </div>
-          <div class="ea">18h</div>
-        </div>
-
-        <div class="erow">
-          <div class="ei">
-            <div class="ef">David Chen</div>
-            <div class="es">Budget follow-up</div>
-          </div>
-          <div class="ea">5h</div>
-        </div>
-
-        <div class="erow">
-          <div class="ei">
-            <div class="ef">Sofia Martinez</div>
-            <div class="es">Client onboarding</div>
-          </div>
-          <div class="ea">3h</div>
-        </div>
-      </div>
-
-      <!-- WATCHING -->
-      <div class="card">
-        <div class="ct">Watching — awaiting replies</div>
-
-        <div class="erow">
-          <div class="ei">
-            <div class="ef">Titan Corp</div>
-            <div class="es">Follow-up on proposal</div>
-          </div>
-          <div class="ea">No reply</div>
-        </div>
-
-        <div class="erow">
-          <div class="ei">
-            <div class="ef">HR Team</div>
-            <div class="es">Policy confirmation</div>
-          </div>
-          <div class="ea">No reply</div>
-        </div>
-      </div>
-
-    </div>
-
-    <div>
-      <div class="card">
-        <div class="ct">Email workload this week</div>
-        <div class="chart-sm"><canvas id="emailChart"></canvas></div>
-      </div>
-
-      <div class="card">
-        <div class="ct">Cinderella insights</div>
-
-        <div class="ins">
-          <div class="il">Batch action</div>
-          <div class="it">
-            2 emails critically overdue. Cinderella can draft replies to all 4 unanswered emails at once.
+          <div class="card">
+            <div class="ct">Watching — awaiting replies</div>
+            <div class="erow" onclick="omKey('email-titan')"><div class="ei"><div class="ef">Titan Corp</div><div class="es">Onboarding checklist</div></div><div class="ea">2 days</div></div>
+            <div class="erow" onclick="omKey('email-hr')"><div class="ei"><div class="ef">HR Team</div><div class="es">Policy update sign-off</div></div><div class="ea">3 days</div></div>
           </div>
         </div>
-
-        <div class="ins">
-          <div class="il">Pattern</div>
-          <div class="it">
-            You reply to 73% of emails within 4 hours. Emails older than 12h drop to 40% reply rate.
+        <div>
+          <div class="card">
+            <div class="ct">Email workload this week</div>
+            <div class="chart-sm"><canvas id="emailChart"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="ct">Cinderella insights</div>
+            <div class="ins"><div class="il">Batch action</div><div class="it">2 emails critically overdue. Cinderella can draft replies to all 4 unanswered emails at once.</div></div>
+            <div class="ins"><div class="il">Pattern</div><div class="it">You reply to 73% of emails within 4 hours. Emails older than 12h drop to 40% reply rate.</div></div>
           </div>
         </div>
-
       </div>
     </div>
-  </div>
-</div>
+
+    <!-- STAFF DASHBOARD -->
+    <div class="pnl" id="pnl-staff">
+      <div class="sec">Staff dashboard — weekly check-in data</div>
+      <div class="mrow">
+        <div class="met" onclick="filterStaff('over')"><div class="ml">Avg capacity</div><div class="mv" id="sm-avg">—</div><div class="ms">team average</div></div>
+        <div class="met"><div class="ml">Check-ins received</div><div class="mv" id="sm-n">0</div><div class="ms">of 12 this week</div></div>
+        <div class="met" onclick="filterStaff('over')"><div class="ml">Overloaded &gt;85%</div><div class="mv" id="sm-ov" style="color:var(--r)">0</div><div class="ms">need action</div></div>
+        <div class="met" onclick="filterStaff('free')"><div class="ml">Available &lt;65%</div><div class="mv" id="sm-fr" style="color:var(--g)">0</div><div class="ms">can absorb work</div></div>
+      </div>
+      <div class="two">
+        <div>
+          <div class="card">
+            <div class="ct">Team capacity <span class="ct-action" onclick="qa('Analyse my team capacity data and recommend workload redistribution')">Cinderella analysis</span></div>
+            <div class="staff-grid" id="staffGrid">
+              <div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center;grid-column:1/-1">No check-ins yet. Send cinderella-checkin.html to staff — submissions appear here automatically.</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <div class="ct">Capacity distribution</div>
+            <div class="chart-wrap"><canvas id="capChart"></canvas></div>
+          </div>
+          <div class="card">
+            <div class="ct">Cinderella insights</div>
+            <div id="staffInsights"><div style="font-size:11px;color:var(--t3);padding:4px 0">Sync check-ins to see team insights.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SKILL MATCHING -->
+    <div class="pnl" id="pnl-skills">
+      <div class="sec">Skill matching — intelligent reallocation suggestions</div>
+      <div class="mrow">
+        <div class="met"><div class="ml">Matches found</div><div class="mv" id="sk-n" style="color:var(--g)">0</div><div class="ms">reallocation opportunities</div></div>
+        <div class="met" onclick="filterStaff('over')"><div class="ml">Overloaded staff</div><div class="mv" id="sk-ov" style="color:var(--r)">0</div><div class="ms">above 85%</div></div>
+        <div class="met" onclick="filterStaff('free')"><div class="ml">Available staff</div><div class="mv" id="sk-fr" style="color:var(--g)">0</div><div class="ms">below 65%</div></div>
+        <div class="met" onclick="qa('Who on my team has the most versatile skill set for covering multiple roles?')"><div class="ml">Skills audit</div><div class="mv" style="font-size:14px;color:var(--b)">Ask</div><div class="ms">Cinderella</div></div>
+      </div>
+      <div class="two">
+        <div>
+          <div class="card">
+            <div class="ct">Reallocation matches <span class="ct-action" onclick="qa('Suggest a full workload redistribution plan based on current team capacity and skills')">Full plan</span></div>
+            <div id="matchList"><div style="font-size:12px;color:var(--t2);padding:8px 0;line-height:1.5">Sync check-ins to see skill matches. Cinderella auto-detects when an overloaded staff member has a skill-matched colleague with spare capacity.</div></div>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <div class="ct">Skills matrix — team coverage</div>
+            <div id="skillMatrix"><div style="font-size:11px;color:var(--t3);padding:4px 0">Sync check-ins to see skills data.</div></div>
+          </div>
+          <div class="card">
+            <div class="ct">Distribution</div>
+            <div class="chart-sm"><canvas id="distChart"></canvas></div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- COO DUTIES -->
     <div class="pnl" id="pnl-coo">
       <div class="sec">COO command centre — Risk 2 Solution</div>
       <div class="two">
         <div class="card">
-          <div class="ct">Core responsibilities — click to explore <span class="ct-action" onclick="qa('What are my most important COO responsibilities to focus on this week at Risk 2 Solution?')">This week's focus </span></div>
-         <div style="display:grid;grid-template-columns:1fr 1fr">
-  <div>
-    <div class="ci" onclick="omKey('duty-ops')"><div class="cn">Operations oversight</div></div>
-    <div class="ci" onclick="omKey('duty-risk')"><div class="cn">Risk management</div></div>
-    <div class="ci" onclick="omKey('duty-strategy')"><div class="cn">Strategy execution</div></div>
-    <div class="ci" onclick="omKey('duty-clients')"><div class="cn">Client delivery</div></div>
-  </div>
-
-  <div>
-    <div class="ci" onclick="omKey('duty-people')"><div class="cn">People & culture</div></div>
-    <div class="ci" onclick="omKey('duty-finance')"><div class="cn">Financial oversight</div></div>
-    <div class="ci" onclick="omKey('duty-tech')"><div class="cn">Technology & platform</div></div>
-    <div class="ci" onclick="omKey('duty-reporting')"><div class="cn">Board reporting</div></div>
-  </div>
-  </div>
-
-</div>
-
+          <div class="ct">Core responsibilities <span class="ct-action" onclick="qa('What are my most important COO responsibilities to focus on this week at Risk 2 Solution?')">This week's focus</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr">
+            <div>
+              <div class="ci" onclick="omKey('duty-ops')"><div class="cn">Operations oversight</div></div>
+              <div class="ci" onclick="omKey('duty-risk')"><div class="cn">Risk management</div></div>
+              <div class="ci" onclick="omKey('duty-strategy')"><div class="cn">Strategy execution</div></div>
+              <div class="ci" onclick="omKey('duty-clients')"><div class="cn">Client delivery</div></div>
+            </div>
+            <div>
+              <div class="ci" onclick="omKey('duty-people')"><div class="cn">People &amp; culture</div></div>
+              <div class="ci" onclick="omKey('duty-finance')"><div class="cn">Financial oversight</div></div>
+              <div class="ci" onclick="omKey('duty-tech')"><div class="cn">Technology &amp; platform</div></div>
+              <div class="ci" onclick="omKey('duty-reporting')"><div class="cn">Board reporting</div></div>
+            </div>
+          </div>
+        </div>
         <div>
           <div class="card">
-            <div class="ct">Open actions <span class="ct-action" onclick="qa('Create a detailed action plan for all my open COO responsibilities this week')">Full action plan </span></div>
+            <div class="ct">Open actions <span class="ct-action" onclick="qa('Create a detailed action plan for all my open COO responsibilities this week')">Full action plan</span></div>
             <div class="pri" onclick="qa('Create a staff utilisation report template for Risk 2 Solution')"><span class="pp ph">Urgent</span><span class="pt">Staff utilisation report — 30 April</span></div>
             <div class="pri" onclick="qa('Write a complete COO board pack narrative section for April for Risk 2 Solution')"><span class="pp ph">Urgent</span><span class="pt">Board pack section 3 narrative</span></div>
             <div class="pri" onclick="qa('Create a Q2 OKR mid-cycle review document for Risk 2 Solution')"><span class="pp pm">This week</span><span class="pt">Q2 OKR mid-cycle review</span></div>
@@ -583,32 +554,31 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
     <!-- AUTOMATION -->
     <div class="pnl" id="pnl-auto">
-      <div class="sec">Automation &amp; process centre — what Cinderella can do for you</div>
+      <div class="sec">Automation &amp; process centre</div>
       <div class="mrow">
         <div class="met" onclick="qa('List everything Cinderella can automate or generate for me as COO of Risk 2 Solution')"><div class="ml">Total time savings</div><div class="mv">11h+</div><div class="ms">per week identified</div></div>
-        <div class="met"><div class="ml">Processes Cinderella can generate</div><div class="mv">12</div><div class="ms">ready now</div></div>
+        <div class="met"><div class="ml">Processes to generate</div><div class="mv">12</div><div class="ms">ready now</div></div>
         <div class="met"><div class="ml">Automation opportunities</div><div class="mv">4</div><div class="ms">technical integrations</div></div>
         <div class="met" onclick="qa('What should I automate first as COO of Risk 2 Solution to get the biggest immediate impact?')"><div class="ml">Where to start</div><div class="mv" style="font-size:14px;color:var(--b)">Ask</div><div class="ms">Cinderella</div></div>
       </div>
       <div class="two">
         <div>
           <div style="font-size:11px;font-weight:500;color:var(--t2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">Documents &amp; processes Cinderella can generate now</div>
-          <div class="auto-card" onclick="qa('Generate a complete training delivery process document for Risk 2 Solution including onboarding, compliance training, product training and ongoing development')"><div class="auto-head"><div class="auto-icon" style="background:var(--bl2)">📋</div><div><div class="auto-title">Training delivery process</div><div class="auto-sub">Onboarding, compliance, product, ongoing development — full documented process</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">HR</span><span class="auto-tag at-b">Operations</span></div><div class="auto-savings">Saves ~2h/week in ad-hoc training coordination</div></div>
-          <div class="auto-card" onclick="qa('Generate a weekly reporting process and template for Risk 2 Solution covering operations, staff capacity, client status, platform health and financial performance')"><div class="auto-head"><div class="auto-icon" style="background:var(--gl)">📊</div><div><div class="auto-title">Weekly reporting process</div><div class="auto-sub">Ops, capacity, clients, platform, financials — one consolidated report</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">Reporting</span></div><div class="auto-savings">Saves ~3h/week in manual report compilation</div></div>
-          <div class="auto-card" onclick="qa('Generate a quality assurance process for Risk 2 Solution covering client deliverable QA, platform release QA, and internal process QA with checklists')"><div class="auto-head"><div class="auto-icon" style="background:#FBEAF0">✅</div><div><div class="auto-title">Quality assurance process</div><div class="auto-sub">Client deliverables, platform releases, internal processes — QA checklists</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-r">Risk</span></div><div class="auto-savings">Reduces rework and client escalations</div></div>
-          <div class="auto-card" onclick="qa('Generate a complete client onboarding process document for Risk 2 Solution including all phases, checklists, stakeholder responsibilities and timelines')"><div class="auto-head"><div class="auto-icon" style="background:var(--al)">🤝</div><div><div class="auto-title">Client onboarding process</div><div class="auto-sub">All phases, checklists, stakeholders, timelines — standardised playbook</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-a">Client</span></div><div class="auto-savings">Saves ~2h per client onboarded</div></div>
-          <div class="auto-card" onclick="qa('Generate an ISO 27001 audit preparation process and complete pre-audit checklist for Risk 2 Solution')"><div class="auto-head"><div class="auto-icon" style="background:var(--rl)">🔒</div><div><div class="auto-title">ISO 27001 audit prep process</div><div class="auto-sub">Complete pre-audit checklist, responsibilities, and timeline for May 12</div></div></div><div class="auto-tags"><span class="auto-tag at-r">Urgent</span><span class="auto-tag at-r">Compliance</span></div><div class="auto-savings">Critical — audit in 18 days</div></div>
-          <div class="auto-card" onclick="qa('Generate an incident escalation process and pathway document for Risk 2 Solution suitable for ISO 27001 compliance')"><div class="auto-head"><div class="auto-icon" style="background:var(--rl)">⚠️</div><div><div class="auto-title">Incident escalation pathway</div><div class="auto-sub">Documented process with owner — resolves critical ISO 27001 audit gap</div></div></div><div class="auto-tags"><span class="auto-tag at-r">Urgent</span><span class="auto-tag at-r">ISO gap</span></div><div class="auto-savings">Resolves audit finding immediately</div></div>
+          <div class="auto-card" onclick="qa('Generate a complete training delivery process document for Risk 2 Solution')"><div class="auto-head"><div class="auto-icon" style="background:var(--bl2)">📋</div><div><div class="auto-title">Training delivery process</div><div class="auto-sub">Onboarding, compliance, product, ongoing development</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">HR</span></div><div class="auto-savings">Saves ~2h/week</div></div>
+          <div class="auto-card" onclick="qa('Generate a weekly reporting process and template for Risk 2 Solution')"><div class="auto-head"><div class="auto-icon" style="background:var(--gl)">📊</div><div><div class="auto-title">Weekly reporting process</div><div class="auto-sub">Ops, capacity, clients, platform, financials</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">Reporting</span></div><div class="auto-savings">Saves ~3h/week</div></div>
+          <div class="auto-card" onclick="qa('Generate a quality assurance process for Risk 2 Solution')"><div class="auto-head"><div class="auto-icon" style="background:#FBEAF0">✅</div><div><div class="auto-title">Quality assurance process</div><div class="auto-sub">Client deliverables, platform releases, internal processes</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-r">Risk</span></div></div>
+          <div class="auto-card" onclick="qa('Generate a complete client onboarding process document for Risk 2 Solution')"><div class="auto-head"><div class="auto-icon" style="background:var(--al)">🤝</div><div><div class="auto-title">Client onboarding process</div><div class="auto-sub">All phases, checklists, stakeholders, timelines</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-a">Client</span></div><div class="auto-savings">Saves ~2h per client</div></div>
+          <div class="auto-card" onclick="qa('Generate an ISO 27001 audit preparation process and complete pre-audit checklist for Risk 2 Solution')"><div class="auto-head"><div class="auto-icon" style="background:var(--rl)">🔒</div><div><div class="auto-title">ISO 27001 audit prep process</div><div class="auto-sub">Complete pre-audit checklist for May 12</div></div></div><div class="auto-tags"><span class="auto-tag at-r">Urgent</span><span class="auto-tag at-r">Compliance</span></div><div class="auto-savings">Critical — audit soon</div></div>
+          <div class="auto-card" onclick="qa('Generate an incident escalation process and pathway document for Risk 2 Solution for ISO 27001')"><div class="auto-head"><div class="auto-icon" style="background:var(--rl)">⚠️</div><div><div class="auto-title">Incident escalation pathway</div><div class="auto-sub">Resolves critical ISO 27001 audit gap</div></div></div><div class="auto-tags"><span class="auto-tag at-r">Urgent</span><span class="auto-tag at-r">ISO gap</span></div></div>
         </div>
         <div>
           <div style="font-size:11px;font-weight:500;color:var(--t2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">More Cinderella can generate</div>
-          <div class="auto-card" onclick="qa('Generate a performance review process and template for Risk 2 Solution staff including self-assessment, manager review and development planning')"><div class="auto-head"><div class="auto-icon" style="background:var(--bl2)">👤</div><div><div class="auto-title">Performance review process</div><div class="auto-sub">Self-assessment, manager review, development plan — full cycle</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">HR</span></div></div>
-          <div class="auto-card" onclick="qa('Generate a vendor management and review process for Risk 2 Solution with a quarterly review checklist')"><div class="auto-head"><div class="auto-icon" style="background:var(--al)">🔄</div><div><div class="auto-title">Vendor management process</div><div class="auto-sub">Quarterly review cadence, checklist, and approval workflow</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-a">Overdue 7 months</span></div></div>
-          <div class="auto-card" onclick="qa('Generate a risk register template and process for Risk 2 Solution including risk categories, scoring matrix, and review cadence')"><div class="auto-head"><div class="auto-icon" style="background:var(--gl)">📁</div><div><div class="auto-title">Risk register &amp; scoring matrix</div><div class="auto-sub">Risk categories, scoring, owners, review cadence</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-r">Risk</span></div></div>
-          <div class="auto-card" onclick="qa('Generate a staff onboarding process for Risk 2 Solution — standardised across all teams, covering first day, first week and first 30 days')"><div class="auto-head"><div class="auto-icon" style="background:var(--gl)">🆕</div><div><div class="auto-title">Staff onboarding process</div><div class="auto-sub">Day 1, week 1, 30-day plan — standardised across all teams</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">HR</span><span class="auto-tag at-a">3 variants to consolidate</span></div></div>
-          <div class="auto-card" onclick="qa('Generate a board reporting pack template for the COO section of Risk 2 Solution board meetings')"><div class="auto-head"><div class="auto-icon" style="background:#EEEDFE">📄</div><div><div class="auto-title">Board reporting template</div><div class="auto-sub">COO section template for board pack — reusable monthly</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">Reporting</span></div></div>
-          <div class="auto-card" onclick="actionEfficiency('Client intake duplication','2 staff are running parallel client intake processes for the same clients. Consolidate to one owner immediately — saves approximately 3 hours per week.','')"><div class="auto-head"><div class="auto-icon" style="background:var(--rl)">🔁</div><div><div class="auto-title">Fix client intake duplication</div><div class="auto-sub">2 staff running parallel intakes — consolidate to 1 owner now</div></div></div><div class="auto-tags"><span class="auto-tag at-r">Urgent</span><span class="auto-tag at-r">3h/wk wasted</span></div><div class="auto-savings">Click to email staff or schedule alignment meeting</div></div>
-          <div class="auto-card" onclick="qa('What should Risk 2 Solution automate using the Clockify API and other integrations to reduce manual work?')"><div class="auto-head"><div class="auto-icon" style="background:var(--bl2)">⚡</div><div><div class="auto-title">Clockify integration plan</div><div class="auto-sub">Replace manual check-ins with automatic Clockify data — full integration plan</div></div></div><div class="auto-tags"><span class="auto-tag at-b">Future</span><span class="auto-tag at-b">Clockify</span></div><div class="auto-savings">Fully automates staff capacity tracking</div></div>
+          <div class="auto-card" onclick="qa('Generate a performance review process for Risk 2 Solution staff')"><div class="auto-head"><div class="auto-icon" style="background:var(--bl2)">👤</div><div><div class="auto-title">Performance review process</div><div class="auto-sub">Self-assessment, manager review, development plan</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">HR</span></div></div>
+          <div class="auto-card" onclick="qa('Generate a vendor management and review process for Risk 2 Solution')"><div class="auto-head"><div class="auto-icon" style="background:var(--al)">🔄</div><div><div class="auto-title">Vendor management process</div><div class="auto-sub">Quarterly review cadence and approval workflow</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-a">Overdue 7 months</span></div></div>
+          <div class="auto-card" onclick="qa('Generate a risk register template for Risk 2 Solution')"><div class="auto-head"><div class="auto-icon" style="background:var(--gl)">📁</div><div><div class="auto-title">Risk register &amp; scoring matrix</div><div class="auto-sub">Risk categories, scoring, owners, review cadence</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-r">Risk</span></div></div>
+          <div class="auto-card" onclick="qa('Generate a staff onboarding process for Risk 2 Solution')"><div class="auto-head"><div class="auto-icon" style="background:var(--gl)">🆕</div><div><div class="auto-title">Staff onboarding process</div><div class="auto-sub">Day 1, week 1, 30-day plan</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">HR</span></div></div>
+          <div class="auto-card" onclick="qa('Generate a board reporting pack template for the COO section of Risk 2 Solution')"><div class="auto-head"><div class="auto-icon" style="background:#EEEDFE">📄</div><div><div class="auto-title">Board reporting template</div><div class="auto-sub">COO section — reusable monthly</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">Reporting</span></div></div>
+          <div class="auto-card" onclick="qa('What should Risk 2 Solution automate using Clockify and other integrations?')"><div class="auto-head"><div class="auto-icon" style="background:var(--bl2)">⚡</div><div><div class="auto-title">Clockify integration plan</div><div class="auto-sub">Replace manual check-ins with automatic data</div></div></div><div class="auto-tags"><span class="auto-tag at-b">Future</span><span class="auto-tag at-b">Clockify</span></div><div class="auto-savings">Fully automates capacity tracking</div></div>
         </div>
       </div>
     </div>
@@ -625,17 +595,17 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
       <div class="two">
         <div>
           <div class="card">
-            <div class="ct">Identified HR requirements <span class="ct-action" onclick="qa('Generate a full HR requirements report based on current staff check-in data')">Generate full report </span></div>
-            <div id="hrList"><div style="font-size:12px;color:var(--t3);padding:8px 0">Sync check-ins to see HR insights. Cinderella analyses capacity, blockers, trends and flags HR actions automatically.</div></div>
+            <div class="ct">Identified HR requirements <span class="ct-action" onclick="qa('Generate a full HR requirements report based on current staff check-in data')">Generate full report</span></div>
+            <div id="hrList"><div style="font-size:12px;color:var(--t3);padding:8px 0">Sync check-ins to see HR insights.</div></div>
           </div>
         </div>
         <div>
           <div class="card">
             <div class="ct">Standing HR processes Cinderella can generate</div>
-            <div class="hr-card" onclick="qa('Generate a performance improvement plan template for Risk 2 Solution')"><div class="hr-title">Performance improvement plan (PIP)</div><div class="hr-sub">Template for when a staff member is consistently underperforming or disengaged.</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Generate template</span></div>
-            <div class="hr-card" onclick="qa('Generate a staff wellbeing check-in process for Risk 2 Solution for when capacity stays above 90% for multiple weeks')"><div class="hr-title">Burnout prevention protocol</div><div class="hr-sub">Triggered when capacity stays above 90% for 2+ consecutive weeks.</div><span class="hr-tag" style="background:var(--rl);color:#A32D2D">Generate protocol</span></div>
-            <div class="hr-card" onclick="qa('Generate a skills development plan template for Risk 2 Solution staff')"><div class="hr-title">Skills development plan</div><div class="hr-sub">Individual learning plans based on skill gaps identified in the capability matrix.</div><span class="hr-tag" style="background:var(--gl);color:#0F6E56">Generate template</span></div>
-            <div class="hr-card" onclick="qa('Generate a leave management process for Risk 2 Solution that balances availability and ensures coverage')"><div class="hr-title">Leave management process</div><div class="hr-sub">Coverage planning, approval workflow, handover checklist.</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Generate process</span></div>
+            <div class="hr-card" onclick="qa('Generate a performance improvement plan template for Risk 2 Solution')"><div class="hr-title">Performance improvement plan (PIP)</div><div class="hr-sub">Template for consistently underperforming staff.</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Generate template</span></div>
+            <div class="hr-card" onclick="qa('Generate a staff wellbeing check-in process for Risk 2 Solution for when capacity stays above 90%')"><div class="hr-title">Burnout prevention protocol</div><div class="hr-sub">Triggered when capacity stays above 90% for 2+ weeks.</div><span class="hr-tag" style="background:var(--rl);color:#A32D2D">Generate protocol</span></div>
+            <div class="hr-card" onclick="qa('Generate a skills development plan template for Risk 2 Solution staff')"><div class="hr-title">Skills development plan</div><div class="hr-sub">Individual learning plans based on skill gaps.</div><span class="hr-tag" style="background:var(--gl);color:#0F6E56">Generate template</span></div>
+            <div class="hr-card" onclick="qa('Generate a leave management process for Risk 2 Solution')"><div class="hr-title">Leave management process</div><div class="hr-sub">Coverage planning, approval workflow, handover checklist.</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Generate process</span></div>
           </div>
         </div>
       </div>
@@ -647,17 +617,15 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
       <div class="msgs" id="msgs">
         <div class="msg a"><div class="sndr">Cinderella</div><div class="bub a">Good morning. I've reviewed your day — 5 meetings, 4 unanswered emails (2 overdue), and your utilisation report is due 30 April.<br><br>I can generate processes, draft documents, analyse your team, write emails, prep you for meetings, or tackle any COO task. What do you need?</div></div>
       </div>
-      <div style="flex-shrink:0">
       <div class="qas">
         <button class="qa" onclick="qa('Draft a professional reply to Marcus Webb about the vendor contract')">Draft reply to Marcus Webb</button>
-        <button class="qa" onclick="qa('Prepare a full briefing for today\\'s risk framework review at 09:30')">Prep for risk review</button>
-        <button class="qa" onclick="qa('Analyse my team\\'s check-in data and recommend workload redistribution')">Analyse team capacity</button>
+        <button class="qa" onclick="qa('Prepare a full briefing for today\'s risk framework review at 09:30')">Prep for risk review</button>
+        <button class="qa" onclick="qa('Analyse my team\'s check-in data and recommend workload redistribution')">Analyse team capacity</button>
         <button class="qa" onclick="qa('Generate the incident escalation pathway process document for ISO 27001 compliance')">Generate incident process</button>
         <button class="qa" onclick="qa('Write the COO board pack narrative section for April')">Write board pack section</button>
-        <button class="qa" onclick="qa('What HR actions should I take based on this week\\'s staff data?')">HR action plan</button>
+        <button class="qa" onclick="qa('What HR actions should I take based on this week\'s staff data?')">HR action plan</button>
       </div>
       <div class="cin-wrap"><textarea class="cin" id="cinput" rows="1" placeholder="Ask Cinderella anything..." onkeydown="handleKey(event)" oninput="resize(this)"></textarea><button class="csend" id="csend" onclick="send()">Send</button></div>
-      </div>
     </div>
 
     <!-- SCHEDULER -->
@@ -670,30 +638,28 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
           <div class="row" onclick="qa('Block 12:30-13:00 today as a protected lunch break in my calendar')"><div class="mtime" style="min-width:80px">Today 12:30</div><div><div class="mt">Lunch — unblocked</div><div class="mm">Cinderella recommends protecting this time</div></div></div>
           <div class="row" onclick="qa('Schedule a 2-hour deep work block on Friday morning for board pack section 3')"><div class="mtime" style="min-width:80px">Fri 09:00</div><div><div class="mt">2 hr gap — deep work</div><div class="mm">Board pack section 3 narrative</div></div></div>
           <div class="row" onclick="qa('Schedule a 90-minute ISO audit prep session on Monday at 11am with Sofia Ng')"><div class="mtime" style="min-width:80px">Mon 11:00</div><div><div class="mt">90 min — ISO audit prep</div><div class="mm">With Sofia Ng — 32% checklist still to complete</div></div></div>
-          <div class="row" onclick="qa('Schedule the first quarterly vendor review for Tuesday 10am and set a recurring quarterly reminder')"><div class="mtime" style="min-width:80px">Tue 10:00</div><div><div class="mt">90 min — vendor review</div><div class="mm">7 months overdue — first of quarterly cadence</div></div></div>
+          <div class="row" onclick="qa('Schedule the first quarterly vendor review for Tuesday 10am')"><div class="mtime" style="min-width:80px">Tue 10:00</div><div><div class="mt">90 min — vendor review</div><div class="mm">7 months overdue — first of quarterly cadence</div></div></div>
         </div>
         <div class="card">
-          <div class="ct">Scheduling suggestions <span class="ct-action" onclick="qa('Optimise my calendar for the next 2 weeks based on my priorities and commitments')">Optimise my calendar </span></div>
+          <div class="ct">Scheduling suggestions <span class="ct-action" onclick="qa('Optimise my calendar for the next 2 weeks based on my priorities and commitments')">Optimise my calendar</span></div>
           <div class="ins" onclick="qa('Book a 30-minute prep block at 10:15 today for Titan Corp onboarding')"><div class="il">Book now</div><div class="it">30 min prep at 10:15 for Titan Corp — no prep time blocked before 11:00 meeting.</div></div>
           <div class="ins" onclick="qa('Schedule the ISO 27001 pre-audit session for Monday with Sofia Ng')"><div class="il">This week</div><div class="it">ISO pre-check session Monday 11:00 — 90 min deep work with Sofia Ng.</div></div>
           <div class="ins" onclick="qa('Set up a quarterly vendor review cadence starting Tuesday')"><div class="il">Create recurring</div><div class="it">No quarterly vendor review exists. Cinderella recommends setting Tue 10:00 as recurring quarterly.</div></div>
-          <div class="ins" onclick="qa('Block lunch and end-of-day buffer in my calendar for the rest of this week')"><div class="il">Protect your time</div><div class="it">No lunch or end-of-day buffer blocked this week. Cinderella will add these if asked.</div></div>
+          <div class="ins" onclick="qa('Block lunch and end-of-day buffer in my calendar for the rest of this week')"><div class="il">Protect your time</div><div class="it">No lunch or end-of-day buffer blocked this week.</div></div>
         </div>
       </div>
     </div>
 
   </div><!-- end main -->
 </div><!-- end app -->
-
 </div>
+
 <script>
-/* ── CONFIG ── */
 let C={api:'proxy',bin:'69eac07b36566621a8e6511a',key:'$2a$10$6AnrWdAfkw1SbaKZOuSTz.XXjK/mQVzlPX4rhyOOT6378sp855ouO'};
 let SD=[];
 let msgs=[];
 let busy=false;
 let charts={};
-const AVCS=['av-blue','av-amber','av-green','av-pink','av-purple'];
 const AV_STYLES=['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
 
 function loadCfg(){
@@ -714,7 +680,6 @@ function saveSetup(){
 }
 function skipSetup(){document.getElementById('setupMo').style.display='none';}
 
-/* ── SYNC ── */
 async function syncNow(){
   if(!C.bin||!C.key){setSyncUI('off','JSONBin not configured');return;}
   const btn=document.getElementById('syncBtn');
@@ -731,76 +696,65 @@ async function syncNow(){
     const t=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
     btn.textContent=`Synced ${t}`;btn.className='sync-btn ok';
     setSyncUI('on',`Last synced ${t} · ${SD.length} check-in${SD.length!==1?'s':''}`);
-    updateAll();
+    try{updateAll();}catch(e){console.warn('updateAll error:',e.message);}
   }catch(e){
     btn.textContent='Sync failed';btn.className='sync-btn';
     setSyncUI('warn',`Sync failed: ${e.message}`);
   }
 }
+
 function setSyncUI(state,msg){
-   const bar = document.getElementById('syncBar');
-  const dot = document.getElementById('syncDot');
-  const txt = document.getElementById('syncTxt');
+  const bar=document.getElementById('syncBar');
+  const dot=document.getElementById('syncDot');
+  const txt=document.getElementById('syncTxt');
+  if(!bar||!dot||!txt){console.warn('Sync UI elements missing');return;}
+  bar.style.display='flex';
+  dot.className='sdot2 '+(state==='on'?'on':state==='warn'?'warn':'off');
+  txt.textContent=msg;
+}
 
-  if (!bar || !dot || !txt) {
-    console.warn('Sync UI elements missing');
-    return;
-  }
-
-  bar.style.display = 'flex';
-  dot.className = 'sdot2 ' + (state==='on' ? 'on' : state==='warn' ? 'warn' : 'off');
-  txt.textContent = msg;
-  }
-
-/* ── UPDATE ALL ── */
 function updateAll(){
   const n=SD.length;
-  document.getElementById('todayCount').textContent=n;
-  document.getElementById('todayCount').style.color=n>=8?'var(--g)':n>=4?'var(--a)':'var(--r)';
+  const tc=document.getElementById('todayCount');
+  if(tc){tc.textContent=n;tc.style.color=n>=8?'var(--g)':n>=4?'var(--a)':'var(--r)';}
   const badge=document.getElementById('staffBadge');
-  badge.textContent=n;badge.style.display=n>0?'inline-block':'none';
-  document.getElementById('briefingCheckin').textContent=n>0?`${n} of 12 check-ins this week. ${SD.filter(s=>s.capacity>=85).length} overloaded. ${SD.filter(s=>hasBlocker(s.blockers)).length} blockers.`:'No check-ins yet. Send the form to staff.';
-  renderStaff();renderSkillMatch();renderHR();
-  // Update metrics
+  if(badge){badge.textContent=n;badge.style.display=n>0?'inline-block':'none';}
+  const bc=document.getElementById('briefingCheckin');
+  if(bc){bc.textContent=n>0?`${n} of 12 check-ins this week. ${SD.filter(s=>s.capacity>=85).length} overloaded. ${SD.filter(s=>hasBlocker(s.blockers)).length} blockers.`:'No check-ins yet. Send the form to staff.';}
+  try{renderStaff();}catch(e){console.warn('renderStaff:',e.message);}
+  try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
+  try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
   if(n>0){
     const avg=Math.round(SD.reduce((a,s)=>a+s.capacity,0)/n);
-    document.getElementById('sm-avg').textContent=avg+'%';
-    document.getElementById('sm-avg').style.color=avg>=80?'var(--a)':'var(--t1)';
-    document.getElementById('sm-n').textContent=n;
-    document.getElementById('sm-ov').textContent=SD.filter(s=>s.capacity>=85).length;
-    document.getElementById('sm-fr').textContent=SD.filter(s=>s.capacity<65).length;
-    document.getElementById('sk-ov').textContent=SD.filter(s=>s.capacity>=85).length;
-    document.getElementById('sk-fr').textContent=SD.filter(s=>s.capacity<70).length;
+    const els={'sm-avg':avg+'%','sm-n':n,'sm-ov':SD.filter(s=>s.capacity>=85).length,'sm-fr':SD.filter(s=>s.capacity<65).length,'sk-ov':SD.filter(s=>s.capacity>=85).length,'sk-fr':SD.filter(s=>s.capacity<70).length};
+    Object.entries(els).forEach(([id,val])=>{const el=document.getElementById(id);if(el)el.textContent=val;});
+    const smAvg=document.getElementById('sm-avg');
+    if(smAvg)smAvg.style.color=avg>=80?'var(--a)':'var(--t1)';
   }
   buildCharts();
 }
 
-/* ── CHARTS ── */
 function buildCharts(){
-  // Email chart
   if(!charts.email){
     const ctx=document.getElementById('emailChart');
-    if(ctx) charts.email=new Chart(ctx,{type:'bar',data:{labels:['Mon','Tue','Wed','Thu','Fri'],datasets:[{label:'Received',data:[18,24,15,21,9],backgroundColor:'#B5D4F4',borderRadius:3},{label:'Sent',data:[12,17,9,13,6],backgroundColor:'#1D9E75',borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10}}},y:{ticks:{font:{size:10}},grid:{color:'rgba(128,128,128,0.1)'}}}}});
+    if(ctx)charts.email=new Chart(ctx,{type:'bar',data:{labels:['Mon','Tue','Wed','Thu','Fri'],datasets:[{label:'Received',data:[18,24,15,21,9],backgroundColor:'#B5D4F4',borderRadius:3},{label:'Sent',data:[12,17,9,13,6],backgroundColor:'#1D9E75',borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10}}},y:{ticks:{font:{size:10}},grid:{color:'rgba(128,128,128,0.1)'}}}}});
   }
-  // Capacity chart
   if(SD.length>0){
     const labels=SD.map(s=>s.name.split(' ')[0]);
     const vals=SD.map(s=>s.capacity);
     const colors=SD.map(s=>s.capacity>=85?'#E24B4A':s.capacity>=70?'#EF9F27':'#1D9E75');
     if(charts.cap)charts.cap.destroy();
     const ctx2=document.getElementById('capChart');
-    if(ctx2) charts.cap=new Chart(ctx2,{type:'bar',data:{labels,datasets:[{label:'Capacity %',data:vals,backgroundColor:colors,borderRadius:4}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{max:100,ticks:{callback:v=>v+'%',font:{size:10}},grid:{color:'rgba(128,128,128,0.1)'}},y:{ticks:{font:{size:10}}}}}});
-    // Distribution doughnut
+    if(ctx2)charts.cap=new Chart(ctx2,{type:'bar',data:{labels,datasets:[{label:'Capacity %',data:vals,backgroundColor:colors,borderRadius:4}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{max:100,ticks:{callback:v=>v+'%',font:{size:10}},grid:{color:'rgba(128,128,128,0.1)'}},y:{ticks:{font:{size:10}}}}}});
     const over=SD.filter(s=>s.capacity>=85).length;
     const mid=SD.filter(s=>s.capacity>=65&&s.capacity<85).length;
     const free=SD.filter(s=>s.capacity<65).length;
     if(charts.dist)charts.dist.destroy();
     const ctx3=document.getElementById('distChart');
-    if(ctx3) charts.dist=new Chart(ctx3,{type:'doughnut',data:{labels:['Overloaded >85%','Busy 65-85%','Available <65%'],datasets:[{data:[over,mid,free],backgroundColor:['#E24B4A','#EF9F27','#1D9E75'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:8}}}}});
+    if(ctx3)charts.dist=new Chart(ctx3,{type:'doughnut',data:{labels:['Overloaded >85%','Busy 65-85%','Available <65%'],datasets:[{data:[over,mid,free],backgroundColor:['#E24B4A','#EF9F27','#1D9E75'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:8}}}}});
   }
 }
 
-/* ── RENDER STAFF ── */
 const EMPTY_B=['none','n/a','no','nil','-','no blockers','nothing','nope','na','no blocker'];
 function hasBlocker(b){const t=(b||'').trim();return t.length>2&&!EMPTY_B.includes(t.toLowerCase());}
 function cap(name){return(name||'').split(' ').map(w=>w?w.charAt(0).toUpperCase()+w.slice(1):'').join(' ');}
@@ -831,38 +785,27 @@ function renderStaff(){
       ${s.blockers?`<div class="snotes">Blocker: ${s.blockers}</div>`:''}
     </div>`;
   }).join('');
-
-  // Staff insights
   const insEl=document.getElementById('staffInsights');
   if(!insEl)return;
   const overloaded=SD.filter(s=>s.capacity>=85);
-  const blockers=SD.filter(s=>s.blockers&&s.blockers.trim());
   const free=SD.filter(s=>s.capacity<65);
   let html='';
-  if(overloaded.length>0)html+=`<div class="ins" onclick="show('skills',null)"><div class="il">Overload alert</div><div class="it">${overloaded.length===1?cap(overloaded[0].name.split(' ')[0])+' is':overloaded.map(s=>cap(s.name.split(' ')[0])).join(' and ')+' are'} above 85% capacity — check skill matches for reallocation opportunities.</div></div>`;
-  const realBlockers2=SD.filter(s=>hasBlocker(s.blockers));
-if(realBlockers2.length>0)html+=`<div class="ins" onclick="qa('Suggest how to resolve these staff blockers: ${realBlockers2.map(s=>cap(s.name)+': '+s.blockers).join('; ')}')"><div class="il">Blockers flagged</div><div class="it">${realBlockers2.map(s=>cap(s.name.split(' ')[0])).join(' and ')} ${realBlockers2.length===1?'has':'have'} reported blockers needing your attention.</div></div>`;
-  if(free.length>0&&overloaded.length>0){
-  const freeNames=free.map(s=>cap(s.name.split(' ')[0]));
-  html+=`<div class="ins" onclick="show('skills',null)"><div class="il">Capacity available</div><div class="it">${freeNames.length===1?freeNames[0]+' has':freeNames.join(' and ')+' have'} capacity below 65% and could absorb work from overloaded team members.</div></div>`;
-}
+  if(overloaded.length>0)html+=`<div class="ins" onclick="show('skills',null)"><div class="il">Overload alert</div><div class="it">${overloaded.length===1?cap(overloaded[0].name.split(' ')[0])+' is':overloaded.map(s=>cap(s.name.split(' ')[0])).join(' and ')+' are'} above 85% capacity — check skill matches.</div></div>`;
+  const realBlockers=SD.filter(s=>hasBlocker(s.blockers));
+  if(realBlockers.length>0)html+=`<div class="ins" onclick="qa('Suggest how to resolve these staff blockers: ${realBlockers.map(s=>cap(s.name)+': '+s.blockers).join('; ')}')"><div class="il">Blockers flagged</div><div class="it">${realBlockers.map(s=>cap(s.name.split(' ')[0])).join(' and ')} ${realBlockers.length===1?'has':'have'} reported blockers needing your attention.</div></div>`;
+  if(free.length>0&&overloaded.length>0){const freeNames=free.map(s=>cap(s.name.split(' ')[0]));html+=`<div class="ins" onclick="show('skills',null)"><div class="il">Capacity available</div><div class="it">${freeNames.length===1?freeNames[0]+' has':freeNames.join(' and ')+' have'} capacity below 65% and could absorb work.</div></div>`;}
   if(!html)html='<div style="font-size:11px;color:var(--t3);padding:4px 0">Team capacity looks healthy this week.</div>';
   insEl.innerHTML=html;
 }
 
-/* ── STAFF MODAL ── */
 function openStaffModal(idx){
-  const s=SD[[...SD].sort((a,b)=>b.capacity-a.capacity).indexOf([...SD].sort((a,b)=>b.capacity-a.capacity)[idx])];
-  // find the sorted staff member
   const sorted=[...SD].sort((a,b)=>b.capacity-a.capacity);
   const st=sorted[idx];
   if(!st)return;
   const pct=st.capacity||0;
   const matches=findMatches().filter(m=>m.busy.name===st.name||m.free.name===st.name);
   let matchHtml=matches.length>0?`<div class="mfl" style="margin-top:12px">Skill match alerts</div>`+matches.map(m=>`<div class="alert-box ok" style="margin-bottom:6px"><div class="ab-title">${m.busy.name===st.name?`Support available from ${m.free.name} (${m.free.capacity}%)`:`Can support ${m.busy.name} (${m.busy.capacity}%)`}</div><div class="ab-text">Shared skills: ${m.shared.join(', ')}</div></div>`).join(''):'';
-  openModal(
-    cap(st.name),
-    `${cap(st.role)||'Staff member'} · ${pct}% capacity · ${st.weekEnding||''}`,
+  openModal(cap(st.name),`${cap(st.role)||'Staff member'} · ${pct}% capacity · ${st.weekEnding||''}`,
     `<div class="mfield"><div class="mfl">Capacity</div><div style="display:flex;align-items:center;gap:10px"><div class="bw" style="flex:1;height:8px"><div class="bar ${bc(pct)}" style="width:${pct}%"></div></div><strong>${pct}%</strong></div></div>
     <div class="mfield"><div class="mfl">Workload trend</div><div class="mfv">${st.trend||'—'}</div></div>
     <div class="mfield"><div class="mfl">Current projects</div><div class="mfv">${st.projects||'—'}</div></div>
@@ -875,12 +818,10 @@ function openStaffModal(idx){
     <button class="m-btn" onclick="openDraftModal('${st.name}','Check in on workload — they are at ${pct}% capacity this week','Checking in — how can I support you?','email')">✉ Email ${st.name}</button>
     <button class="m-btn" style="background:#217346" onclick="openDraftModal('${st.name}','1:1 check-in — capacity and workload discussion','1:1 — workload check-in','meeting')">📅 Schedule 1:1</button>
     ${st.blockers?`<button class="m-btn sec" onclick="actionBlocker('${st.name}','${(st.blockers||'').replace(/'/g,"\\'")}')">🚧 Resolve blocker →</button>`:''}
-    ${matches.length>0?`<button class="m-btn sec" onclick="show('skills',null);closeModal()">View skill matches</button>`:''}
-    `
+    ${matches.length>0?`<button class="m-btn sec" onclick="show('skills',null);closeModal()">View skill matches</button>`:''}`
   );
 }
 
-/* ── SKILL MATCHING ── */
 function parseSkills(str){return(str||'').split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);}
 
 function findMatches(){
@@ -910,8 +851,8 @@ function levenshtein(a,b){
 function renderSkillMatch(){
   const matches=findMatches();
   const mbadge=document.getElementById('matchBadge');
-  mbadge.textContent=matches.length;mbadge.style.display=matches.length>0?'inline-block':'none';
-  document.getElementById('sk-n').textContent=matches.length;
+  if(mbadge){mbadge.textContent=matches.length;mbadge.style.display=matches.length>0?'inline-block':'none';}
+  const skn=document.getElementById('sk-n');if(skn)skn.textContent=matches.length;
   const ml=document.getElementById('matchList');
   if(!ml)return;
   if(matches.length===0){
@@ -919,23 +860,18 @@ function renderSkillMatch(){
     const _av=SD.filter(s=>s.capacity<70);
     let _msg='';
     if(SD.length===0){_msg='Sync check-ins to see skill matches. Cinderella auto-detects when an overloaded staff member has a skill-matched colleague with spare capacity.';}
-    else if(_ov.length>0&&_av.length===0){_msg=`${_ov.length===1?cap(_ov[0].name.split(' ')[0])+' is':_ov.map(s=>cap(s.name.split(' ')[0])).join(' and ')+' are'} overloaded but no colleagues currently have spare capacity to assist. Consider reducing their workload, bringing in additional support, or redistributing lower-priority tasks.`;}
-    else if(_ov.length>0&&_av.length>0){_msg=`${_ov.length} staff ${_ov.length===1?'member is':'members are'} overloaded but no skill matches were found with available colleagues. The specific skills needed may not exist in the current team — consider external support or cross-training.`;}
+    else if(_ov.length>0&&_av.length===0){_msg=`${_ov.length===1?cap(_ov[0].name.split(' ')[0])+' is':_ov.map(s=>cap(s.name.split(' ')[0])).join(' and ')+' are'} overloaded but no colleagues have spare capacity.`;}
+    else if(_ov.length>0&&_av.length>0){_msg=`${_ov.length} staff overloaded but no skill matches found. Consider external support or cross-training.`;}
     else{_msg='No skill matches needed — team capacity is well distributed this week.';}
     ml.innerHTML=`<div style="font-size:12px;color:var(--t2);padding:8px 0;line-height:1.5">${_msg}</div>`;
     return;
   }
   ml.innerHTML=matches.map((m,i)=>`
     <div class="smatch" onclick="actionSkillMatch('${m.busy.name}','${m.free.name}',${m.busy.capacity},${m.free.capacity},'${m.shared.join(', ')}')">
-      <div class="smatch-head">
-        <span class="smatch-flag">${m.busy.capacity}% → ${m.free.capacity}%</span>
-        <div class="smatch-names">${cap(m.busy.name)} <span style="opacity:.6">needs support from</span> ${cap(m.free.name)}</div>
-      </div>
+      <div class="smatch-head"><span class="smatch-flag">${m.busy.capacity}% → ${m.free.capacity}%</span><div class="smatch-names">${cap(m.busy.name)} <span style="opacity:.6">needs support from</span> ${cap(m.free.name)}</div></div>
       <div class="smatch-skills">Shared skills: ${m.shared.map(s=>cap(s)).join(', ')}</div>
       <div class="smatch-action">Click to email staff, schedule a handover call, or get task suggestions</div>
     </div>`).join('');
-
-  // Skills matrix
   const smEl=document.getElementById('skillMatrix');
   if(!smEl)return;
   const allSkills={};
@@ -943,178 +879,49 @@ function renderSkillMatch(){
   smEl.innerHTML=Object.entries(allSkills).sort((a,b)=>b[1].length-a[1].length).slice(0,8).map(([sk,names])=>
     `<div class="cbr" style="margin-bottom:6px"><div class="cbl" style="min-width:120px;font-size:10px">${cap(sk)}</div><div class="bw"><div class="bar bg" style="width:${Math.round(names.length/SD.length*100)}%"></div></div><div class="bp" style="color:var(--t2)">${names.length}</div></div>`
   ).join('');
-
-  const ovStaff=SD.filter(s=>s.capacity>=85);
-  if(ovStaff.length>=2&&ml){
-    const alerts=[];
-    for(let i=0;i<ovStaff.length;i++){for(let j=i+1;j<ovStaff.length;j++){
-      const sa=parseSkills(ovStaff[i].skills);const sb=parseSkills(ovStaff[j].skills);
-      const sh=sa.filter(a=>sb.some(b=>b.includes(a)||a.includes(b)));
-      if(sh.length>0)alerts.push({a:cap(ovStaff[i].name.split(' ')[0]),b:cap(ovStaff[j].name.split(' ')[0]),sk:sh.map(s=>cap(s)).join(', ')});
-    }}
-    if(alerts.length>0){
-      const notice=document.createElement('div');
-      notice.style.cssText='background:var(--al);border:0.5px solid #FAC775;border-radius:10px;padding:11px 14px;margin-bottom:10px;';
-      notice.innerHTML='<div style="font-size:9px;font-weight:600;color:#854F0B;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Both overloaded — shared skills flagged</div>'+alerts.map(x=>`<div style="font-size:12px;color:#854F0B;margin-bottom:3px">${x.a} and ${x.b} share: <strong>${x.sk}</strong></div>`).join('')+'<div style="font-size:11px;color:#854F0B;margin-top:5px">Neither can support the other. Consider reducing combined workload, hiring for these skills, or bringing in external support.</div>';
-      ml.insertBefore(notice,ml.firstChild);
-    }
-  }
 }
 
-/* ── HR INSIGHTS ── */
 function renderHR(){
-  const blockers=SD.filter(s=>s.blockers&&s.blockers.trim());
   const overloaded=SD.filter(s=>s.capacity>=85);
   const avail=SD.filter(s=>s.availability&&s.availability!=='Full week');
   const heavy=SD.filter(s=>s.trend==='Heavier');
   const realBlockersList=SD.filter(s=>hasBlocker(s.blockers));
-  document.getElementById('hr-n').textContent=realBlockersList.length+overloaded.length+avail.length;
-  document.getElementById('hr-bl').textContent=realBlockersList.length;
-  document.getElementById('hr-av').textContent=avail.length;
+  const hn=document.getElementById('hr-n');if(hn)hn.textContent=realBlockersList.length+overloaded.length+avail.length;
+  const hbl=document.getElementById('hr-bl');if(hbl)hbl.textContent=realBlockersList.length;
+  const hav=document.getElementById('hr-av');if(hav)hav.textContent=avail.length;
   const hbadge=document.getElementById('hrBadge');
-  hbadge.style.display=(blockers.length>0||overloaded.length>0)?'inline-block':'none';
+  if(hbadge)hbadge.style.display=(realBlockersList.length>0||overloaded.length>0)?'inline-block':'none';
   const el=document.getElementById('hrList');
   if(!el)return;
   let html='';
   overloaded.forEach(s=>{html+=`<div class="hr-card" onclick="actionCapacity('${s.name}',${s.capacity},'${(s.skills||'').replace(/'/g,"\\'")}')"><div class="hr-title">⚠ Overload risk — ${s.name}</div><div class="hr-sub">${s.capacity}% capacity · Trend: ${s.trend||'—'} · ${s.role||'—'}</div><span class="hr-tag" style="background:var(--rl);color:#A32D2D">Click to email or schedule 1:1</span></div>`;});
-  const realBlockers=SD.filter(s=>hasBlocker(s.blockers));
-  realBlockers.forEach(s=>{html+=`<div class="hr-card" onclick="actionBlocker('${s.name}','${(s.blockers||'').replace(/'/g,"\\'")}')"><div class="hr-title">🚧 Blocker — ${s.name}</div><div class="hr-sub">${s.blockers}</div><span class="hr-tag" style="background:var(--al);color:#854F0B">Click to email or schedule call</span></div>`;});
-  avail.forEach(s=>{html+=`<div class="hr-card" onclick="openDraftModal('${s.name}','Coverage planning — ${s.name} is ${s.availability} this week${s.leave?' ('+s.leave+')':''}','Coverage planning — your availability this week','email')"><div class="hr-title">📅 Availability — ${s.name}</div><div class="hr-sub">${s.availability}${s.leave?' · '+s.leave:''}</div><span class="hr-tag" style="background:var(--al);color:#854F0B">Email re: coverage</span></div>`;});
+  realBlockersList.forEach(s=>{html+=`<div class="hr-card" onclick="actionBlocker('${s.name}','${(s.blockers||'').replace(/'/g,"\\'")}')"><div class="hr-title">🚧 Blocker — ${s.name}</div><div class="hr-sub">${s.blockers}</div><span class="hr-tag" style="background:var(--al);color:#854F0B">Click to email or schedule call</span></div>`;});
+  avail.forEach(s=>{html+=`<div class="hr-card" onclick="openDraftModal('${s.name}','Coverage planning — ${s.name} is ${s.availability} this week','Coverage planning — your availability this week','email')"><div class="hr-title">📅 Availability — ${s.name}</div><div class="hr-sub">${s.availability}${s.leave?' · '+s.leave:''}</div><span class="hr-tag" style="background:var(--al);color:#854F0B">Email re: coverage</span></div>`;});
   heavy.forEach(s=>{if(s.capacity<85)html+=`<div class="hr-card" onclick="actionCapacity('${s.name}',${s.capacity},'${(s.skills||'').replace(/'/g,"\\'")}')"><div class="hr-title">↑ Increasing load — ${s.name}</div><div class="hr-sub">${s.capacity}% capacity · Heavier than last week</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Click to check in</span></div>`;});
-  if(!html)html='<div style="font-size:12px;color:var(--t3);padding:8px 0">'+(SD.length===0?'Sync check-ins to see HR insights. Cinderella will automatically flag overloads, blockers, availability issues and workload trends.':'No HR flags this week — your team looks healthy.')+'</div>';
+  if(!html)html='<div style="font-size:12px;color:var(--t3);padding:8px 0">'+(SD.length===0?'Sync check-ins to see HR insights.':'No HR flags this week — your team looks healthy.')+'</div>';
   el.innerHTML=html;
-}
-
-/* ── FILTER ── */
-function openCOODuty(key){
-  const duties={
-    ops:{
-      title:'Operations oversight',
-      sub:'Daily ops, workflows, client delivery — R2S',
-      body:`<div class="mfield"><div class="mfl">What this means at R2S</div><div class="mfv">Oversee all daily operations, ensure workflows are documented, team is unblocked, and client delivery is on track.</div></div>
-<div class="alert-box warn"><div class="ab-title">This week</div><div class="ab-text">Q2 ops review at 14:00 today. 3 active client onboardings. Staff utilisation report due 30 April.</div></div>
-<hr class="m-divider">
-<button class="m-btn" onclick="qa('Give Kandia a best-practice operations oversight checklist for a risk management SaaS company this week')">Weekly ops checklist</button>
-<button class="m-btn sec" onclick="qa('Generate a Q2 operations review agenda for Risk 2 Solution for Kandia')">Q2 ops review agenda</button>`
-    },
-    risk:{
-      title:'Risk framework governance',
-      sub:'Policy, compliance posture, ISO 27001',
-      body:`<div class="alert-box"><div class="ab-title">Critical gap — action today</div><div class="ab-text">Incident escalation pathway has no owner. This must be resolved before the ISO 27001 audit on May 12.</div></div>
-<div class="mfield"><div class="mfl">What this involves</div><div class="mfv">Own and maintain the risk management framework, ensure compliance posture, review incidents, and lead ISO 27001 audit preparation.</div></div>
-<hr class="m-divider">
-<button class="m-btn" onclick="qa('Generate a complete risk framework governance checklist for Kandia at Risk 2 Solution, contextualised for a risk management SaaS platform')">Risk governance checklist</button>
-<button class="m-btn sec" onclick="qa('Generate the incident escalation pathway process document for Risk 2 Solution for ISO 27001 compliance')">Create incident pathway</button>
-<button class="m-btn sec" onclick="qa('Create an ISO 27001 pre-audit action plan for Risk 2 Solution with owners and deadlines before May 12')">ISO action plan</button>`
-    },
-    strategy:{
-      title:'Strategy execution',
-      sub:'Translate CEO vision into operational reality',
-      body:`<div class="mfield"><div class="mfl">What this involves</div><div class="mfv">Bridge CEO strategy and operational execution. Ensure Q2 OKRs are tracked, teams aligned, and initiatives progressing on schedule.</div></div>
-<div class="alert-box warn"><div class="ab-title">This week</div><div class="ab-text">Q2 OKR mid-cycle review due. Platform v3.3 roadmap review scheduled for next week.</div></div>
-<hr class="m-divider">
-<button class="m-btn" onclick="qa('Create a Q2 OKR mid-cycle review framework and template for Risk 2 Solution for Kandia')">Q2 OKR review template</button>
-<button class="m-btn sec" onclick="qa('What strategic priorities should Kandia as COO focus on at Risk 2 Solution this quarter?')">Strategic priorities</button>`
-    },
-    clients:{
-      title:'Client delivery quality',
-      sub:'SLA adherence, onboarding quality, NPS',
-      body:`<div class="mfield"><div class="mfl">Current status</div><div class="mfv">SLA compliance: 96.4%. Active onboardings: Titan Corp (week 2), Delta Inc (week 6), Prentice Group (pending). 2 open platform incidents being monitored.</div></div>
-<hr class="m-divider">
-<button class="m-btn" onclick="qa('What should Kandia review to ensure client delivery quality across all three active onboardings at Risk 2 Solution?')">Delivery review checklist</button>
-<button class="m-btn sec" onclick="qa('Generate a client onboarding quality assurance process for Risk 2 Solution')">QA process</button>
-<button class="m-btn sec" onclick="openDraftModal('Titan Corp Procurement','Week 2 onboarding check-in and status update','Week 2 onboarding update — Risk 2 Solution','email')">Email Titan Corp</button>`
-    },
-    people:{
-      title:'People & culture',
-      sub:'Capacity, performance, wellbeing, development',
-      body:`<div class="mfield"><div class="mfl">This week</div><div class="mfv">1:1 with People and Culture lead at 16:00 today. Utilisation report due 30 April. Check staff dashboard for capacity alerts and blockers.</div></div>
-<hr class="m-divider">
-<button class="m-btn" onclick="qa('What people and culture actions should Kandia take this week as COO of Risk 2 Solution based on the current team situation?')">People action plan</button>
-<button class="m-btn sec" onclick="show('staff',null);closeModal()">Go to staff dashboard</button>
-<button class="m-btn sec" onclick="qa('Generate 1:1 agenda items for Kandia to use with the People and Culture lead today')">Generate 1:1 agenda</button>`
-    },
-    finance:{
-      title:'Financial oversight',
-      sub:'Budget, P&L, cost management, ROI',
-      body:`<div class="mfield"><div class="mfl">What this involves</div><div class="mfv">Monitor and manage the operational budget, track P&L targets, manage vendor costs, and ensure efficiency initiatives generate measurable ROI.</div></div>
-<div class="alert-box ok"><div class="ab-title">Efficiency opportunity</div><div class="ab-text">11 hours per week of savings identified through automation. See the Automation panel for details.</div></div>
-<hr class="m-divider">
-<button class="m-btn" onclick="qa('What financial metrics and KPIs should Kandia track as COO of a risk management SaaS company?')">Financial KPIs for COO</button>
-<button class="m-btn sec" onclick="show('auto',null);closeModal()">View automation savings</button>`
-    },
-    tech:{
-      title:'Technology & systems',
-      sub:'Platform health, tooling, automation roadmap',
-      body:`<div class="mfield"><div class="mfl">Current status</div><div class="mfv">R2S platform v3.2 live. SLA compliance 96.4%. 2 open incidents under investigation. v3.3 roadmap review scheduled next week.</div></div>
-<hr class="m-divider">
-<button class="m-btn" onclick="qa('What technology and systems priorities should Kandia as COO of Risk 2 Solution focus on this quarter?')">Tech priorities guide</button>
-<button class="m-btn sec" onclick="qa('Create an agenda for the R2S platform roadmap v3.3 review meeting for Kandia')">Roadmap review agenda</button>
-<button class="m-btn sec" onclick="show('auto',null);closeModal()">Automation opportunities</button>`
-    },
-    reporting:{
-      title:'Stakeholder reporting',
-      sub:'Board pack, CEO updates, investor communications',
-      body:`<div class="alert-box warn"><div class="ab-title">Due today</div><div class="ab-text">Board pack section 3 COO narrative — David Park is waiting. Deadline is end of business.</div></div>
-<div class="mfield"><div class="mfl">What this involves</div><div class="mfv">Prepare regular reporting for the board, CEO, and key stakeholders. Maintain transparency on operational performance, risks, and strategic progress.</div></div>
-<hr class="m-divider">
-<button class="m-btn" onclick="qa('Write the complete COO board pack narrative section for April for Kandia at Risk 2 Solution, covering operations, risks, Q2 progress, people update and outlook')">Write board narrative now</button>
-<button class="m-btn sec" onclick="openDraftModal('David Park','Sending the COO narrative for board pack section 3','Re: Board pack section 3 — COO narrative','email')">Email David Park</button>
-<button class="m-btn sec" onclick="qa('Generate a monthly COO reporting template for Risk 2 Solution that Kandia can reuse each month')">Monthly report template</button>`
-    }
-  };
-  const d=duties[key];
-  if(!d)return;
-  openModal(d.title,d.sub,d.body);
 }
 
 function filterStaff(type){
   if(SD.length===0){openModal('No check-ins yet','Send the check-in form to staff first','<div class="mfv">Once staff submit their weekly check-in, capacity data will appear here automatically.</div>');return;}
   const filtered=type==='over'?[...SD].filter(s=>s.capacity>=85).sort((a,b)=>b.capacity-a.capacity):[...SD].filter(s=>s.capacity<65).sort((a,b)=>a.capacity-b.capacity);
-  if(filtered.length===0){
-    openModal(type==='over'?'No overloaded staff':'No staff with bandwidth','Great news!','<div class="alert-box ok"><div class="ab-title">'+( type==='over'?'No one is above 85% capacity this week':'Everyone is at 65% or above this week')+'</div><div class="ab-text">Team workload looks well distributed.</div></div>');
-    return;
-  }
+  if(filtered.length===0){openModal(type==='over'?'No overloaded staff':'No staff with bandwidth','Great news!','<div class="alert-box ok"><div class="ab-title">'+(type==='over'?'No one is above 85% capacity this week':'Everyone is at 65% or above this week')+'</div><div class="ab-text">Team workload looks well distributed.</div></div>');return;}
   const title=type==='over'?`Overloaded staff (${filtered.length})`:`Staff with bandwidth (${filtered.length})`;
   const sub=type==='over'?'Above 85% capacity — action recommended':'Below 65% capacity — available for additional work';
   const cards=filtered.map(s=>{
-    const n=cap(s.name);
-    const pct=s.capacity;
+    const n=cap(s.name);const pct=s.capacity;
     const barCol=pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)';
     const matches=type==='over'?findMatches().filter(m=>m.busy.name===s.name):findMatches().filter(m=>m.free.name===s.name);
     const matchHtml=matches.length>0?`<div style="font-size:11px;color:var(--g);margin-top:5px;font-weight:500">✓ Skill match found: ${matches.map(m=>cap(type==='over'?m.free.name:m.busy.name)).join(', ')} can help</div>`:'';
     const solutions=type==='over'
-      ?`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
-          <button class="m-btn" style="font-size:11px;padding:6px 12px" onclick="actionCapacity('${s.name}',${pct},'${(s.skills||'').replace(/'/g,"\'")}')">View solutions</button>
-          <button class="m-btn sec" style="font-size:11px;padding:6px 12px" onclick="openDraftModal('${n}','Wellbeing check-in — ${n} is at ${pct}% capacity this week','Checking in — how can I support you?','email')">Email ${n}</button>
-          <button class="m-btn sec" style="font-size:11px;padding:6px 12px;background:#217346;color:#fff;border:none" onclick="openDraftModal('${n}','1:1 to discuss capacity and workload reduction','1:1 — workload review','meeting')">Schedule 1:1</button>
-        </div>`
-      :`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
-          <button class="m-btn" style="font-size:11px;padding:6px 12px" onclick="show('skills',null);closeModal()">See skill matches</button>
-          <button class="m-btn sec" style="font-size:11px;padding:6px 12px" onclick="openDraftModal('${n}','Assigning additional work — ${n} has available capacity this week','Additional work this week','email')">Email ${n}</button>
-        </div>`;
-    return `<div style="background:var(--bg2);border-radius:10px;padding:12px 14px;margin-bottom:10px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <div style="font-size:13px;font-weight:500;color:var(--t1)">${n}</div>
-        <div style="font-size:10px;color:var(--t2)">${s.role||''}</div>
-        <div style="margin-left:auto;font-size:14px;font-weight:500;color:${barCol}">${pct}%</div>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <div style="flex:1;background:var(--bg);border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;border-radius:3px;background:${barCol};width:${pct}%"></div></div>
-      </div>
-      ${s.projects?`<div style="font-size:11px;color:var(--t2);margin-top:5px">Projects: ${s.projects}</div>`:''}
-      ${hasBlocker(s.blockers)?`<div style="font-size:11px;color:var(--r);margin-top:4px">Blocker: ${s.blockers}</div>`:''}
-      ${matchHtml}
-      ${solutions}
-    </div>`;
+      ?`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button class="m-btn" style="font-size:11px;padding:6px 12px" onclick="actionCapacity('${s.name}',${pct},'${(s.skills||'').replace(/'/g,"\\'")}')">View solutions</button><button class="m-btn sec" style="font-size:11px;padding:6px 12px" onclick="openDraftModal('${n}','Wellbeing check-in — ${n} is at ${pct}% capacity','Checking in — how can I support you?','email')">Email ${n}</button><button class="m-btn sec" style="font-size:11px;padding:6px 12px;background:#217346;color:#fff;border:none" onclick="openDraftModal('${n}','1:1 to discuss capacity reduction','1:1 — workload review','meeting')">Schedule 1:1</button></div>`
+      :`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button class="m-btn" style="font-size:11px;padding:6px 12px" onclick="show('skills',null);closeModal()">See skill matches</button><button class="m-btn sec" style="font-size:11px;padding:6px 12px" onclick="openDraftModal('${n}','Assigning additional work — ${n} has available capacity this week','Additional work this week','email')">Email ${n}</button></div>`;
+    return `<div style="background:var(--bg2);border-radius:10px;padding:12px 14px;margin-bottom:10px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div style="font-size:13px;font-weight:500;color:var(--t1)">${n}</div><div style="font-size:10px;color:var(--t2)">${s.role||''}</div><div style="margin-left:auto;font-size:14px;font-weight:500;color:${barCol}">${pct}%</div></div><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;background:var(--bg);border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;border-radius:3px;background:${barCol};width:${pct}%"></div></div></div>${s.projects?`<div style="font-size:11px;color:var(--t2);margin-top:5px">Projects: ${s.projects}</div>`:''}${hasBlocker(s.blockers)?`<div style="font-size:11px;color:var(--r);margin-top:4px">Blocker: ${s.blockers}</div>`:''}${matchHtml}${solutions}</div>`;
   }).join('');
-  const summaryType=type==='over'
-    ?'<div class="alert-box"><div class="ab-title">Action recommended</div><div class="ab-text">These staff members are at risk of burnout. Check skill matches to redistribute work, or reach out directly below.</div></div>'
-    :'<div class="alert-box ok"><div class="ab-title">Capacity available</div><div class="ab-text">These staff members have bandwidth this week. Check the Skill Matching panel to see if any can assist overloaded colleagues.</div></div>';
+  const summaryType=type==='over'?'<div class="alert-box"><div class="ab-title">Action recommended</div><div class="ab-text">These staff members are at risk of burnout.</div></div>':'<div class="alert-box ok"><div class="ab-title">Capacity available</div><div class="ab-text">These staff members have bandwidth this week.</div></div>';
   openModal(title,sub,summaryType+cards);
 }
 
-/* ── NAV ── */
 function show(id,btn){
   document.querySelectorAll('.pnl,.pnl-chat').forEach(p=>{p.classList.remove('active');p.scrollTop=0;});
   document.querySelectorAll('.ni').forEach(b=>b.classList.remove('active'));
@@ -1124,7 +931,6 @@ function show(id,btn){
   setTimeout(()=>{if(id==='email'&&!charts.email)buildCharts();if(id==='staff')buildCharts();},50);
 }
 
-/* ── MODAL ── */
 function openModal(title,sub,body){
   document.getElementById('m-title').textContent=title;
   document.getElementById('m-sub').textContent=sub||'';
@@ -1133,7 +939,6 @@ function openModal(title,sub,body){
 }
 function closeModal(){document.getElementById('modal').classList.remove('open');}
 
-/* ── CHAT ── */
 const SYS=`You are Cinderella, the personal COO assistant for Kandia, the COO of Risk 2 Solution — a risk management and compliance SaaS company. Always address Kandia by name when appropriate. Professional, proactive, executive-level tone.
 
 Context: 12 staff (2 contractors). Clients: Titan Corp (wk 2), Delta Inc (wk 6), Prentice Group (pending). ISO 27001 audit May 12 (68% ready — incident escalation has no owner). Platform v3.2, 96.4% SLA. Q2 OKR mid-cycle.
@@ -1142,12 +947,9 @@ Open items: vendor contract Marcus Webb (26h overdue), board pack section 3 (Dav
 
 COO duties: operational oversight, risk governance, strategy execution, client delivery, people & culture, financial oversight, tech/systems, board reporting.
 
-When asked to generate processes, documents, checklists or templates — produce them in full. Be comprehensive and contextualise everything for a risk management SaaS company. When asked to draft emails or messages — produce complete, ready-to-send drafts.
-
-You have access to Microsoft 365 via MCP for calendar and email actions.`;
+When asked to generate processes, documents, checklists or templates — produce them in full. Be comprehensive and contextualise everything for a risk management SaaS company. When asked to draft emails or messages — produce complete, ready-to-send drafts.`;
 
 async function send(){
-  // API handled server-side via proxy
   const inp=document.getElementById('cinput');
   const text=inp.value.trim();
   if(!text||busy)return;
@@ -1155,7 +957,7 @@ async function send(){
   const sc=SD.length>0?'\n\nLive staff check-ins:\n'+SD.map(s=>`- ${s.name} (${s.role||'?'}): ${s.capacity}% capacity | trend: ${s.trend||'?'} | projects: ${s.projects||'none'} | blockers: ${s.blockers||'none'} | availability: ${s.availability||'?'} | skills: ${s.skills||'?'} | notes: ${s.notes||'none'}`).join('\n'):'\n\nNo staff check-ins this week.';
   addMsg('u',text);msgs.push({role:'user',content:text});setB(true);
   try{
-    const r=await fetch('/.netlify/functions/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,system:SYS+sc,messages:msgs})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,system:SYS+sc,messages:msgs})});
     const d=await r.json();
     if(d.error)throw new Error(d.error.message);
     const rep=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('\n')||'No response.';
@@ -1180,18 +982,17 @@ function setB(on){
 function qa(text){
   const chatBtn=document.querySelector('[onclick*="chat"]');
   show('chat',chatBtn);
-  setTimeout(()=>{
-    const inp=document.getElementById('cinput');
-    if(inp){inp.value=text;send();}
-  },300);
+  setTimeout(()=>{const inp=document.getElementById('cinput');if(inp){inp.value=text;send();}},300);
 }
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
 function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,90)+'px';}
 function tick(){document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',weekday:'short',day:'numeric',month:'short'});}
 tick();setInterval(tick,1000);
 loadCfg();
+try{renderStaff();}catch(e){console.warn('renderStaff:',e.message);}
+try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
+try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
 
-/* ── DRAFT EMAIL & SCHEDULE SYSTEM ── */
 let DM={name:'',email:'',subject:'',context:'',mode:'email'};
 
 function openDraftModal(name,context,subject,defaultTab){
@@ -1201,7 +1002,7 @@ function openDraftModal(name,context,subject,defaultTab){
   document.getElementById('dm-sub').textContent=context;
   document.getElementById('dm-icon').textContent=defaultTab==='meeting'?'📅':'✉️';
   switchTab(defaultTab||'email');
-  if(!defaultTab||defaultTab==='email') generateEmailDraft(name,context,subject);
+  if(!defaultTab||defaultTab==='email')generateEmailDraft(name,context,subject);
   else setupMeetingPane(name,subject);
 }
 
@@ -1223,9 +1024,9 @@ async function generateEmailDraft(name,context,subject){
   if(!C.api){showDraftResult('',subject,'Please add your API key in Setup & settings to generate email drafts.');return;}
   const staffMember=SD.find(s=>s.name===name);
   const staffCtx=staffMember?`Staff member context: ${staffMember.name}, ${staffMember.role||'staff'}, ${staffMember.capacity}% capacity, projects: ${staffMember.projects||'none'}, blockers: ${staffMember.blockers||'none'}`:'';
-  const prompt=`Draft a professional, warm and direct email from the COO of Risk 2 Solution to a staff member named ${name}.\n\nPurpose: ${context}\n${staffCtx}\n\nFormat your response as:\nSUBJECT: [subject line]\n\n[email body]\n\nKeep it concise (3-5 short paragraphs max), professional but human, action-oriented. Sign off as "Kandia" or "Kandia, COO" as appropriate.`;
+  const prompt=`Draft a professional, warm and direct email from the COO of Risk 2 Solution to ${name}.\n\nPurpose: ${context}\n${staffCtx}\n\nFormat:\nSUBJECT: [subject line]\n\n[email body]\n\nKeep it concise (3-5 short paragraphs), professional but human. Sign off as "Kandia" or "Kandia, COO".`;
   try{
-    const r=await fetch('/.netlify/functions/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,messages:[{role:'user',content:prompt}]})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,messages:[{role:'user',content:prompt}]})});
     const d=await r.json();
     if(d.error)throw new Error(d.error.message);
     const text=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('')||'';
@@ -1233,7 +1034,7 @@ async function generateEmailDraft(name,context,subject){
     const subj=subMatch?subMatch[1].trim():(subject||`Following up — ${name}`);
     const body=text.replace(/SUBJECT:\s*.+\n?/,'').trim();
     showDraftResult(name,subj,body);
-  }catch(e){showDraftResult(name,subject,`Could not generate draft: ${e.message}. You can type your message below.`);}
+  }catch(e){showDraftResult(name,subject,`Could not generate draft: ${e.message}.`);}
 }
 
 function showDraftResult(name,subject,body){
@@ -1244,7 +1045,6 @@ function showDraftResult(name,subject,body){
   document.getElementById('dm-to').value=name?(name+' <email@risk2solution.com.au>'):'';
   document.getElementById('dm-subject').value=subject||'';
   document.getElementById('dm-body').value=body||'';
-  // auto-resize body textarea
   const ta=document.getElementById('dm-body');
   ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,300)+'px';
 }
@@ -1273,9 +1073,9 @@ async function refineEmail(){
   document.getElementById('dm-draft-content').style.display='none';
   document.getElementById('dm-email-actions').style.display='none';
   document.getElementById('dm-email-note').style.display='none';
-  const prompt2=`Rewrite this email draft based on this instruction: "${instruction}"\n\nCurrent draft:\n${currentBody}\n\nReturn only the revised email body, no subject line.`;
+  const prompt2=`Rewrite this email based on: "${instruction}"\n\nCurrent draft:\n${currentBody}\n\nReturn only the revised email body.`;
   try{
-    const r=await fetch('/.netlify/functions/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:500,messages:[{role:'user',content:prompt2}]})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:500,messages:[{role:'user',content:prompt2}]})});
     const d=await r.json();
     const body=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('')||currentBody;
     showDraftResult(DM.name,document.getElementById('dm-subject').value,body.trim());
@@ -1285,7 +1085,6 @@ async function refineEmail(){
 function setupMeetingPane(name,reason){
   document.getElementById('ics-with').textContent=name;
   document.getElementById('ics-subject').textContent=reason||`Meeting with ${name}`;
-  // default to next working day 10am
   const d=new Date();d.setDate(d.getDate()+1);
   if(d.getDay()===0)d.setDate(d.getDate()+1);
   if(d.getDay()===6)d.setDate(d.getDate()+2);
@@ -1300,26 +1099,13 @@ function downloadICS(){
   const duration=parseInt(document.getElementById('ics-duration').value)||30;
   const notes=document.getElementById('ics-notes').value;
   const name=DM.name;
-  if(!when){alert('Please select a date and time for the meeting.');return;}
+  if(!when){alert('Please select a date and time.');return;}
   const start=new Date(when);
   const end=new Date(start.getTime()+duration*60000);
-  const fmt=d=>`${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
   const pad=n=>String(n).padStart(2,'0');
+  const fmt=d=>`${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
   const uid=`cin-${Date.now()}@risk2solution`;
-  const ics=[
-    'BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Cinderella//R2S//EN','CALSCALE:GREGORIAN','METHOD:REQUEST',
-    'BEGIN:VEVENT',
-    `UID:${uid}`,
-    `DTSTAMP:${fmt(new Date())}`,
-    `DTSTART:${fmt(start)}`,
-    `DTEND:${fmt(end)}`,
-    `SUMMARY:${subject}`,
-    `DESCRIPTION:${notes.replace(/\n/g,'\\n')}`,
-    'ORGANIZER:COO',
-    `ATTENDEE;CN=${name}:mailto:staff@risk2solution.com.au`,
-    'BEGIN:VALARM','TRIGGER:-PT15M','ACTION:DISPLAY',`DESCRIPTION:Reminder: ${subject}`,'END:VALARM',
-    'END:VEVENT','END:VCALENDAR'
-  ].join('\r\n');
+  const ics=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Cinderella//R2S//EN','CALSCALE:GREGORIAN','METHOD:REQUEST','BEGIN:VEVENT',`UID:${uid}`,`DTSTAMP:${fmt(new Date())}`,`DTSTART:${fmt(start)}`,`DTEND:${fmt(end)}`,`SUMMARY:${subject}`,`DESCRIPTION:${notes.replace(/\n/g,'\\n')}`,'ORGANIZER:COO',`ATTENDEE;CN=${name}:mailto:staff@risk2solution.com.au`,'BEGIN:VALARM','TRIGGER:-PT15M','ACTION:DISPLAY',`DESCRIPTION:Reminder: ${subject}`,'END:VALARM','END:VEVENT','END:VCALENDAR'].join('\r\n');
   const blob=new Blob([ics],{type:'text/calendar;charset=utf-8'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
@@ -1327,82 +1113,64 @@ function downloadICS(){
   a.click();URL.revokeObjectURL(url);
 }
 
-/* ── SHORTHAND ACTION BUILDERS ── */
-// These are called from modal buttons throughout the dashboard
-
 function actionBlocker(staffName,blockerText){
-  openModal(
-    `Resolve blocker — ${staffName}`,
-    blockerText,
+  openModal(`Resolve blocker — ${staffName}`,blockerText,
     `<div class="alert-box warn"><div class="ab-title">Blocker reported by ${staffName}</div><div class="ab-text">${blockerText}</div></div>
-    <div class="mfield"><div class="mfl">Cinderella's suggested actions</div><div class="mfv">1. Reach out to ${staffName} directly to understand the full picture.<br>2. Identify who else can unblock this — escalate if needed.<br>3. Remove the blocker and update ${staffName} by end of day.</div></div>
+    <div class="mfield"><div class="mfl">Suggested actions</div><div class="mfv">1. Reach out to ${staffName} directly.<br>2. Identify who can unblock this.<br>3. Resolve and update ${staffName} by end of day.</div></div>
     <hr class="m-divider">
-    <button class="m-btn" onclick="openDraftModal('${staffName}','I want to help resolve your blocker: ${blockerText.replace(/'/g,"\\'")}','Re: Removing your blocker — let\\'s talk','email')">✉ Draft email to ${staffName}</button>
-    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${staffName}','Resolve blocker: ${blockerText.replace(/'/g,"\\'")}','Quick call to resolve your blocker','meeting')">📅 Schedule a call</button>
-    <button class="m-btn sec" onclick="qa('Help me resolve this specific blocker for ${staffName}: ${blockerText.replace(/'/g,"\\'")}')">Ask Cinderella for help</button>`
+    <button class="m-btn" onclick="openDraftModal('${staffName}','I want to help resolve your blocker: ${blockerText.replace(/'/g,"\\'")}','Re: Removing your blocker','email')">✉ Email ${staffName}</button>
+    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${staffName}','Resolve blocker','Quick call to resolve your blocker','meeting')">📅 Schedule a call</button>
+    <button class="m-btn sec" onclick="qa('Help me resolve this blocker for ${staffName}: ${blockerText.replace(/'/g,"\\'")}')">Ask Cinderella</button>`
   );
 }
 
 function actionCapacity(staffName,capacity,skills){
-  openModal(
-    `Capacity support — ${staffName}`,
-    `${capacity}% capacity — needs workload assistance`,
-    `<div class="alert-box"><div class="ab-title">${staffName} is at ${capacity}% — at risk of burnout</div><div class="ab-text">Immediate action recommended. Skill-matched colleagues may be able to absorb some workload.</div></div>
-    <div class="mfield"><div class="mfl">Skills they need support with</div><div class="mfv">${skills||'See skill matching panel for details'}</div></div>
+  openModal(`Capacity support — ${staffName}`,`${capacity}% capacity — needs workload assistance`,
+    `<div class="alert-box"><div class="ab-title">${staffName} is at ${capacity}% — at risk of burnout</div><div class="ab-text">Immediate action recommended.</div></div>
+    <div class="mfield"><div class="mfl">Skills they need support with</div><div class="mfv">${skills||'See skill matching panel'}</div></div>
     <hr class="m-divider">
-    <button class="m-btn" onclick="openDraftModal('${staffName}','Check in on their wellbeing and discuss workload reduction — they are at ${capacity}% capacity','Checking in — how can I support you?','email')">✉ Wellbeing check-in email</button>
-    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${staffName}','Workload review — ${staffName} is at ${capacity}% capacity','1:1 — workload check-in','meeting')">📅 Schedule 1:1</button>
+    <button class="m-btn" onclick="openDraftModal('${staffName}','Check in on their wellbeing — they are at ${capacity}% capacity','Checking in — how can I support you?','email')">✉ Wellbeing check-in</button>
+    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${staffName}','Workload review — at ${capacity}% capacity','1:1 — workload check-in','meeting')">📅 Schedule 1:1</button>
     <button class="m-btn sec" onclick="show('skills',null);closeModal()">View skill matches</button>`
   );
 }
 
 function actionSkillMatch(busyName,freeName,busyCap,freeCap,sharedSkills){
-  openModal(
-    `Reallocation — ${busyName} → ${freeName}`,
-    `Skill match · ${busyName} at ${busyCap}% · ${freeName} at ${freeCap}%`,
-    `<div class="alert-box ok"><div class="ab-title">Cinderella recommends: ask ${freeName} to support ${busyName}</div><div class="ab-text">Shared skills: ${sharedSkills}. ${freeName} has ${100-freeCap}% spare capacity this week.</div></div>
-    <div class="mfield"><div class="mfl">Suggested approach</div><div class="mfv">1. Email ${freeName} to let them know they're being asked to assist.<br>2. Email ${busyName} to let them know support is coming.<br>3. Schedule a brief handover call between both staff members.</div></div>
+  openModal(`Reallocation — ${busyName} → ${freeName}`,`Skill match · ${busyName} at ${busyCap}% · ${freeName} at ${freeCap}%`,
+    `<div class="alert-box ok"><div class="ab-title">Cinderella recommends: ask ${freeName} to support ${busyName}</div><div class="ab-text">Shared skills: ${sharedSkills}. ${freeName} has ${100-freeCap}% spare capacity.</div></div>
     <hr class="m-divider">
-    <div style="font-size:11px;font-weight:500;color:var(--t2);margin-bottom:10px">Email ${freeName} (the supporter)</div>
-    <button class="m-btn" onclick="openDraftModal('${freeName}','Ask them to support ${busyName} who is at ${busyCap}% capacity. Shared skills: ${sharedSkills}','Support request — ${busyName} needs your help this week','email')">✉ Email ${freeName}</button>
-    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${freeName}','Handover briefing with ${busyName} — skill support request','Handover call — ${busyName} &amp; ${freeName}','meeting')">📅 Schedule handover call</button>
-    <div style="font-size:11px;font-weight:500;color:var(--t2);margin:12px 0 8px">Email ${busyName} (needs support)</div>
-    <button class="m-btn sec" onclick="openDraftModal('${busyName}','Let them know ${freeName} will be supporting them this week to ease their workload','Good news — support coming your way','email')">✉ Email ${busyName}</button>
-    <button class="m-btn sec" onclick="qa('What specific tasks from ${busyName}s projects could ${freeName} take on given shared skills: ${sharedSkills}?')">Ask Cinderella for task suggestions</button>`
+    <button class="m-btn" onclick="openDraftModal('${freeName}','Ask them to support ${busyName} who is at ${busyCap}% capacity. Shared skills: ${sharedSkills}','Support request — ${busyName} needs your help','email')">✉ Email ${freeName}</button>
+    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${freeName}','Handover briefing with ${busyName}','Handover call','meeting')">📅 Schedule handover</button>
+    <button class="m-btn sec" onclick="openDraftModal('${busyName}','Let them know ${freeName} will be supporting them','Good news — support coming your way','email')">✉ Email ${busyName}</button>
+    <button class="m-btn sec" onclick="qa('What tasks from ${busyName} could ${freeName} take on given shared skills: ${sharedSkills}?')">Ask Cinderella for task suggestions</button>`
   );
 }
 
 function actionEfficiency(title,detail,staffInvolved){
   const staff=(staffInvolved||'').split(',').map(s=>s.trim()).filter(Boolean);
   const emailBtns=staff.map(s=>`<button class="m-btn sec" onclick="openDraftModal('${s}','${detail.replace(/'/g,"\\'")}','Action required: ${title}','email')" style="margin-bottom:6px">✉ Email ${s}</button>`).join('');
-  openModal(
-    title,
-    detail,
+  openModal(title,detail,
     `<div class="mfield"><div class="mfl">Opportunity detail</div><div class="mfv">${detail}</div></div>
-    <div class="mfield"><div class="mfl">Recommended steps</div><div class="mfv">1. Brief the staff involved on the change.<br>2. Assign a process owner.<br>3. Set a target completion date.<br>4. Review at next ops meeting.</div></div>
     <hr class="m-divider">
-    <button class="m-btn" onclick="qa('Create a detailed implementation plan for this efficiency improvement at Risk 2 Solution: ${title}. Context: ${detail.replace(/'/g,"\\'")}')">Generate implementation plan</button>
-    ${emailBtns}
-    ${staff.length>0?`<button class="m-btn" style="background:#217346" onclick="openDraftModal('${staff[0]}','Efficiency initiative: ${title}','Ops improvement — your involvement needed','meeting')">📅 Schedule alignment meeting</button>`:''}
-    <button class="m-btn sec" onclick="qa('Draft a process document for this efficiency initiative: ${title}')">Generate process doc</button>`
+    <button class="m-btn" onclick="qa('Create an implementation plan for: ${title}. Context: ${detail.replace(/'/g,"\\'")}')">Generate implementation plan</button>
+    ${emailBtns}`
   );
 }
 
-// Modal content — all defined as JS to avoid HTML-in-onclick parsing issues
-var MODALS = {
+var MODALS={
   mtg:{title:'Meetings today',sub:'5 scheduled — 2 need prep',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">Needs prep</div><div class="ab-text">Risk framework review (09:30) and Titan Corp (11:00) — no prep blocks in calendar.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate full prep plan';b.onclick=function(){qa('Create a complete meeting prep plan for all of today\'s meetings for Kandia');cm();};d.appendChild(b);return d;}},
   pri:{title:'Open priorities',sub:'7 items — 2 urgent today',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box"><div class="ab-title">Vendor contract — Marcus Webb</div><div class="ab-text">26 hours overdue. Approve or respond today.</div></div><div class="alert-box warn"><div class="ab-title">Staff utilisation report — due 30 April</div><div class="ab-text">Collect check-in data from all 12 staff and submit before end of week.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Cinderella to prioritise';b.onclick=function(){qa('What are my top priorities this week and how should they be ordered?');cm();};d.appendChild(b);return d;}},
-  standup:{title:'Leadership stand-up',sub:'08:30 · 15 min · Teams · Recurring',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">Cinderella suggests raising</div><div class="mfv">Vendor contract (Marcus Webb) · ISO audit progress · Titan Corp onboarding · Staff blockers</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft talking points';b.onclick=function(){qa('Draft talking points for the leadership stand-up this morning');cm();};d.appendChild(b);return d;}},
+  standup:{title:'Leadership stand-up',sub:'08:30 · 15 min · Teams',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">Cinderella suggests raising</div><div class="mfv">Vendor contract (Marcus Webb) · ISO audit progress · Titan Corp onboarding · Staff blockers</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft talking points';b.onclick=function(){qa('Draft talking points for the leadership stand-up this morning');cm();};d.appendChild(b);return d;}},
   risk:{title:'Risk framework review',sub:'09:30 · 60 min · Board room',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">Prep required before 09:00</div><div class="ab-text">No preparation block found in your calendar.</div></div><div class="mfield"><div class="mfl">What to prepare</div><div class="mfv">Q1 incident register · Updated risk matrix · ISO 27001 progress (68%) · Incident escalation pathway — no owner</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate briefing doc';b.onclick=function(){qa('Prepare a full briefing for the 09:30 risk framework review for Kandia');cm();};d.appendChild(b);return d;}},
-  titan:{title:'Client onboarding — Titan Corp',sub:'11:00 · 45 min · Zoom · External',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">No prep time blocked</div><div class="ab-text">10:15 to 10:45 is free. Book a prep block now.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Full prep brief';b.onclick=function(){qa('What does Kandia need to prepare for the Titan Corp onboarding meeting?');cm();};d.appendChild(b);return d;}},
+  titan:{title:'Client onboarding — Titan Corp',sub:'11:00 · 45 min · Zoom',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">No prep time blocked</div><div class="ab-text">10:15 to 10:45 is free. Book a prep block now.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Full prep brief';b.onclick=function(){qa('What does Kandia need to prepare for the Titan Corp onboarding meeting?');cm();};d.appendChild(b);return d;}},
   q2:{title:'Q2 ops review + KPI deep-dive',sub:'14:00 · 90 min · Conf room A',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">Key topics</div><div class="mfv">Q2 OKR mid-cycle progress · Staff utilisation · Client SLA (96.4%) · ISO audit readiness</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate agenda';b.onclick=function(){qa('Generate a Q2 ops review agenda and talking points for the KPI deep-dive');cm();};d.appendChild(b);return d;}},
   '11':{title:'1:1 — People & Culture lead',sub:'16:00 · 30 min · Office',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">Suggested agenda</div><div class="mfv">Staff capacity concerns · Blockers from check-ins · ISO audit readiness · Recruitment pipeline</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate 1:1 agenda';b.onclick=function(){qa('Generate 1:1 agenda items for Kandia and the People and Culture lead today');cm();};d.appendChild(b);return d;}},
-  'email-marcus':{title:'Marcus Webb — Webb Legal',sub:'Vendor services agreement · 26h · OVERDUE',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box"><div class="ab-title">Overdue — action required today</div><div class="ab-text">26 hours with no response.</div></div><div class="mfield"><div class="mfl">Email content</div><div class="mfv" style="white-space:pre-wrap;background:var(--bg2);padding:10px 12px;border-radius:8px">Hi Kandia,\n\nFollowing up on the vendor services agreement sent last week. We need your sign-off to proceed. Please note the termination clause in section 4.3 has been updated as discussed.\n\nBest,\nMarcus Webb\nWebb Legal</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Draft approval email';b1.onclick=function(){qa('Draft an approval email to Marcus Webb for the vendor services agreement, noting the updated termination clause');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Request clarification';b2.onclick=function(){qa('Draft an email to Marcus Webb requesting clarification on the termination clause before signing');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
-  'email-karen':{title:'Karen Liu — IT Ops',sub:'System access approval · 18h · OVERDUE',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">Needs your attention</div><div class="ab-text">New compliance analyst cannot begin work until access is approved.</div></div><div class="mfield"><div class="mfl">Email content</div><div class="mfv" style="white-space:pre-wrap;background:var(--bg2);padding:10px 12px;border-radius:8px">Hi Kandia,\n\nOur new compliance analyst Emma Rodriguez starts tomorrow and needs system access today.\n\nThanks, Karen</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Approve via email';b.onclick=function(){qa('Draft an approval email to Karen Liu granting system access for the new compliance analyst Emma Rodriguez');cm();};d.appendChild(b);return d;}},
-  'email-david':{title:'David Park — Board',sub:'April board pack · COO narrative needed · 5h',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">Needs your attention</div><div class="ab-text">Board pack compilation deadline is end of business today.</div></div><div class="mfield"><div class="mfl">Email content</div><div class="mfv" style="white-space:pre-wrap;background:var(--bg2);padding:10px 12px;border-radius:8px">Kandia,\n\nWe need your COO narrative for board pack section 3. Deadline is end of business today.\n\nDavid Park, Board Secretary</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate COO narrative';b.onclick=function(){qa('Write a complete COO board pack narrative section for April covering Risk 2 Solution operations, key risks, Q2 progress, people update and forward outlook');cm();};d.appendChild(b);return d;}},
-  'email-sofia':{title:'Sofia Ng — Risk 2 Solution',sub:'Process audit findings · 3h',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Review required before ISO audit</div><div class="ab-text">Sign-off needed before May 12 audit.</div></div><div class="mfield"><div class="mfl">Email content</div><div class="mfv" style="white-space:pre-wrap;background:var(--bg2);padding:10px 12px;border-radius:8px">Hi Kandia,\n\nInternal process audit complete — 4 findings requiring your sign-off:\n\n1. Incident escalation pathway — no documented owner\n2. Vendor review cadence — last reviewed 7 months ago\n3. Access control log — missing 3 entries\n4. Staff security training — 2 staff overdue\n\nSofia Ng</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Prep for review';b1.onclick=function(){qa('What should Kandia look for when reviewing process audit findings before an ISO 27001 audit?');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Acknowledge receipt';b2.onclick=function(){qa('Draft an email to Sofia Ng acknowledging receipt of the audit findings and confirming a review date');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
-  'email-titan':{title:'Titan Corp — Procurement',sub:'Onboarding checklist — awaiting reply · 2 days',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Watching</div><div class="ab-text">You replied 2 days ago. Week 2 of onboarding — follow-up appropriate.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft follow-up';b.onclick=function(){qa('Draft a follow-up email to Titan Corp procurement about the onboarding checklist sent 2 days ago');cm();};d.appendChild(b);return d;}},
-  'email-hr':{title:'HR Team',sub:'Policy update sign-off — awaiting confirmation · 3 days',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Watching</div><div class="ab-text">HR have not confirmed receipt of your sign-off sent 3 days ago.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft chase email';b.onclick=function(){qa('Draft a chasing email to the HR team about the policy update sign-off confirmation from 3 days ago');cm();};d.appendChild(b);return d;}},
+  'email-marcus':{title:'Marcus Webb — Webb Legal',sub:'Vendor services agreement · 26h · OVERDUE',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box"><div class="ab-title">Overdue — action required today</div><div class="ab-text">26 hours with no response.</div></div><div class="mfield"><div class="mfl">Email content</div><div class="mfv" style="white-space:pre-wrap;background:var(--bg2);padding:10px 12px;border-radius:8px">Hi Kandia,\n\nFollowing up on the vendor services agreement. We need your sign-off to proceed. Please note the termination clause in section 4.3 has been updated.\n\nBest,\nMarcus Webb</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Draft approval email';b1.onclick=function(){qa('Draft an approval email to Marcus Webb for the vendor services agreement');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Request clarification';b2.onclick=function(){qa('Draft an email to Marcus Webb requesting clarification on the termination clause before signing');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
+  'email-karen':{title:'Karen Liu — IT Ops',sub:'System access approval · 18h',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">New analyst cannot start without access</div><div class="ab-text">Emma Rodriguez starts tomorrow and needs system access today.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Approve via email';b.onclick=function(){qa('Draft an approval email to Karen Liu granting system access for Emma Rodriguez');cm();};d.appendChild(b);return d;}},
+  'email-david':{title:'David Park — Board',sub:'Board pack COO narrative · 5h',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">Deadline end of business today</div><div class="ab-text">Board pack section 3 COO narrative needed.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate COO narrative';b.onclick=function(){qa('Write a complete COO board pack narrative section for April for Risk 2 Solution');cm();};d.appendChild(b);return d;}},
+  'email-sofia':{title:'Sofia Ng — Risk 2 Solution',sub:'Process audit findings · 3h',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Review required before ISO audit</div><div class="ab-text">4 findings: incident escalation no owner, vendor review overdue, access control gaps, security training overdue.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Prep for review';b1.onclick=function(){qa('What should Kandia look for when reviewing process audit findings before an ISO 27001 audit?');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Acknowledge receipt';b2.onclick=function(){qa('Draft an email to Sofia Ng acknowledging receipt of the audit findings');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
+  'email-titan':{title:'Titan Corp — Procurement',sub:'Onboarding checklist · 2 days',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Watching</div><div class="ab-text">Week 2 of onboarding — follow-up appropriate.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft follow-up';b.onclick=function(){qa('Draft a follow-up email to Titan Corp procurement about the onboarding checklist');cm();};d.appendChild(b);return d;}},
+  'email-hr':{title:'HR Team',sub:'Policy update sign-off · 3 days',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Watching</div><div class="ab-text">HR have not confirmed receipt of your sign-off sent 3 days ago.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft chase email';b.onclick=function(){qa('Draft a chasing email to the HR team about the policy update sign-off');cm();};d.appendChild(b);return d;}},
   'duty-ops':{title:'Operations oversight',sub:'Daily ops, workflows, client delivery',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">This week</div><div class="mfv">Q2 ops review at 14:00 today. 3 active client onboardings. Utilisation report due 30 April.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Weekly ops checklist';b.onclick=function(){qa('Give Kandia a best-practice operations oversight checklist for Risk 2 Solution this week');cm();};d.appendChild(b);return d;}},
   'duty-risk':{title:'Risk framework governance',sub:'Policy, compliance posture, ISO 27001',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box"><div class="ab-title">Critical gap — action today</div><div class="ab-text">Incident escalation pathway has no owner. Must be resolved before May 12 ISO audit.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Create incident pathway';b1.onclick=function(){qa('Generate the incident escalation pathway process document for Risk 2 Solution for ISO 27001 compliance');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Risk governance checklist';b2.onclick=function(){qa('Generate a complete risk framework governance checklist for Kandia at Risk 2 Solution');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
   'duty-strategy':{title:'Strategy execution',sub:'Translate CEO vision into operational reality',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">This week</div><div class="ab-text">Q2 OKR mid-cycle review due. Platform v3.3 roadmap review next week.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Q2 OKR review template';b.onclick=function(){qa('Create a Q2 OKR mid-cycle review framework for Risk 2 Solution for Kandia');cm();};d.appendChild(b);return d;}},
@@ -1415,6 +1183,7 @@ var MODALS = {
 
 function omKey(key){
   var m=MODALS[key];if(!m)return;
+  if(document.getElementById('omKey-bg'))return;
   var bg=document.createElement('div');bg.className='mo open';bg.id='omKey-bg';
   bg.onclick=function(e){if(e.target===bg)cm();};
   var box=document.createElement('div');box.className='mb';
@@ -1430,58 +1199,23 @@ function omKey(key){
   box.appendChild(hd);box.appendChild(bd);bg.appendChild(box);
   document.getElementById('appRoot').appendChild(bg);
 }
-</script>
 
-<script>
 function cm(){
   var el=document.getElementById('omKey-bg');
   if(el)el.remove();
 }
 
-async function loadCinderella() {
-  try {
-    const res = await fetch("https://cinderella-agent.onrender.com/status");
-    const data = await res.json();
-
-    console.log("Cinderella data:", data);
-
-    const emailCard = document.querySelector('#pnl-email .card');
-
-    if (emailCard && data.priorities) {
-      let html = '<div class="ct">Needs your reply</div>';
-
-      data.priorities.forEach(p => {
-        html += '<div class="erow">' +
-                  '<div class="ei">' +
-                    '<div class="ef">' + (p.owner || '') + '</div>' +
-                    '<div class="es">' + (p.task || '') + '</div>' +
-                  '</div>' +
-                  '<div class="ea">' + p.urgency + '</div>' +
-                '</div>';
-      });
-
-      emailCard.innerHTML = html;
-    }
-
-    const actionPanel = document.querySelector('#pnl-coo .card');
-
-    if (actionPanel && data.actions) {
-      let html = '<div class="ct">Recommended Actions</div>';
-
-      data.actions.forEach(a => {
-        html += '<div class="pri"><span class="pt">' + a.action + '</span></div>';
-      });
-
-      actionPanel.innerHTML = html;
-    }
-
-  } catch (err) {
-    console.error("Cinderella error:", err);
+async function loadCinderella(){
+  try{
+    const res=await fetch('https://cinderella-agent.onrender.com/status');
+    const data=await res.json();
+    console.log('Cinderella data:',data);
+  }catch(err){
+    console.error('Cinderella error:',err);
   }
 }
-
 loadCinderella();
-setInterval(loadCinderella, 30000);
+setInterval(loadCinderella,30000);
 </script>
 </body>
 </html>
