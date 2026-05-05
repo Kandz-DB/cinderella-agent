@@ -661,6 +661,107 @@ let busy=false;
 let charts={};
 const AV_STYLES=['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
 
+
+/* ── MICROSOFT GRAPH LIVE DATA ── */
+let M365 = { connected: false, emails: [], events: [], teams: [] };
+
+async function checkM365Connection() {
+  const statusEl = document.getElementById('m365Status');
+  const loginBtn = document.getElementById('m365LoginBtn');
+  try {
+    const r = await fetch('/auth/status');
+    if (!r.ok) throw new Error('Server error');
+    const text = await r.text();
+    if (text.trim().startsWith('<')) throw new Error('Got HTML - server may be restarting');
+    const d = JSON.parse(text);
+    M365.connected = d.connected;
+    if (M365.connected) {
+      if (statusEl) { statusEl.textContent = '✓ Connected'; statusEl.style.color = 'var(--g)'; }
+      if (loginBtn) loginBtn.style.display = 'none';
+      loadM365Data();
+    } else {
+      if (statusEl) { statusEl.textContent = 'Click to connect'; statusEl.style.color = 'var(--a)'; }
+      if (loginBtn) loginBtn.style.display = 'flex';
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = 'Not connected'; statusEl.style.color = 'var(--t3)'; }
+    if (loginBtn) loginBtn.style.display = 'flex';
+  }
+}
+
+async function loadM365Data() {
+  try {
+    // Load emails
+    const er = await fetch('/graph/emails');
+    if (er.ok) {
+      const ed = await er.json();
+      M365.emails = ed.emails || [];
+      renderLiveEmails();
+    }
+  } catch(e) { console.warn('Email load failed:', e.message); }
+
+  try {
+    // Load calendar
+    const cr = await fetch('/graph/calendar');
+    if (cr.ok) {
+      const cd = await cr.json();
+      M365.events = cd.events || [];
+      renderLiveCalendar();
+    }
+  } catch(e) { console.warn('Calendar load failed:', e.message); }
+
+  try {
+    // Load Teams
+    const tr = await fetch('/graph/teams');
+    if (tr.ok) {
+      const td = await tr.json();
+      M365.teams = td.chats || [];
+    }
+  } catch(e) { console.warn('Teams load failed:', e.message); }
+}
+
+function renderLiveEmails() {
+  const el = document.getElementById('liveEmailList');
+  if (!el || M365.emails.length === 0) return;
+  const overdue = M365.emails.filter(e => e.hoursOld >= 12);
+  const recent  = M365.emails.filter(e => e.hoursOld < 12);
+  let html = '';
+  if (overdue.length > 0) {
+    overdue.forEach(e => {
+      html += `<div class="erow" onclick="openDraftModal('${e.from}','Reply to: ${e.subject}','Re: ${e.subject}','email')">
+        <div class="ei"><div class="ef">${e.from}</div><div class="es">${e.subject}</div></div>
+        <div class="ea">${e.hoursOld}h <span class="eu">Overdue</span></div>
+      </div>`;
+    });
+  }
+  if (recent.length > 0) {
+    recent.forEach(e => {
+      html += `<div class="erow" onclick="openDraftModal('${e.from}','Reply to: ${e.subject}','Re: ${e.subject}','email')">
+        <div class="ei"><div class="ef">${e.from}</div><div class="es">${e.subject}</div></div>
+        <div class="ea">${e.hoursOld}h</div>
+      </div>`;
+    });
+  }
+  el.innerHTML = html;
+  // Update badge
+  const badge = document.querySelector('.ni .nb-r');
+  if (badge) badge.textContent = M365.emails.length;
+}
+
+function renderLiveCalendar() {
+  const el = document.getElementById('liveCalendar');
+  if (!el || M365.events.length === 0) return;
+  el.innerHTML = M365.events.map(e => {
+    const time = new Date(e.start).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    const endTime = new Date(e.end).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    return `<div class="row">
+      <div class="mtime">${time}</div>
+      <div><div class="mt">${e.subject}</div>
+      <div class="mm">${endTime}${e.location?' · '+e.location:''}</div></div>
+    </div>`;
+  }).join('');
+}
+
 function loadCfg(){
   try{const s=localStorage.getItem('cin_cfg_v3');if(s){const p=JSON.parse(s);if(p.api)C.api=p.api;if(p.bin)C.bin=p.bin;if(p.key)C.key=p.key;}}catch(e){}
   document.getElementById('setupMo').style.display='none';
@@ -1057,6 +1158,8 @@ function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHei
 function tick(){document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',weekday:'short',day:'numeric',month:'short'});}
 tick();setInterval(tick,1000);
 loadCfg();
+checkM365Connection();
+setInterval(loadM365Data,5*60*1000);
 try{renderStaff();}catch(e){console.warn('renderStaff:',e.message);}
 try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
 try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
@@ -1273,17 +1376,7 @@ function cm(){
   if(el)el.remove();
 }
 
-async function loadCinderella(){
-  try{
-    const res=await fetch('https://cinderella-agent.onrender.com/status');
-    const data=await res.json();
-    console.log('Cinderella data:',data);
-  }catch(err){
-    console.error('Cinderella error:',err);
-  }
-}
-loadCinderella();
-setInterval(loadCinderella,30000);
+// M365 data loaded via graph API endpoints
 </script>
 </body>
 </html>
