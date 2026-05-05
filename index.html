@@ -447,9 +447,13 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
             <div class="chart-sm"><canvas id="emailChart"></canvas></div>
           </div>
           <div class="card">
-            <div class="ct">Cinderella insights</div>
-            <div class="ins"><div class="il">Batch action</div><div class="it">2 emails critically overdue. Cinderella can draft replies to all 4 unanswered emails at once.</div></div>
-            <div class="ins"><div class="il">Pattern</div><div class="it">You reply to 73% of emails within 4 hours. Emails older than 12h drop to 40% reply rate.</div></div>
+            <div class="ct">Cinderella insights <span class="ct-action" onclick="refreshEmailInsights()">Refresh</span></div>
+            <div id="emailInsights">
+              <div class="ins" onclick="qa('Analyse my current unread emails and tell me which ones are most urgent and why, and draft replies for the top 3')"><div class="il">📊 Batch analysis</div><div class="it">Click to analyse all emails and get Cinderella to prioritise and draft replies for the most urgent ones.</div></div>
+              <div class="ins" onclick="qa('Are there any patterns in my unanswered emails? Who do I consistently not reply to and why might that be a problem?')"><div class="il">🔍 Email patterns</div><div class="it">Click to see patterns in your email behaviour and who you might be neglecting.</div></div>
+              <div class="ins" onclick="qa('Which of my current emails have attachments that need my attention? Summarise what each attachment likely requires from me.')"><div class="il">📎 Attachment summary</div><div class="it">Click to get a summary of all emails with attachments and what action they require.</div></div>
+              <div class="ins" onclick="generateEmailInsights()"><div class="il">🤖 AI insight</div><div class="it">Click to get Cinderella\'s real-time analysis of your current inbox.</div></div>
+            </div>
           </div>
         </div>
       </div>
@@ -743,23 +747,60 @@ function renderLiveCalendar() {
 
 function renderLiveEmails() {
   var el = document.getElementById('liveEmailList');
-  if (!el || M365.emails.length === 0) return;
-  var overdue = M365.emails.filter(function(e){ return e.hoursOld >= 12; });
-  var recent  = M365.emails.filter(function(e){ return e.hoursOld < 12; });
+  if (!el || M365.emails.length === 0) {
+    if(el) el.innerHTML = '';
+    return;
+  }
   var html = '';
-  overdue.forEach(function(e) {
-    var from = (e.from||'').replace(/'/g,'');
-    var subj = (e.subject||'').replace(/'/g,'');
-    html += '<div class="erow" onclick="openDraftModal(\''+from+'\',\'Reply to: '+subj+'\',\'Re: '+subj+'\',\'email\')"><div class="ei"><div class="ef">'+e.from+'</div><div class="es">'+e.subject+'</div></div><div class="ea">'+e.hoursOld+'h <span class="eu">Overdue</span></div></div>';
+  M365.emails.forEach(function(e) {
+    var idx = M365.emails.indexOf(e);
+    var attach = e.hasAttachments ? ' <span style="color:var(--a);font-size:9px">📎</span>' : '';
+    var unread = !e.isRead ? '<span style="width:6px;height:6px;border-radius:50%;background:var(--b);display:inline-block;margin-right:4px;flex-shrink:0"></span>' : '';
+    var overdueTag = e.hoursOld >= 24 ? '<span class="eu">Overdue</span>' : '';
+    html += '<div class="erow" onclick="openEmailView('+idx+')">'+
+      '<div class="ei"><div class="ef" style="display:flex;align-items:center">'+unread+e.from+attach+'</div><div class="es">'+e.subject+'</div></div>'+
+      '<div class="ea">'+e.hoursOld+'h '+overdueTag+'</div></div>';
   });
-  recent.forEach(function(e) {
-    var from = (e.from||'').replace(/'/g,'');
-    var subj = (e.subject||'').replace(/'/g,'');
-    html += '<div class="erow" onclick="openDraftModal(\''+from+'\',\'Reply to: '+subj+'\',\'Re: '+subj+'\',\'email\')"><div class="ei"><div class="ef">'+e.from+'</div><div class="es">'+e.subject+'</div></div><div class="ea">'+e.hoursOld+'h</div></div>';
-  });
-  el.innerHTML = html;
+  el.innerHTML = html || '<div style="font-size:12px;color:var(--t3);padding:8px 0">No emails in last 14 days.</div>';
   var badges = document.querySelectorAll('.nb-r');
   badges.forEach(function(b){ b.textContent = M365.emails.length; });
+}
+
+function openEmailView(idx) {
+  var e = M365.emails[idx];
+  if (!e) return;
+  var fromEmail = e.fromEmail || '';
+  var subj = (e.subject||'').replace(/'/g,'\'');
+  var from = (e.from||'').replace(/'/g,'\'');
+  var outlookUrl = 'https://outlook.office.com/mail/inbox';
+
+  openModal(e.from, e.subject,
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<button class="m-btn" style="background:#0078D4" onclick="window.open(\''+outlookUrl+'\',\'_blank\')">📧 Open in Outlook</button>'+
+      '<button class="m-btn" onclick="openDraftModal(\''+from+'\',\'Reply to: '+subj+'\',\'Re: '+subj+'\',\'email\',\''+fromEmail+'\')">✉ Draft reply</button>'+
+      (e.hasAttachments ? '<button class="m-btn" style="background:var(--a)" onclick="qa(\'The email from '+from+' with subject '+subj+' has attachments. Help me understand what I need to do with them and assist me in completing any forms.\')">📎 Help with attachments</button>' : '')+
+    '</div>'+
+    '<div class="mfield"><div class="mfl">From</div><div class="mfv">'+e.from+(fromEmail?' &lt;'+fromEmail+'&gt;':'')+'</div></div>'+
+    '<div class="mfield"><div class="mfl">Received</div><div class="mfv">'+e.hoursOld+' hours ago · '+new Date(e.received).toLocaleString('en-AU')+'</div></div>'+
+    (e.hasAttachments ? '<div class="alert-box warn"><div class="ab-title">📎 This email has attachments</div><div class="ab-text">Click "Help with attachments" for Cinderella to assist.</div></div>' : '')+
+    '<div class="mfield"><div class="mfl">Preview</div><div style="font-size:12px;color:var(--t1);line-height:1.6;background:var(--bg2);padding:10px 12px;border-radius:var(--rm);white-space:pre-wrap">'+
+      (e.preview||'No preview available')+
+    '</div></div>'+
+    '<div style="margin-top:4px"><button class="m-btn sec" onclick="loadFullEmail(\''+e.id+'\',\''+from+'\',\''+fromEmail+'\',\''+subj+'\')">Load full email</button></div>'
+  );
+}
+
+async function loadFullEmail(id, from, fromEmail, subj) {
+  document.getElementById('m-body').innerHTML += '<div id="fullEmailBody" style="margin-top:12px;font-size:11px;color:var(--t2)">Loading full email...</div>';
+  try {
+    var r = await fetch('/graph/email/'+id);
+    var d = await r.json();
+    var el = document.getElementById('fullEmailBody');
+    if (el) el.innerHTML = '<div class="mfield"><div class="mfl">Full email</div><div style="font-size:12px;color:var(--t1);line-height:1.6;background:var(--bg2);padding:10px 12px;border-radius:var(--rm);white-space:pre-wrap;max-height:300px;overflow-y:auto">'+( d.body||d.error||'Could not load')+'</div></div>';
+  } catch(ex) {
+    var el = document.getElementById('fullEmailBody');
+    if (el) el.textContent = 'Failed to load: '+ex.message;
+  }
 }
 
 function loadCfg(){
@@ -1036,22 +1077,81 @@ async function autoBriefing(){
   const now=new Date();
   const h=now.getHours();
   const greet=h<12?'morning':h<17?'afternoon':'evening';
-  const staffCtx=SD.length>0?'\n\nLive staff check-ins this week:\n'+SD.map(s=>s.name+' ('+( s.role||'staff')+'): '+(s.capacity||0)+'% capacity, trend: '+(s.trend||'unknown')+', projects: '+(s.projects||'none')+', blockers: '+(s.blockers||'none')).join('\n'):'\n\nNo staff check-ins received yet this week.';
-  const briefingPrompt='Good '+greet+' Kandia. Give me my daily briefing in this exact format:\n\n**1. TOP PRIORITIES**\nThe top 3-5 things I must action today, ranked by urgency. Be specific - name the person, deadline or meeting.\n\n**2. EMAILS NEEDING A REPLY**\nAny emails needing my response, most overdue first. Name the sender, topic and how long it has been waiting.\n\n**3. TEAM FLAGS**\nAny staff capacity issues, blockers, burnout risks or availability problems from check-in data. If no check-ins, say so briefly.\n\n**4. CALENDAR TODAY**\nMy meetings today with times. Flag any that need prep or have no prep time blocked.\n\nKeep each section tight. Plain language. If a section has nothing to report, say so in one line.';
   setB(true);
+
+  // Fetch real emails and calendar first
+  var emailCtx='No emails loaded.';
+  var calCtx='No calendar loaded.';
+
   try{
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:800,system:SYS+staffCtx,messages:[{role:'user',content:briefingPrompt}]})});
+    const er=await fetch('/graph/emails');
+    if(er.ok){
+      const ed=await er.json();
+      M365.emails=ed.emails||[];
+      renderLiveEmails();
+      if(M365.emails.length>0){
+        emailCtx='UNREAD EMAILS NEEDING REPLY ('+M365.emails.length+' total):\n'+
+          M365.emails.slice(0,15).map(function(e){
+            return '- FROM: '+e.from+' <'+( e.fromEmail||'')+'>'+
+              ' | '+e.hoursOld+'h ago'+
+              (e.hoursOld>=24?' [CRITICALLY OVERDUE]':e.hoursOld>=12?' [OVERDUE]':'')+
+              (e.hasAttachments?' [HAS ATTACHMENTS]':'')+
+              '\n  SUBJECT: '+e.subject+
+              '\n  PREVIEW: '+(e.preview||'');
+          }).join('\n');
+      } else {
+        emailCtx='No unread emails requiring reply.';
+      }
+    }
+  }catch(ex){emailCtx='Email data unavailable: '+ex.message;}
+
+  try{
+    const cr=await fetch('/graph/calendar');
+    if(cr.ok){
+      const cd=await cr.json();
+      M365.events=cd.events||[];
+      renderLiveCalendar();
+      if(M365.events.length>0){
+        calCtx='CALENDAR TODAY:\n'+M365.events.map(function(e){
+          var t=new Date(e.start).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+          var et=new Date(e.end).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+          return '- '+t+' to '+et+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
+        }).join('\n');
+      } else {
+        calCtx='No meetings scheduled today.';
+      }
+    }
+  }catch(ex){calCtx='Calendar data unavailable: '+ex.message;}
+
+  var staffCtx=SD.length>0?'\nSTAFF CHECK-INS:\n'+SD.map(function(s){
+    return '- '+s.name+' ('+( s.role||'staff')+'): '+(s.capacity||0)+'% capacity, trend: '+(s.trend||'unknown')+', projects: '+(s.projects||'none')+', blockers: '+(s.blockers||'none');
+  }).join('\n'):'\nNo staff check-ins received yet this week.';
+
+  const briefingPrompt='Give me my daily briefing now using ONLY the real data below. Do not make up or assume any information not in this data.\n\n'+
+    emailCtx+'\n\n'+calCtx+staffCtx+
+    '\n\nFormat your response in exactly these 4 sections:\n\n'+
+    '**1. TOP PRIORITIES**\n'+
+    'Based on the emails and calendar above, list the top 3-5 things I must action today ranked by urgency. Be very specific — name the person, their email, the exact subject, and what needs doing. For each meeting today, flag what preparation is needed. For emails with attachments, flag them specifically.\n\n'+
+    '**2. EMAILS NEEDING A REPLY**\n'+
+    'List every email that needs my response, most overdue first. Show: sender name, how long ago, subject, and one line on what they need from me.\n\n'+
+    '**3. TEAM FLAGS**\n'+
+    'Any staff capacity issues, blockers, or burnout risks from check-in data. If no check-ins, say so in one line.\n\n'+
+    '**4. CALENDAR TODAY**\n'+
+    'List every meeting with time. For any meeting that needs preparation, tell me exactly what to prepare and flag if I have no prep time blocked before it.\n\n'+
+    'Keep each section tight. If a section has nothing to report, say so in one line. Use plain language — no jargon.';
+
+  try{
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1200,system:SYS,messages:[{role:'user',content:briefingPrompt}]})});
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
     if(d.error)throw new Error(d.error.message);
     const rep=d.content&&d.content.length>0?d.content.filter(function(b){return b.type==='text';}).map(function(b){return b.text;}).join('\n'):'';
     setB(false);
     if(rep)addMsg('a',rep);
-    else addMsg('a','Good '+greet+' Kandia. Ready for your briefing — just ask!');
+    else addMsg('a','Good '+greet+' Kandia — I loaded your emails and calendar. Type "give me my briefing" to see your priorities.');
   }catch(e){
     setB(false);
-    console.error('Briefing error:',e.message);
-    addMsg('a','Good '+greet+' Kandia. I had trouble loading your briefing ('+e.message+'). Type "give me my briefing" and I will try again.');
+    addMsg('a','Good '+greet+' Kandia. I loaded your data but had trouble generating the briefing ('+e.message+'). Type "give me my briefing" and I will try again.');
   }
 }
 
@@ -1123,10 +1223,27 @@ async function send(){
   const text=inp.value.trim();
   if(!text||busy)return;
   inp.value='';resize(inp);
-  const sc=SD.length>0?'\n\nLive staff check-ins:\n'+SD.map(s=>`- ${s.name} (${s.role||'?'}): ${s.capacity}% capacity | trend: ${s.trend||'?'} | projects: ${s.projects||'none'} | blockers: ${s.blockers||'none'} | availability: ${s.availability||'?'} | skills: ${s.skills||'?'} | notes: ${s.notes||'none'}`).join('\n'):'\n\nNo staff check-ins this week.';
+
+  // Build live context from real M365 data + staff check-ins
+  var liveCtx='';
+  if(M365.emails.length>0){
+    liveCtx+='\n\nLIVE EMAILS (unread, real data from Outlook):\n'+M365.emails.slice(0,15).map(function(e){
+      return '- FROM: '+e.from+(e.fromEmail?' <'+e.fromEmail+'>':'')+' | '+e.hoursOld+'h ago'+(e.hasAttachments?' [HAS ATTACHMENT]':'')+' | SUBJECT: '+e.subject+(e.preview?' | PREVIEW: '+e.preview:'');
+    }).join('\n');
+  }
+  if(M365.events.length>0){
+    liveCtx+='\n\nCALENDAR TODAY (real data):\n'+M365.events.map(function(e){
+      return '- '+new Date(e.start).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})+' to '+new Date(e.end).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
+    }).join('\n');
+  }
+  if(SD.length>0){
+    liveCtx+='\n\nSTAFF CHECK-INS:\n'+SD.map(s=>`- ${s.name} (${s.role||'?'}): ${s.capacity}% | projects: ${s.projects||'none'} | blockers: ${s.blockers||'none'} | skills: ${s.skills||'?'}`).join('\n');
+  }
+  if(!liveCtx)liveCtx='\n\nNo live M365 data yet — M365 not connected or no data loaded.';
+
   addMsg('u',text);msgs.push({role:'user',content:text});setB(true);
   try{
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,system:SYS+sc,messages:msgs})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,system:SYS+liveCtx,messages:msgs})});
     const d=await r.json();
     if(d.error)throw new Error(d.error.message);
     const rep=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('\n')||'No response.';
@@ -1166,8 +1283,8 @@ try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
 
 let DM={name:'',email:'',subject:'',context:'',mode:'email'};
 
-function openDraftModal(name,context,subject,defaultTab){
-  DM={name,email:'',subject:subject||`Following up — ${name}`,context,mode:defaultTab||'email'};
+function openDraftModal(name,context,subject,defaultTab,emailAddress){
+  DM={name,email:emailAddress||'',subject:subject||`Following up — ${name}`,context,mode:defaultTab||'email'};
   document.getElementById('draftModal').classList.add('open');
   document.getElementById('dm-title').textContent=defaultTab==='meeting'?`Schedule a call with ${name}`:`Draft email to ${name}`;
   document.getElementById('dm-sub').textContent=context;
@@ -1213,7 +1330,7 @@ function showDraftResult(name,subject,body){
   document.getElementById('dm-draft-content').style.display='block';
   document.getElementById('dm-email-actions').style.display='flex';
   document.getElementById('dm-email-note').style.display='block';
-  document.getElementById('dm-to').value=name?(name+' <email@risk2solution.com.au>'):'';
+  document.getElementById('dm-to').value=DM.email?(name+' <'+DM.email+'>'):(name||'');
   document.getElementById('dm-subject').value=subject||'';
   document.getElementById('dm-body').value=body||'';
   const ta=document.getElementById('dm-body');
@@ -1342,14 +1459,120 @@ var MODALS={
   'email-sofia':{title:'Sofia Ng — Risk 2 Solution',sub:'Process audit findings · 3h',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Review required before ISO audit</div><div class="ab-text">4 findings: incident escalation no owner, vendor review overdue, access control gaps, security training overdue.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Prep for review';b1.onclick=function(){qa('What should Kandia look for when reviewing process audit findings before an ISO 27001 audit?');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Acknowledge receipt';b2.onclick=function(){qa('Draft an email to Sofia Ng acknowledging receipt of the audit findings');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
   'email-titan':{title:'Titan Corp — Procurement',sub:'Onboarding checklist · 2 days',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Watching</div><div class="ab-text">Week 2 of onboarding — follow-up appropriate.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft follow-up';b.onclick=function(){qa('Draft a follow-up email to Titan Corp procurement about the onboarding checklist');cm();};d.appendChild(b);return d;}},
   'email-hr':{title:'HR Team',sub:'Policy update sign-off · 3 days',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Watching</div><div class="ab-text">HR have not confirmed receipt of your sign-off sent 3 days ago.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft chase email';b.onclick=function(){qa('Draft a chasing email to the HR team about the policy update sign-off');cm();};d.appendChild(b);return d;}},
-  'duty-ops':{title:'Operations oversight',sub:'Daily ops, workflows, client delivery',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">This week</div><div class="mfv">Q2 ops review at 14:00 today. 3 active client onboardings. Utilisation report due 30 April.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Weekly ops checklist';b.onclick=function(){qa('Give Kandia a best-practice operations oversight checklist for Risk 2 Solution this week');cm();};d.appendChild(b);return d;}},
+  'duty-ops':{title:'Operations Oversight',sub:'Policies, SOPs, compliance, governance, projects',build:function(){
+    var d=document.createElement('div');
+    d.innerHTML='<div class="mfield"><div class="mfl">Weekly operations checklist</div><div class="mfv">Click below to generate each area or get the full checklist in one go.</div></div>';
+    var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+    var buttons=[
+      ['📋 Full operations checklist','Generate a complete weekly operations checklist for Kandia at Risk 2 Solution covering: policies and procedures review, SOPs review, project status, compliance and governance, staff utilisation, client delivery, platform health, and any other operational flows. Format as a clear checklist she can work through.'],
+      ['📁 Policies & procedures review','Generate a policies and procedures review checklist for Risk 2 Solution. What should Kandia check, when should each policy be reviewed, and are there any overdue reviews?'],
+      ['📝 SOPs review','List all SOPs that Risk 2 Solution should have in place, flag which ones Cinderella knows exist, which need creating, and which need reviewing.'],
+      ['✅ Compliance & governance','Generate a compliance and governance checklist for this week at Risk 2 Solution including ISO 27001 progress, any overdue audits, policy sign-offs, and access control reviews.'],
+      ['🔄 Process improvement','What process improvements should Kandia prioritise this quarter at Risk 2 Solution? Rank by impact and effort.'],
+      ['📊 Operational metrics','What operational metrics should Kandia review weekly? Generate a dashboard summary with current known values.']
+    ];
+    buttons.forEach(function(pair){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=pair[0];b.onclick=function(){qa(pair[1]);cm();};d.appendChild(b);});
+    return d;
+  }},
   'duty-risk':{title:'Risk framework governance',sub:'Policy, compliance posture, ISO 27001',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box"><div class="ab-title">Critical gap — action today</div><div class="ab-text">Incident escalation pathway has no owner. Must be resolved before May 12 ISO audit.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Create incident pathway';b1.onclick=function(){qa('Generate the incident escalation pathway process document for Risk 2 Solution for ISO 27001 compliance');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Risk governance checklist';b2.onclick=function(){qa('Generate a complete risk framework governance checklist for Kandia at Risk 2 Solution');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
   'duty-strategy':{title:'Strategy execution',sub:'Translate CEO vision into operational reality',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">This week</div><div class="ab-text">Q2 OKR mid-cycle review due. Platform v3.3 roadmap review next week.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Q2 OKR review template';b.onclick=function(){qa('Create a Q2 OKR mid-cycle review framework for Risk 2 Solution for Kandia');cm();};d.appendChild(b);return d;}},
-  'duty-clients':{title:'Client delivery quality',sub:'SLA adherence, onboarding quality, NPS',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">Current</div><div class="mfv">SLA 96.4%. Titan Corp (wk 2), Delta Inc (wk 6), Prentice Group (pending). 2 open incidents.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Delivery review checklist';b.onclick=function(){qa('What should Kandia review to ensure client delivery quality across all three active onboardings?');cm();};d.appendChild(b);return d;}},
-  'duty-people':{title:'People & culture',sub:'Capacity, performance, wellbeing, development',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">This week</div><div class="mfv">1:1 with P&C lead at 16:00 today. Utilisation report due 30 April.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='People action plan';b.onclick=function(){qa('What people and culture actions should Kandia take this week as COO of Risk 2 Solution?');cm();};d.appendChild(b);return d;}},
-  'duty-finance':{title:'Financial oversight',sub:'Budget, P&L, cost management, ROI',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Efficiency opportunity</div><div class="ab-text">11 hours per week of savings identified through automation.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Financial KPIs';b.onclick=function(){qa('What financial metrics and KPIs should Kandia track as COO of a risk management SaaS company?');cm();};d.appendChild(b);return d;}},
+  'duty-clients':{title:'Client Delivery',sub:'Project tracking, client feedback, SLA, Monday.com',build:function(){
+    var d=document.createElement('div');
+    // Check emails related to clients
+    var clientEmails = M365.emails.filter(function(e){
+      var subj=(e.subject||'').toLowerCase();
+      var from=(e.from||'').toLowerCase();
+      return subj.includes('titan') || subj.includes('delta') || subj.includes('prentice') || subj.includes('onboard') || subj.includes('project') || subj.includes('delivery') || subj.includes('feedback');
+    });
+    d.innerHTML =
+      '<div class="mfield"><div class="mfl">Active clients</div><div class="mfv">Titan Corp (wk 2 onboarding) · Delta Inc (wk 6) · Prentice Group (pending)<br>Platform SLA: <strong>96.4%</strong> · 2 open incidents</div></div>'+
+      (clientEmails.length>0 ? '<div class="alert-box ok"><div class="ab-title">📧 '+clientEmails.length+' client-related email'+(clientEmails.length>1?'s':'')+' this week</div><div class="ab-text">'+clientEmails.slice(0,3).map(function(e){return e.from+': '+e.subject;}).join('<br>')+'</div></div>' : '')+
+      '<div class="alert-box warn"><div class="ab-title">🔌 Monday.com — project data</div><div class="ab-text">To pull live project tracking, add your MONDAY_API_KEY to Render environment variables. Then click the button below.</div></div>';
+    var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+    var buttons=[
+      ['📊 Project status summary','Summarise the status of all active client projects at Risk 2 Solution: Titan Corp (week 2 onboarding), Delta Inc (week 6), and Prentice Group (pending). Flag any risks, delays, or items needing Kandia attention. Include SLA status and any open incidents.'],
+      ['🔴 Risk & issues log','What are the current delivery risks and open issues across all client projects at Risk 2 Solution? What does Kandia need to do about each one?'],
+      ['💬 Client feedback summary','Summarise any client feedback, complaints or compliments received this month across all Risk 2 Solution clients. Flag anything requiring immediate action.'],
+      ['📧 Draft client update','Draft a professional project status update email for our active clients summarising progress and next steps.']
+    ];
+    buttons.forEach(function(pair){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=pair[0];b.onclick=function(){qa(pair[1]);cm();};d.appendChild(b);});
+    var bm=document.createElement('button');bm.className='m-btn';bm.style.cssText='background:#f96e08;display:block;width:100%;margin-top:4px';bm.textContent='🟧 Load Monday.com projects';bm.onclick=function(){
+      fetch('/monday/projects').then(function(r){return r.json();}).then(function(data){
+        if(data.error){alert('Monday.com error: '+data.error);return;}
+        var boards=data.data&&data.data.boards?data.data.boards:[];
+        if(boards.length===0){alert('No Monday.com boards found. Check your API key in Render environment variables.');return;}
+        qa('Here is my Monday.com project data: '+JSON.stringify(boards).substring(0,2000)+'. Please summarise all projects, their status, and flag anything needing my attention. Also identify any client feedback items.');
+      }).catch(function(e){alert('Monday.com not connected: '+e.message);});
+      cm();
+    };
+    d.appendChild(bm);
+    return d;
+  }},
+  'duty-people':{title:'People & Culture',sub:'Staffing, check-ins, performance, 1:1s, KPIs',build:function(){
+    var d=document.createElement('div');
+    var staffNames = SD.length>0 ? SD.map(function(s){return s.name;}) : [];
+    // Check calendar for check-in meetings
+    var checkInMeetings = M365.events.filter(function(e){ return e.subject&&(e.subject.toLowerCase().includes('check') || e.subject.toLowerCase().includes('1:1') || e.subject.toLowerCase().includes('one on one')); });
+    var hasCheckIn = checkInMeetings.length > 0;
+    d.innerHTML =
+      (hasCheckIn ? '<div class="alert-box ok"><div class="ab-title">📅 Check-in meeting today</div><div class="ab-text">'+checkInMeetings.map(function(e){return e.subject;}).join(', ')+'</div></div>' : '<div class="alert-box warn"><div class="ab-title">No check-in meetings scheduled today</div><div class="ab-text">Consider scheduling 1:1s with your team.</div></div>') +
+      (SD.length>0 ? '<div class="mfield"><div class="mfl">Staff without check-ins this week</div><div class="mfv" style="color:var(--r)">'+( 12-SD.length)+' of 12 staff have not submitted their weekly check-in</div></div>' : '<div class="mfield"><div class="mfl">Check-ins</div><div class="mfv" style="color:var(--a)">No check-ins received this week — send the form to all staff</div></div>');
+    var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+    var buttons=[
+      ['Generate action plan','Generate a complete people and culture action plan for Kandia this week at Risk 2 Solution based on staff check-in data'],
+      ['Schedule 1:1 meetings','Which staff members does Kandia most need to have a 1:1 with this week and why? List them in priority order.'],
+      ['Send weekly check-in','Draft a message to send to all 12 staff asking them to complete their weekly check-in form for this week'],
+      ['Review KPIs','What KPIs should Kandia be reviewing for her team this week? List them with current status where known.'],
+      ['Performance reviews','Generate a performance review schedule and process for Risk 2 Solution staff for this quarter'],
+      ['Burnout risk check','Which staff members are at risk of burnout based on check-in data? What should Kandia do for each one?']
+    ];
+    buttons.forEach(function(pair){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=pair[0];b.onclick=function(){qa(pair[1]);cm();};d.appendChild(b);});
+    return d;
+  }},
+  'duty-finance':{title:'Financial Oversight',sub:'P&L, debt collection, finance updates',build:function(){
+    var d=document.createElement('div');
+    // Check emails from Diane or Nicole
+    var financeEmails = M365.emails.filter(function(e){
+      var from = (e.from||'').toLowerCase();
+      var subj = (e.subject||'').toLowerCase();
+      return from.includes('diane') || from.includes('kruger') || from.includes('nicole') || from.includes('sofianos') || subj.includes('p&l') || subj.includes('finance') || subj.includes('debt') || subj.includes('invoice') || subj.includes('payment') || subj.includes('cash flow');
+    });
+    // Check calendar for finance meetings
+    var financeMeetings = M365.events.filter(function(e){
+      var subj=(e.subject||'').toLowerCase();
+      return subj.includes('finance') || subj.includes('p&l') || subj.includes('budget') || subj.includes('diane') || subj.includes('nicole');
+    });
+    d.innerHTML =
+      (financeEmails.length>0 ? '<div class="alert-box ok"><div class="ab-title">📧 '+financeEmails.length+' finance-related email'+(financeEmails.length>1?'s':'')+' this week</div><div class="ab-text">'+financeEmails.map(function(e){return e.from+': '+e.subject;}).join('<br>')+'</div></div>' : '<div class="alert-box warn"><div class="ab-title">No finance emails from Diane or Nicole this week</div><div class="ab-text">Consider requesting a P&amp;L update.</div></div>') +
+      (financeMeetings.length>0 ? '<div class="alert-box ok"><div class="ab-title">📅 Finance meeting today: '+financeMeetings[0].subject+'</div></div>' : '');
+    var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+    var b1=document.createElement('button');b1.className='m-btn';b1.style.marginBottom='6px';b1.textContent='📊 Summarise finance update';b1.onclick=function(){qa('Based on any finance-related emails and information available, give Kandia a summary of the current financial position at Risk 2 Solution including P&L, outstanding debt collection, and any cash flow concerns.');cm();};d.appendChild(b1);
+    var b2=document.createElement('button');b2.className='m-btn';b2.style.cssText='background:#0078D4;margin-bottom:6px;display:block';b2.textContent='📅 Schedule finance meeting';b2.onclick=function(){openDraftModal('Diane Kruger','Schedule a finance review meeting to discuss P&L, debt collection and cash flow','Finance review meeting','meeting','diane.k@risk2solution.com');cm();};d.appendChild(b2);
+    var b3=document.createElement('button');b3.className='m-btn sec';b3.style.cssText='margin-bottom:6px;display:block';b3.textContent='📧 Request finance information';b3.onclick=function(){openDraftModal('Diane Kruger','Request the latest P&L, debt collection status and cash flow forecast','Finance update request — this week','email','diane.k@risk2solution.com');cm();};d.appendChild(b3);
+    var b4=document.createElement('button');b4.className='m-btn sec';b4.style.cssText='display:block';b4.textContent='💡 Financial KPIs to watch';b4.onclick=function(){qa('What are the most important financial KPIs Kandia should be tracking as COO of Risk 2 Solution and what does healthy look like for each?');cm();};d.appendChild(b4);
+    return d;
+  }},
   'duty-tech':{title:'Technology & systems',sub:'Platform health, tooling, automation roadmap',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">Current</div><div class="mfv">R2S v3.2 live. SLA 96.4%. 2 open incidents. v3.3 roadmap review next week.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Tech priorities';b.onclick=function(){qa('What technology and systems priorities should Kandia focus on this quarter at Risk 2 Solution?');cm();};d.appendChild(b);return d;}},
-  'duty-reporting':{title:'Stakeholder reporting',sub:'Board pack, CEO updates, investor communications',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">Due today</div><div class="ab-text">Board pack section 3 COO narrative — David Park is waiting.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Write board narrative now';b.onclick=function(){qa('Write the complete COO board pack narrative section for April for Kandia at Risk 2 Solution');cm();};d.appendChild(b);return d;}}
+  'duty-reporting':{title:'Board Reporting',sub:'Monthly board report — succinct, 2 pages max',build:function(){
+    var d=document.createElement('div');
+    // Check if board meeting is coming up in calendar
+    var boardMeetings = M365.events.filter(function(e){ var s=(e.subject||'').toLowerCase(); return s.includes('board') || s.includes('directors'); });
+    var now = new Date();
+    var lastMonth = new Date(now.getFullYear(), now.getMonth()-1, 1).toLocaleString('en-AU',{month:'long',year:'numeric'});
+    var thisMonth = now.toLocaleString('en-AU',{month:'long',year:'numeric'});
+    d.innerHTML =
+      (boardMeetings.length>0 ? '<div class="alert-box ok"><div class="ab-title">📅 Board meeting: '+boardMeetings[0].subject+'</div><div class="ab-text">Prepare your board report before this meeting.</div></div>' : '<div class="mfield"><div class="mfl">Board meeting</div><div class="mfv">Check your calendar for the next scheduled board meeting.</div></div>')+
+      '<div class="mfield"><div class="mfl">Report scope</div><div class="mfv">Month prior: <strong>'+lastMonth+'</strong><br>Month ahead: <strong>'+thisMonth+'</strong><br>Format: Succinct, 2 pages maximum</div></div>';
+    var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+    var buttons=[
+      ['📄 Generate board report','Generate a succinct COO board report for Risk 2 Solution. Cover: (1) Month in review — key highlights, wins, risks, incidents, client updates, staff updates, financial snapshot. (2) Month ahead — priorities, upcoming risks, decisions required from the board. Maximum 2 pages. Plain language, no jargon. Format with clear headings.'],
+      ['✅ Month in review','Give me a summary of last month at Risk 2 Solution for the board report. Cover: client delivery, staff, platform, compliance, and any incidents or escalations.'],
+      ['🔭 Month ahead priorities','What are the top priorities for Risk 2 Solution next month that the board needs to know about? Frame these as decisions needed, risks to watch, and opportunities.'],
+      ['📊 Key metrics summary','Generate a key metrics summary for the board: SLA performance, staff utilisation, client onboarding status, ISO 27001 compliance progress, and financial highlights.']
+    ];
+    buttons.forEach(function(pair){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=pair[0];b.onclick=function(){qa(pair[1]);cm();};d.appendChild(b);});
+    return d;
+  }}
 };
 
 function omKey(key){
