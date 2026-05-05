@@ -379,6 +379,8 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
     <button class="ni" onclick="show('chat',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M14 10a2 2 0 01-2 2H5l-3 3V4a2 2 0 012-2h8a2 2 0 012 2z"/></svg>Ask Cinderella</button>
     <button class="ni" onclick="show('sched',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l2.5 2.5"/></svg>Scheduler</button>
     <div class="ng">Settings</div>
+    <div style="padding:5px 14px 6px;font-size:10px;color:var(--t3)">M365: <span id="m365Status">Checking...</span></div>
+    <button class="ni" id="m365LoginBtn" onclick="window.open('/auth/login','_blank')" style="display:none;color:var(--a)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5"/><rect x="9" y="2" width="5" height="5"/><rect x="2" y="9" width="5" height="5"/><rect x="9" y="9" width="5" height="5"/></svg>Connect M365</button>
     <button class="ni" onclick="document.getElementById('setupMo').style.display='flex'"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.5 3.5l1.5 1.5M11 11l1.5 1.5M3.5 12.5L5 11M11 5l1.5-1.5"/></svg>Setup &amp; settings</button>
   </nav>
 
@@ -394,7 +396,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
       </div>
       <div class="two">
         <div class="card">
-          <div class="ct">Today's schedule <span class="ct-action" onclick="qa('Create a prep plan for all of my meetings today')">Generate prep plan</span></div>
+          <div id="liveCalendar" style="display:none"></div><div class="ct">Today's schedule <span class="ct-action" onclick="qa('Create a prep plan for all of my meetings today')">Generate prep plan</span></div>
           <div class="row" onclick="omKey('standup')"><div class="mtime">08:30</div><div><div class="mt">Leadership stand-up</div><div class="mm">15 min · Teams · Recurring</div><span class="tag to">Operations</span></div></div>
           <div class="row" onclick="omKey('risk')"><div class="mtime">09:30</div><div><div class="mt">Risk framework review</div><div class="mm">60 min · Board room · J. Ellis, S. Patel</div><span class="tag tr">Risk</span></div></div>
           <div class="row" onclick="omKey('titan')"><div class="mtime">11:00</div><div><div class="mt">Client onboarding — Titan Corp</div><div class="mm">45 min · Zoom · External</div><span class="tag te">External</span></div></div>
@@ -427,7 +429,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
       <div class="two">
         <div>
           <div class="card">
-            <div class="ct">Needs your reply <span class="ct-action" onclick="qa('Draft replies to all my overdue emails')">Draft all replies</span></div>
+            <div id="liveEmailList"></div><div class="ct">Needs your reply <span class="ct-action" onclick="qa('Draft replies to all my overdue emails')">Draft all replies</span></div>
             <div class="erow" onclick="omKey('email-marcus')"><div class="ei"><div class="ef">Marcus Webb</div><div class="es">Vendor contract approval</div></div><div class="ea">26h <span class="eu">Overdue</span></div></div>
             <div class="erow" onclick="omKey('email-karen')"><div class="ei"><div class="ef">Karen Liu</div><div class="es">System access approval</div></div><div class="ea">18h</div></div>
             <div class="erow" onclick="omKey('email-david')"><div class="ei"><div class="ef">David Park</div><div class="es">Board pack — COO narrative</div></div><div class="ea">5h</div></div>
@@ -720,46 +722,41 @@ async function loadM365Data() {
   } catch(e) { console.warn('Teams load failed:', e.message); }
 }
 
+
+
+function renderLiveCalendar() {
+  const el = document.getElementById('liveCalendar');
+  if (!el || M365.events.length === 0) return;
+  el.style.display = 'block';
+  // Hide static placeholder calendar rows when we have live data
+  const staticRows = document.querySelectorAll('#pnl-today .card .row');
+  staticRows.forEach(r => r.style.display = 'none');
+  el.innerHTML = M365.events.map(e => {
+    const start = new Date(e.start);
+    const end = new Date(e.end);
+    const time = start.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    const endTime = end.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    const durationMins = Math.round((end - start) / 60000);
+    return '<div class="row"><div class="mtime">'+time+'</div><div><div class="mt">'+e.subject+'</div><div class="mm">'+endTime+' · '+durationMins+' min'+(e.location?' · '+e.location:'')+'</div></div></div>';
+  }).join('');
+}
+
 function renderLiveEmails() {
   const el = document.getElementById('liveEmailList');
   if (!el || M365.emails.length === 0) return;
   const overdue = M365.emails.filter(e => e.hoursOld >= 12);
   const recent  = M365.emails.filter(e => e.hoursOld < 12);
   let html = '';
-  if (overdue.length > 0) {
-    overdue.forEach(e => {
-      html += `<div class="erow" onclick="openDraftModal('${e.from}','Reply to: ${e.subject}','Re: ${e.subject}','email')">
-        <div class="ei"><div class="ef">${e.from}</div><div class="es">${e.subject}</div></div>
-        <div class="ea">${e.hoursOld}h <span class="eu">Overdue</span></div>
-      </div>`;
-    });
-  }
-  if (recent.length > 0) {
-    recent.forEach(e => {
-      html += `<div class="erow" onclick="openDraftModal('${e.from}','Reply to: ${e.subject}','Re: ${e.subject}','email')">
-        <div class="ei"><div class="ef">${e.from}</div><div class="es">${e.subject}</div></div>
-        <div class="ea">${e.hoursOld}h</div>
-      </div>`;
-    });
-  }
+  overdue.forEach(e => {
+    html += '<div class="erow" onclick="openDraftModal(''+e.from+'','Reply to: '+e.subject+'','Re: '+e.subject+'','email')"><div class="ei"><div class="ef">'+e.from+'</div><div class="es">'+e.subject+'</div></div><div class="ea">'+e.hoursOld+'h <span class="eu">Overdue</span></div></div>';
+  });
+  recent.forEach(e => {
+    html += '<div class="erow" onclick="openDraftModal(''+e.from+'','Reply to: '+e.subject+'','Re: '+e.subject+'','email')"><div class="ei"><div class="ef">'+e.from+'</div><div class="es">'+e.subject+'</div></div><div class="ea">'+e.hoursOld+'h</div></div>';
+  });
   el.innerHTML = html;
-  // Update badge
-  const badge = document.querySelector('.ni .nb-r');
-  if (badge) badge.textContent = M365.emails.length;
-}
-
-function renderLiveCalendar() {
-  const el = document.getElementById('liveCalendar');
-  if (!el || M365.events.length === 0) return;
-  el.innerHTML = M365.events.map(e => {
-    const time = new Date(e.start).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
-    const endTime = new Date(e.end).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
-    return `<div class="row">
-      <div class="mtime">${time}</div>
-      <div><div class="mt">${e.subject}</div>
-      <div class="mm">${endTime}${e.location?' · '+e.location:''}</div></div>
-    </div>`;
-  }).join('');
+  // Update email badge count
+  const badges = document.querySelectorAll('.nb-r');
+  badges.forEach(b => b.textContent = M365.emails.length);
 }
 
 function loadCfg(){
