@@ -742,21 +742,24 @@ function renderLiveCalendar() {
 }
 
 function renderLiveEmails() {
-  const el = document.getElementById('liveEmailList');
+  var el = document.getElementById('liveEmailList');
   if (!el || M365.emails.length === 0) return;
-  const overdue = M365.emails.filter(e => e.hoursOld >= 12);
-  const recent  = M365.emails.filter(e => e.hoursOld < 12);
-  let html = '';
-  overdue.forEach(e => {
-    html += '<div class="erow" onclick="openDraftModal(''+e.from+'','Reply to: '+e.subject+'','Re: '+e.subject+'','email')"><div class="ei"><div class="ef">'+e.from+'</div><div class="es">'+e.subject+'</div></div><div class="ea">'+e.hoursOld+'h <span class="eu">Overdue</span></div></div>';
+  var overdue = M365.emails.filter(function(e){ return e.hoursOld >= 12; });
+  var recent  = M365.emails.filter(function(e){ return e.hoursOld < 12; });
+  var html = '';
+  overdue.forEach(function(e) {
+    var from = (e.from||'').replace(/'/g,'');
+    var subj = (e.subject||'').replace(/'/g,'');
+    html += '<div class="erow" onclick="openDraftModal(\''+from+'\',\'Reply to: '+subj+'\',\'Re: '+subj+'\',\'email\')"><div class="ei"><div class="ef">'+e.from+'</div><div class="es">'+e.subject+'</div></div><div class="ea">'+e.hoursOld+'h <span class="eu">Overdue</span></div></div>';
   });
-  recent.forEach(e => {
-    html += '<div class="erow" onclick="openDraftModal(''+e.from+'','Reply to: '+e.subject+'','Re: '+e.subject+'','email')"><div class="ei"><div class="ef">'+e.from+'</div><div class="es">'+e.subject+'</div></div><div class="ea">'+e.hoursOld+'h</div></div>';
+  recent.forEach(function(e) {
+    var from = (e.from||'').replace(/'/g,'');
+    var subj = (e.subject||'').replace(/'/g,'');
+    html += '<div class="erow" onclick="openDraftModal(\''+from+'\',\'Reply to: '+subj+'\',\'Re: '+subj+'\',\'email\')"><div class="ei"><div class="ef">'+e.from+'</div><div class="es">'+e.subject+'</div></div><div class="ea">'+e.hoursOld+'h</div></div>';
   });
   el.innerHTML = html;
-  // Update email badge count
-  const badges = document.querySelectorAll('.nb-r');
-  badges.forEach(b => b.textContent = M365.emails.length);
+  var badges = document.querySelectorAll('.nb-r');
+  badges.forEach(function(b){ b.textContent = M365.emails.length; });
 }
 
 function loadCfg(){
