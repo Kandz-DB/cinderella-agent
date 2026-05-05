@@ -229,7 +229,7 @@ app.post('/proxy', async (req, res) => {
 });
 
 // ── SERVE DASHBOARD ──
-app.use(express.static('public'));
+app.use(express.static('.'));
 
 // ── THINK LOOP ──
 async function think() {
