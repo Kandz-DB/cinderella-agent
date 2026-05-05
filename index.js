@@ -116,16 +116,78 @@ async function graphGet(path) {
 // ── EMAILS: Get unread emails ──
 app.get('/graph/emails', async (req, res) => {
   try {
+    // Get last 14 days of inbox emails (not just unread - user may have read but not replied)
+    const fourteenDaysAgo = new Date(Date.now() - 14*24*60*60*1000).toISOString();
     const data = await graphGet(
-      `/me/messages?$filter=isRead eq false&$orderby=receivedDateTime desc&$top=20&$select=subject,from,receivedDateTime,bodyPreview,isRead`
+      `/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${fourteenDaysAgo}&$orderby=receivedDateTime desc&$top=80&$select=subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,conversationId`
     );
-    const emails = data.value.map(m => ({
-      id: m.id,
+    const noReply = ['noreply','no-reply','donotreply','do-not-reply','mailer-daemon','notifications@','notification@','automated@','alerts@','alert@','newsletter','@bounce','postmaster','news@','updates@','subscriptions@','unsubscribe','no_reply'];
+    const skipKeywords = ['capcoal','unsubscribe','notification','automated message','out of office','auto-reply','autoreply'];
+    const emails = data.value
+      .filter(m => {
+        const addr = (m.from?.emailAddress?.address || '').toLowerCase();
+        const name = (m.from?.emailAddress?.name || '').toLowerCase();
+        const subj = (m.subject || '').toLowerCase();
+        const body = (m.bodyPreview || '').toLowerCase();
+        if (noReply.some(p => addr.includes(p))) return false;
+        if (skipKeywords.some(p => subj.includes(p) || addr.includes(p) || name.includes(p))) return false;
+        if (name.includes('automated') || name.includes('no reply') || name.includes('no-reply')) return false;
+        return true;
+      })
+      .slice(0, 25)
+      .map(m => ({
+        id: m.id,
+        subject: m.subject,
+        from: m.from?.emailAddress?.name || m.from?.emailAddress?.address,
+        fromEmail: m.from?.emailAddress?.address,
+        received: m.receivedDateTime,
+        preview: m.bodyPreview?.substring(0, 300),
+        hasAttachments: m.hasAttachments || false,
+        isRead: m.isRead || false,
+        conversationId: m.conversationId,
+        hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000)
+      }));
+    res.json({ emails });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+
+// ── EMAILS: Get full email body by ID ──
+app.get('/graph/email/:id', async (req, res) => {
+  try {
+    const data = await graphGet(`/me/messages/${req.params.id}?$select=subject,from,toRecipients,receivedDateTime,body,hasAttachments,attachments`);
+    res.json({
+      subject: data.subject,
+      from: data.from?.emailAddress?.name || data.from?.emailAddress?.address,
+      fromEmail: data.from?.emailAddress?.address,
+      to: data.toRecipients?.map(r => r.emailAddress?.address).join(', '),
+      received: data.receivedDateTime,
+      body: data.body?.content?.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 3000),
+      hasAttachments: data.hasAttachments,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── EMAILS: Search emails by topic (for meeting prep) ──
+app.get('/graph/emails/search', async (req, res) => {
+  try {
+    const { topic } = req.query;
+    if (!topic) return res.json({ emails: [] });
+    const data = await graphGet(
+      `/me/messages?$search="${encodeURIComponent(topic)}"&$top=10&$select=subject,from,receivedDateTime,bodyPreview,hasAttachments`
+    );
+    const emails = (data.value || []).map(m => ({
       subject: m.subject,
       from: m.from?.emailAddress?.name || m.from?.emailAddress?.address,
       fromEmail: m.from?.emailAddress?.address,
       received: m.receivedDateTime,
-      preview: m.bodyPreview?.substring(0, 150),
+      preview: m.bodyPreview?.substring(0, 200),
+      hasAttachments: m.hasAttachments || false,
       hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000)
     }));
     res.json({ emails });
@@ -208,6 +270,24 @@ app.get('/graph/teams', async (req, res) => {
   }
 });
 
+
+// ── MONDAY.COM: Get project boards ──
+app.get('/monday/projects', async (req, res) => {
+  const apiKey = process.env.MONDAY_API_KEY;
+  if (!apiKey) return res.status(400).json({ error: 'MONDAY_API_KEY not configured in Render environment variables' });
+  try {
+    const response = await fetch('https://api.monday.com/v2', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
+      body: JSON.stringify({ query: `{ boards(limit:20) { id name state items_count groups { id title } items(limit:50) { id name state column_values { id text } } } }` })
+    });
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── PROXY (forwards chat requests to Claude) ──
 app.options('/proxy', (req, res) => res.sendStatus(200));
 app.post('/proxy', async (req, res) => {
@@ -229,7 +309,7 @@ app.post('/proxy', async (req, res) => {
 });
 
 // ── SERVE DASHBOARD ──
-app.use(express.static('.'));
+app.use(express.static('public'));
 
 // ── THINK LOOP ──
 async function think() {
