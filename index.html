@@ -29,10 +29,10 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .tb-r{margin-left:auto;display:flex;align-items:center;gap:8px}
 .sdot{width:7px;height:7px;border-radius:50%;background:#fff;opacity:.85}
 .stxt{font-size:11px;color:rgba(255,255,255,.85)}
-.sync-btn{font-size:10px;color:var(--t3);padding:3px 9px;border:0.5px solid var(--bl);border-radius:16px;cursor:pointer;transition:all .1s}
+.sync-btn{font-size:10px;color:rgba(255,255,255,0.85);padding:3px 9px;border:0.5px solid rgba(255,255,255,0.4);border-radius:16px;cursor:pointer;transition:all .1s}
 .sync-btn:hover{border-color:var(--g);color:var(--g)}
-.sync-btn.ok{color:var(--g);border-color:var(--g)}
-.sync-btn.warn{color:var(--a);border-color:var(--a)}
+.sync-btn.ok{color:#7FFFD4;border-color:#7FFFD4}
+.sync-btn.warn{color:#FFD580;border-color:#FFD580}
 .clk{font-size:11px;color:rgba(255,255,255,.75);border-left:0.5px solid rgba(255,255,255,.25);padding-left:12px;font-variant-numeric:tabular-nums}
 .app{display:flex;flex:1;overflow:hidden;min-height:0}
 .sb{width:200px;min-width:200px;height:100%;background:var(--bg);border-right:0.5px solid var(--bl);overflow-y:auto}
@@ -254,6 +254,16 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .hr-sub{font-size:11px;color:var(--t2);line-height:1.4}
 .hr-tag{display:inline-block;font-size:9px;padding:2px 7px;border-radius:8px;margin-top:5px}
 .sbar{background:var(--bg2);border-radius:var(--rm);padding:8px 12px;margin-bottom:0;display:none;align-items:center;gap:8px;font-size:11px;color:var(--t2);flex-shrink:0}
+.week-nav{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.week-btn{font-size:10px;padding:4px 10px;border:0.5px solid var(--bm);border-radius:16px;cursor:pointer;background:none;color:var(--t2);font-family:var(--f);transition:all .1s}
+.week-btn:hover{border-color:var(--g);color:var(--g)}
+.week-btn.active{background:var(--g);color:#fff;border-color:var(--g)}
+.month-tab{font-size:10px;padding:4px 12px;border:0.5px solid var(--bm);border-radius:16px;cursor:pointer;background:none;color:var(--t2);font-family:var(--f);transition:all .1s}
+.month-tab:hover{border-color:var(--b);color:var(--b)}
+.month-tab.active{background:var(--b);color:#fff;border-color:var(--b)}
+.trend-up{color:var(--r);font-size:10px}
+.trend-dn{color:var(--g);font-size:10px}
+.trend-same{color:var(--t3);font-size:10px}
 .sdot2{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .sdot2.on{background:var(--g)}
 .sdot2.warn{background:var(--a)}
@@ -455,7 +465,16 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
     <!-- STAFF DASHBOARD -->
     <div class="pnl" id="pnl-staff">
-      <div class="sec">Staff dashboard — weekly check-in data</div>
+      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Staff dashboard — check-in tracker</span>
+        <div style="display:flex;gap:6px">
+          <button class="week-btn active" id="viewWeekBtn" onclick="setStaffView('week')">This week</button>
+          <button class="week-btn" id="viewMonthBtn" onclick="setStaffView('month')">Monthly summary</button>
+          <button class="week-btn" id="viewHistoryBtn" onclick="setStaffView('history')">History</button>
+        </div>
+      </div>
+      <!-- WEEK VIEW -->
+      <div id="staffWeekView">
       <div class="mrow">
         <div class="met" onclick="filterStaff('over')"><div class="ml">Avg capacity</div><div class="mv" id="sm-avg">—</div><div class="ms">team average</div></div>
         <div class="met"><div class="ml">Check-ins received</div><div class="mv" id="sm-n">0</div><div class="ms">of 12 this week</div></div>
@@ -482,6 +501,19 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
           </div>
         </div>
       </div>
+      </div><!-- end staffWeekView -->
+
+      <!-- MONTH VIEW -->
+      <div id="staffMonthView" style="display:none">
+        <div id="monthNavBar" class="week-nav" style="margin-bottom:16px"></div>
+        <div id="monthContent"></div>
+      </div>
+
+      <!-- HISTORY VIEW -->
+      <div id="staffHistoryView" style="display:none">
+        <div id="historyContent"></div>
+      </div>
+
     </div>
 
     <!-- SKILL MATCHING -->
@@ -1194,6 +1226,283 @@ var ws = XLSX.utils.aoa_to_sheet(rows);
 
   var filename = 'R2S_Projects_' + new Date().toLocaleDateString('en-AU').replace(/\//g, '-') + '.xlsx';
   XLSX.writeFile(wb, filename);
+}
+
+
+// ── STAFF WEEK/MONTH TRACKING ──
+var currentStaffView = 'week';
+var allHistoricalData = []; // All check-ins ever stored with week stamps
+
+function setStaffView(view) {
+  currentStaffView = view;
+  ['Week','Month','History'].forEach(function(v) {
+    var btn = document.getElementById('staffView'+v+'View') || document.getElementById('view'+v+'Btn');
+    if (btn) btn.classList.remove('active');
+  });
+  document.getElementById('view'+view.charAt(0).toUpperCase()+view.slice(1)+'Btn').classList.add('active');
+  document.getElementById('staffWeekView').style.display = view === 'week' ? 'block' : 'none';
+  document.getElementById('staffMonthView').style.display = view === 'month' ? 'block' : 'none';
+  document.getElementById('staffHistoryView').style.display = view === 'history' ? 'block' : 'none';
+  if (view === 'month') renderMonthSummary();
+  if (view === 'history') renderHistory();
+}
+
+function getWeekEnding(dateStr) {
+  // Get the Friday of the week for a given date
+  var d = new Date(dateStr || Date.now());
+  var day = d.getDay();
+  var diff = (day <= 5) ? (5 - day) : (12 - day);
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().split('T')[0];
+}
+
+function getMonthKey(dateStr) {
+  var d = new Date(dateStr || Date.now());
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+function getMonthLabel(monthKey) {
+  var parts = monthKey.split('-');
+  var d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, 1);
+  return d.toLocaleString('en-AU', { month: 'long', year: 'numeric' });
+}
+
+function groupByWeek(submissions) {
+  var weeks = {};
+  submissions.forEach(function(s) {
+    var wk = s.weekEnding || getWeekEnding(s.submitted);
+    if (!weeks[wk]) weeks[wk] = [];
+    // Deduplicate by name - keep most recent
+    var existing = weeks[wk].findIndex(function(e) { return e.name && s.name && e.name.toLowerCase() === s.name.toLowerCase(); });
+    if (existing >= 0) {
+      if (new Date(s.submitted) > new Date(weeks[wk][existing].submitted)) weeks[wk][existing] = s;
+    } else {
+      weeks[wk].push(s);
+    }
+  });
+  return weeks;
+}
+
+function groupByMonth(submissions) {
+  var months = {};
+  submissions.forEach(function(s) {
+    var mk = getMonthKey(s.submitted || s.weekEnding);
+    if (!months[mk]) months[mk] = [];
+    months[mk].push(s);
+  });
+  return months;
+}
+
+function calcWeekStats(submissions) {
+  if (!submissions || submissions.length === 0) return null;
+  var caps = submissions.map(function(s) { return s.capacity || 0; });
+  var avg = Math.round(caps.reduce(function(a, b) { return a + b; }, 0) / caps.length);
+  var overloaded = submissions.filter(function(s) { return s.capacity >= 85; }).length;
+  var available = submissions.filter(function(s) { return s.capacity < 65; }).length;
+  var blockers = submissions.filter(function(s) { return hasBlocker(s.blockers); }).length;
+  return { avg: avg, overloaded: overloaded, available: available, blockers: blockers, count: submissions.length };
+}
+
+function renderMonthSummary() {
+  // Get all data from JSONBin to build history
+  if (!C.bin || !C.key) {
+    document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">JSONBin not configured.</div>';
+    return;
+  }
+  document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading monthly data...</div>';
+  fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var all = (Array.isArray(d.record) ? d.record : []).filter(function(e) { return e && e.name; });
+      var byMonth = groupByMonth(all);
+      var months = Object.keys(byMonth).sort().reverse();
+      if (months.length === 0) {
+        document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">No historical data yet. Check-ins submitted this week will be stored here.</div>';
+        return;
+      }
+      // Build month navigation
+      var navHtml = months.map(function(mk, i) {
+        return '<button class="month-tab' + (i === 0 ? ' active' : '') + '" data-mk="' + mk + '" onclick="showMonthFromBtn(this)">' + getMonthLabel(mk) + '</button>';
+      }).join('');
+      document.getElementById('monthNavBar').innerHTML = navHtml;
+      showMonth(months[0], byMonth);
+      window._allMonthData = byMonth;
+    })
+    .catch(function(e) {
+      document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--r);padding:8px 0">Error loading data: ' + e.message + '</div>';
+    });
+}
+
+
+
+function showMonthFromCard(card) {
+  var mk = card.getAttribute('data-monthkey');
+  showMonth(mk);
+}
+
+function showMonthFromBtn(btn) {
+  var mk = btn.getAttribute('data-mk');
+  showMonth(mk);
+}
+
+function showMonth(monthKey, byMonth) {
+  window._currentMonthKey = monthKey;
+  var data = byMonth || window._allMonthData || {};
+  document.querySelectorAll('.month-tab').forEach(function(t) {
+    t.classList.toggle('active', t.textContent === getMonthLabel(monthKey));
+  });
+  var submissions = data[monthKey] || [];
+  var byWeek = groupByWeek(submissions);
+  var weeks = Object.keys(byWeek).sort().reverse();
+  var el = document.getElementById('monthContent');
+  if (weeks.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No data for this month.</div>'; return; }
+
+  // Month overview stats
+  var allStats = calcWeekStats(submissions);
+  var html = '<div class="mrow" style="margin-bottom:16px">' +
+    '<div class="met"><div class="ml">Month avg capacity</div><div class="mv" style="color:' + (allStats.avg >= 80 ? 'var(--a)' : 'var(--g)') + '">' + allStats.avg + '%</div><div class="ms">' + allStats.count + ' submissions</div></div>' +
+    '<div class="met"><div class="ml">Overloaded weeks</div><div class="mv" style="color:var(--r)">' + weeks.filter(function(w) { return calcWeekStats(byWeek[w]).overloaded > 0; }).length + '</div><div class="ms">of ' + weeks.length + ' weeks</div></div>' +
+    '<div class="met"><div class="ml">Blockers raised</div><div class="mv" style="color:var(--a)">' + allStats.blockers + '</div><div class="ms">this month</div></div>' +
+    '<div class="met" onclick="generateMonthReport(window._currentMonthKey)"><div class="ml">AI analysis</div><div class="mv" style="font-size:14px;color:var(--b)">Ask</div><div class="ms">Cinderella</div></div>' +
+    '</div>';
+
+  // Week by week breakdown
+  html += '<div class="card"><div class="ct">Week by week — ' + getMonthLabel(monthKey) + '</div>';
+  weeks.forEach(function(wk) {
+    var ws = calcWeekStats(byWeek[wk]);
+    var wkLabel = 'Week ending ' + new Date(wk).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+    html += '<div style="padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer;" data-wk="' + wk + '" onclick="showWeekDetailFromEl(this)">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
+        '<span style="font-size:12px;font-weight:500;color:var(--t1)">' + wkLabel + '</span>' +
+        '<span style="font-size:11px;color:' + (ws.avg >= 80 ? 'var(--a)' : 'var(--g)') + '">' + ws.avg + '% avg · ' + ws.count + ' check-ins</span>' +
+      '</div>' +
+      '<div style="display:flex;gap:12px;font-size:10px;color:var(--t2)">' +
+        (ws.overloaded > 0 ? '<span style="color:var(--r)">⚠ ' + ws.overloaded + ' overloaded</span>' : '') +
+        (ws.available > 0 ? '<span style="color:var(--g)">✓ ' + ws.available + ' available</span>' : '') +
+        (ws.blockers > 0 ? '<span style="color:var(--a)">🚧 ' + ws.blockers + ' blockers</span>' : '') +
+      '</div>' +
+    '</div>';
+  });
+  html += '</div>';
+
+  // Per-staff trends
+  html += '<div class="card"><div class="ct">Staff trends this month</div>' + renderStaffTrends(byWeek, weeks) + '</div>';
+  el.innerHTML = html;
+}
+
+function renderStaffTrends(byWeek, weeks) {
+  var staffMap = {};
+  weeks.forEach(function(wk) {
+    byWeek[wk].forEach(function(s) {
+      var nm = cap(s.name);
+      if (!staffMap[nm]) staffMap[nm] = [];
+      staffMap[nm].push({ week: wk, capacity: s.capacity, blockers: s.blockers });
+    });
+  });
+  return Object.entries(staffMap).map(function(entry) {
+    var nm = entry[0], records = entry[1].sort(function(a, b) { return a.week < b.week ? -1 : 1; });
+    var caps = records.map(function(r) { return r.capacity; });
+    var avg = Math.round(caps.reduce(function(a, b) { return a + b; }, 0) / caps.length);
+    var trend = caps.length > 1 ? (caps[caps.length - 1] - caps[0] > 5 ? '↑ Rising' : caps[0] - caps[caps.length - 1] > 5 ? '↓ Falling' : '→ Stable') : '—';
+    var trendCol = trend.includes('Rising') ? 'var(--r)' : trend.includes('Falling') ? 'var(--g)' : 'var(--t3)';
+    var longBlocker = records.filter(function(r) { return hasBlocker(r.blockers); }).length >= 2;
+    return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:0.5px solid var(--bl)">' +
+      '<span style="font-size:12px;color:var(--t1);min-width:130px">' + nm + '</span>' +
+      '<div style="flex:1;background:var(--bg2);border-radius:3px;height:5px;overflow:hidden"><div style="height:100%;border-radius:3px;background:' + (avg >= 85 ? 'var(--r)' : avg >= 70 ? 'var(--a)' : 'var(--g)') + ';width:' + avg + '%"></div></div>' +
+      '<span style="font-size:11px;font-weight:500;min-width:35px;text-align:right;color:' + (avg >= 85 ? 'var(--r)' : avg >= 70 ? 'var(--a)' : 'var(--g)') + '">' + avg + '%</span>' +
+      '<span style="font-size:10px;color:' + trendCol + ';min-width:70px">' + trend + '</span>' +
+      (longBlocker ? '<span style="font-size:9px;background:var(--al);color:#854F0B;padding:1px 6px;border-radius:8px">Ongoing blocker</span>' : '') +
+    '</div>';
+  }).join('');
+}
+
+
+function analyseWeek(weekEnding) {
+  closeModal();
+  qa('Analyse the staff check-in data for the week ending ' + weekEnding + ' and give me a summary of team health, capacity concerns and any blockers that needed attention.');
+}
+
+
+function showWeekDetailFromEl(el) {
+  showWeekDetail(el.getAttribute('data-wk'));
+}
+
+function showWeekDetail(weekEnding) {
+  var data = window._allMonthData || {};
+  var allSubs = Object.values(data).reduce(function(a, b) { return a.concat(b); }, []);
+  var weekSubs = allSubs.filter(function(s) { return getWeekEnding(s.submitted) === weekEnding; });
+  var wkLabel = 'Week ending ' + new Date(weekEnding).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+  openModal(wkLabel, weekSubs.length + ' check-ins received',
+    weekSubs.map(function(s) {
+      var pct = s.capacity || 0;
+      return '<div style="padding:8px 0;border-bottom:0.5px solid var(--bl)">' +
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
+          '<strong style="font-size:12px">' + cap(s.name) + '</strong>' +
+          '<span style="font-size:10px;color:var(--t2)">' + (s.role || '') + '</span>' +
+          '<span style="margin-left:auto;font-size:12px;font-weight:500;color:' + (pct >= 85 ? 'var(--r)' : pct >= 70 ? 'var(--a)' : 'var(--g)') + '">' + pct + '%</span>' +
+        '</div>' +
+        (s.blockers ? '<div style="font-size:10px;color:var(--a)">🚧 ' + s.blockers + '</div>' : '') +
+        (s.projects ? '<div style="font-size:10px;color:var(--t2)">Projects: ' + s.projects + '</div>' : '') +
+      '</div>';
+    }).join('') +
+    '<button class="m-btn" style="margin-top:12px" onclick="qa(\'Analyse this week ending ' + weekEnding + ' staff data and give me a summary of team health, capacity concerns and any blockers that needed attention.\')">Ask Cinderella to analyse this week</button>'
+  );
+}
+
+function renderHistory() {
+  if (!C.bin || !C.key) {
+    document.getElementById('historyContent').innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">JSONBin not configured.</div>';
+    return;
+  }
+  document.getElementById('historyContent').innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading all historical data...</div>';
+  fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var all = (Array.isArray(d.record) ? d.record : []).filter(function(e) { return e && e.name; });
+      var byMonth = groupByMonth(all);
+      var months = Object.keys(byMonth).sort().reverse();
+      if (months.length === 0) {
+        document.getElementById('historyContent').innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">No history yet. Data accumulates as staff submit weekly check-ins.</div>';
+        return;
+      }
+      var html = months.map(function(mk) {
+        var subs = byMonth[mk];
+        var byWeek = groupByWeek(subs);
+        var weeks = Object.keys(byWeek).length;
+        var stats = calcWeekStats(subs);
+        return '<div class="card" style="cursor:pointer" data-monthkey="' + mk + '" onclick="showMonthFromCard(this)">' +
+          '<div class="ct">' + getMonthLabel(mk) + ' <span class="ct-action">View detail →</span></div>' +
+          '<div style="display:flex;gap:20px;font-size:12px;color:var(--t1)">' +
+            '<span><strong>' + stats.avg + '%</strong> avg capacity</span>' +
+            '<span><strong>' + weeks + '</strong> week' + (weeks !== 1 ? 's' : '') + ' of data</span>' +
+            '<span><strong>' + stats.count + '</strong> submissions</span>' +
+            (stats.overloaded > 0 ? '<span style="color:var(--r)"><strong>' + stats.overloaded + '</strong> overloaded</span>' : '') +
+            (stats.blockers > 0 ? '<span style="color:var(--a)"><strong>' + stats.blockers + '</strong> blockers</span>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('');
+      document.getElementById('historyContent').innerHTML = html;
+      window._allMonthData = byMonth;
+    })
+    .catch(function(e) {
+      document.getElementById('historyContent').innerHTML = '<div style="font-size:12px;color:var(--r);padding:8px 0">Error: ' + e.message + '</div>';
+    });
+}
+
+async function generateMonthReport(monthKey) {
+  var data = window._allMonthData || {};
+  var subs = data[monthKey] || [];
+  if (subs.length === 0) { qa('Generate a staff health report for ' + getMonthLabel(monthKey)); return; }
+  var byWeek = groupByWeek(subs);
+  var summary = 'STAFF DATA FOR ' + getMonthLabel(monthKey).toUpperCase() + '\n\n';
+  Object.keys(byWeek).sort().forEach(function(wk) {
+    summary += 'Week ending ' + wk + ':\n';
+    byWeek[wk].forEach(function(s) {
+      summary += '  ' + cap(s.name) + ' (' + (s.role || 'staff') + '): ' + (s.capacity || 0) + '% capacity, trend: ' + (s.trend || 'unknown') + (hasBlocker(s.blockers) ? ', BLOCKER: ' + s.blockers : '') + '\n';
+    });
+    summary += '\n';
+  });
+  qa('Analyse this staff data for ' + getMonthLabel(monthKey) + ' and give me: (1) overall team health summary, (2) capacity trends and concerns, (3) any staff with persistent blockers or burnout risk, (4) skill matching opportunities I missed, (5) recommendations for next month.\n\n' + summary.substring(0, 2500));
 }
 
 function loadCfg(){
