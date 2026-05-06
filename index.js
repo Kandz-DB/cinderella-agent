@@ -346,7 +346,6 @@ app.get('/monday/projects', async (req, res) => {
             state
             column_values {
               id
-              title
               text
             }
           }
@@ -389,7 +388,6 @@ app.get('/monday/feedback', async (req, res) => {
             id
             name
             column_values {
-              title
               text
             }
           }
