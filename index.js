@@ -439,6 +439,7 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
 think();
 setInterval(think, 300000);
 
+app.use(express.static('.'));
 app.get("/status", (req, res) => {
   res.json(Object.keys(latestOutput).length === 0 ? { status: "initialising" } : latestOutput);
 });
