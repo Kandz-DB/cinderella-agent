@@ -7,6 +7,7 @@
 </head>
 <body>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -389,8 +390,8 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
     <!-- TODAY -->
     <div class="pnl active" id="pnl-today">
       <div class="mrow">
-        <div class="met" onclick="omKey('mtg')"><div class="ml">Meetings today</div><div class="mv">5</div><div class="ms">2 need prep</div></div>
-        <div class="met" onclick="show('email',document.querySelector('[onclick*=email]'))"><div class="ml">Unanswered emails</div><div class="mv" style="color:var(--r)">4</div><div class="ms">2 overdue &gt;24h</div></div>
+        <div class="met" onclick="omKey('mtg')"><div class="ml">Meetings today</div><div class="mv" id="todayMtgCount">—</div><div class="ms" id="todayMtgSub">Loading...</div></div>
+        <div class="met" onclick="show('email',document.querySelector('[onclick*=email]'))"><div class="ml">Unanswered emails</div><div class="mv" id="todayEmailCount" style="color:var(--r)">—</div><div class="ms" id="todayEmailSub">Loading...</div></div>
         <div class="met" onclick="show('staff',document.querySelector('[onclick*=staff]'))"><div class="ml">Check-ins received</div><div class="mv" id="todayCount" style="color:var(--a)">0</div><div class="ms">of 12 this week</div></div>
         <div class="met" onclick="omKey('pri')"><div class="ml">Open priorities</div><div class="mv">7</div><div class="ms">2 high urgency</div></div>
       </div>
@@ -405,19 +406,16 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
         </div>
         <div>
           <div class="card">
-            <div class="ct">Cinderella's briefing <span class="ct-action" onclick="qa('Give me a full morning briefing for today')">Full briefing</span></div>
-            <div class="ins" onclick="omKey('risk')"><div class="il">Meeting prep</div><div class="it">Risk framework review at 09:30 — prepare Q1 incident register and risk matrix before 09:00.</div></div>
-            <div class="ins" onclick="omKey('email-marcus')"><div class="il">Email overdue</div><div class="it">Marcus Webb emailed 26h ago re: vendor contract. Critically overdue.</div></div>
-            <div class="ins" onclick="show('staff',document.querySelector('[onclick*=staff]'))"><div class="il">Staff check-ins</div><div class="it" id="briefingCheckin">No check-ins received yet. Send the check-in form to staff.</div></div>
-            <div class="ins" onclick="qa('Create a full ISO 27001 audit preparation checklist and action plan for Risk 2 Solution')"><div class="il">COO alert</div><div class="it">ISO 27001 audit May 12 · 68% checklist complete · Incident escalation owner urgently needed.</div></div>
+            <div class="ct">Cinderella's briefing <span class="ct-action" onclick="show('chat',document.querySelector('[onclick*=chat]'))">Open chat →</span></div>
+            <div id="todayBriefingContent">
+              <div class="ins"><div class="il">Loading</div><div class="it" id="briefingCheckin">Cinderella is loading your live briefing...</div></div>
+            </div>
           </div>
           <div class="card">
-            <div class="ct">Priorities <span class="ct-action" onclick="qa('Reorder my priorities for today and explain your reasoning')">Reorder</span></div>
-            <div class="pri" onclick="openDraftModal('Marcus Webb','Vendor contract approval','Re: Vendor services agreement','email')"><span class="pp ph">High</span><span class="pt">Approve vendor contract — Marcus Webb</span></div>
-            <div class="pri" onclick="qa('Draft a message to all 12 staff asking them to complete their weekly check-in form')"><span class="pp ph">High</span><span class="pt">Submit staff utilisation report by 30 April</span></div>
-            <div class="pri" onclick="qa('Generate a Q2 KPI summary for the operations review meeting at 14:00')"><span class="pp pm">Med</span><span class="pt">Prep Q2 KPI deck for 14:00 review</span></div>
-            <div class="pri" onclick="qa('Who at Risk 2 Solution should own the incident escalation pathway?')"><span class="pp pm">Med</span><span class="pt">Assign incident escalation pathway owner</span></div>
-            <div class="pri" onclick="qa('What process improvement areas should Risk 2 Solution prioritise this quarter?')"><span class="pp pl">Low</span><span class="pt">Review process improvement proposals</span></div>
+            <div class="ct">Today's priorities <span class="ct-action" onclick="refreshTodayPriorities()">Refresh</span></div>
+            <div id="todayPriorities">
+              <div style="font-size:11px;color:var(--t3);padding:8px 0">Loading priorities from your emails and calendar...</div>
+            </div>
           </div>
         </div>
       </div>
@@ -706,7 +704,6 @@ async function checkM365Connection() {
 
 async function loadM365Data() {
   try {
-    // Load emails
     const er = await fetch('/graph/emails');
     if (er.ok) {
       const ed = await er.json();
@@ -716,7 +713,6 @@ async function loadM365Data() {
   } catch(e) { console.warn('Email load failed:', e.message); }
 
   try {
-    // Load calendar
     const cr = await fetch('/graph/calendar');
     if (cr.ok) {
       const cd = await cr.json();
@@ -726,13 +722,21 @@ async function loadM365Data() {
   } catch(e) { console.warn('Calendar load failed:', e.message); }
 
   try {
-    // Load Teams
     const tr = await fetch('/graph/teams');
     if (tr.ok) {
       const td = await tr.json();
       M365.teams = td.chats || [];
     }
   } catch(e) { console.warn('Teams load failed:', e.message); }
+
+  // Load today tab with real data + show opening notification
+  try { await loadTodayData(); } catch(e) { console.warn('Today data failed:', e.message); }
+
+  // Load info@ mailbox
+  try { await loadInfoEmails(); } catch(e) { console.warn('info@ failed:', e.message); }
+
+  // Show opening notification popup
+  try { await generateOpeningNotification(); } catch(e) { console.warn('Notification failed:', e.message); }
 }
 
 
@@ -810,6 +814,388 @@ async function loadFullEmail(id, from, fromEmail, subj) {
     var el = document.getElementById('fullEmailBody');
     if (el) el.textContent = 'Failed to load: '+ex.message;
   }
+}
+
+
+// ── TODAY TAB: Load real data ──
+async function loadTodayData() {
+  // Update meeting count
+  var mtgEl = document.getElementById('todayMtgCount');
+  var mtgSubEl = document.getElementById('todayMtgSub');
+  if (M365.events.length > 0) {
+    if (mtgEl) { mtgEl.textContent = M365.events.length; mtgEl.style.color = 'var(--t1)'; }
+    if (mtgSubEl) mtgSubEl.textContent = M365.events.length + ' meeting' + (M365.events.length !== 1 ? 's' : '') + ' today';
+  }
+
+  // Update email count
+  var emailEl = document.getElementById('todayEmailCount');
+  var emailSubEl = document.getElementById('todayEmailSub');
+  if (M365.emails.length > 0) {
+    var overdue = M365.emails.filter(function(e){ return e.hoursOld >= 24; }).length;
+    if (emailEl) { emailEl.textContent = M365.emails.length; emailEl.style.color = overdue > 0 ? 'var(--r)' : 'var(--a)'; }
+    if (emailSubEl) emailSubEl.textContent = overdue > 0 ? overdue + ' overdue >24h' : 'from last 14 days';
+  }
+
+  // Generate real priorities from AI
+  await refreshTodayPriorities();
+
+  // Generate today briefing card
+  await refreshTodayBriefing();
+}
+
+async function refreshTodayPriorities() {
+  var el = document.getElementById('todayPriorities');
+  if (!el) return;
+  if (M365.emails.length === 0 && M365.events.length === 0) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Connect M365 to see live priorities.</div>';
+    return;
+  }
+  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Cinderella is analysing your day...</div>';
+
+  var emailSummary = M365.emails.slice(0, 10).map(function(e){
+    return e.from + ' (' + e.hoursOld + 'h ago' + (e.hasAttachments ? ' HAS ATTACHMENT' : '') + '): ' + e.subject;
+  }).join('\n');
+
+  var calSummary = M365.events.map(function(e){
+    return new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'}) + ' — ' + e.subject;
+  }).join('\n') || 'No meetings today';
+
+  var staffSummary = SD.length > 0 ? SD.filter(function(s){ return s.capacity >= 85 || (s.blockers && s.blockers.trim()); }).map(function(s){ return s.name + ': ' + s.capacity + '% capacity' + (s.blockers ? ', blocker: ' + s.blockers : ''); }).join('\n') : '';
+
+  var prompt = 'Based on the data below, list the top 5 priorities for Kandia TODAY ranked by urgency. For each priority: one line, start with [High]/[Med]/[Low], be specific (name people, subjects, meeting times). No preamble.\n\nEMAILS:\n' + emailSummary + '\n\nCALENDAR:\n' + calSummary + (staffSummary ? '\n\nSTAFF FLAGS:\n' + staffSummary : '');
+
+  try {
+    var r = await fetch('/proxy', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:400,system:SYS,messages:[{role:'user',content:prompt}]})});
+    var d = await r.json();
+    var text = d.content && d.content[0] ? d.content[0].text : '';
+    if (text) {
+      var lines = text.split('\n').filter(function(l){ return l.trim(); });
+      el.innerHTML = lines.map(function(l) {
+        var urgency = l.toLowerCase().includes('[high]') ? 'ph' : l.toLowerCase().includes('[med]') ? 'pm' : 'pl';
+        var label = l.toLowerCase().includes('[high]') ? 'High' : l.toLowerCase().includes('[med]') ? 'Med' : 'Low';
+        var text2 = l.replace(/\[high\]|\[med\]|\[low\]/gi, '').trim();
+        return '<div class="pri" onclick="qa(\'Tell me more about this priority and what I should do: ' + text2.replace(/'/g,'').substring(0,80) + '\'"><span class="pp ' + urgency + '">' + label + '</span><span class="pt">' + text2 + '</span></div>';
+      }).join('');
+    } else {
+      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Could not load priorities. Try refreshing.</div>';
+    }
+  } catch(ex) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Error loading priorities: ' + ex.message + '</div>';
+  }
+}
+
+async function refreshTodayBriefing() {
+  var el = document.getElementById('todayBriefingContent');
+  if (!el) return;
+  if (M365.emails.length === 0 && M365.events.length === 0) {
+    el.innerHTML = '<div class="ins"><div class="il">Not connected</div><div class="it">Connect M365 to see your live briefing here.</div></div>';
+    return;
+  }
+  var emailCount = M365.emails.length;
+  var overdue = M365.emails.filter(function(e){ return e.hoursOld >= 24; }).length;
+  var attachments = M365.emails.filter(function(e){ return e.hasAttachments; }).length;
+  var mtgCount = M365.events.length;
+  var staffBC = document.getElementById('briefingCheckin');
+  if (staffBC) {
+    var missing = ALL_STAFF.filter(function(s){ var checked = SD.map(function(x){ return x.name.toLowerCase(); }); return !checked.some(function(n){ return n.includes(s.name.split(' ')[0].toLowerCase()); }); });
+    staffBC.textContent = SD.length > 0 ? SD.length + ' of 7 check-ins received. ' + missing.length + ' outstanding.' : 'No check-ins yet — send the form to staff.';
+  }
+  // Build briefing items from real data
+  var items = [];
+  if (mtgCount > 0) {
+    var nextMtg = M365.events[0];
+    var nextTime = new Date(nextMtg.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    items.push({label:'Calendar', text: mtgCount + ' meeting' + (mtgCount > 1 ? 's' : '') + ' today. Next: ' + nextMtg.subject + ' at ' + nextTime + '. Click Ask Cinderella for full prep.', action: "qa('Help me prepare for my meetings today')"});
+  }
+  if (overdue > 0) {
+    var overdueEmails = M365.emails.filter(function(e){ return e.hoursOld >= 24; }).slice(0,3);
+    items.push({label:'Overdue emails', text: overdue + ' email' + (overdue > 1 ? 's' : '') + ' critically overdue: ' + overdueEmails.map(function(e){ return e.from; }).join(', ') + '.', action: "show('email',document.querySelector('[onclick*=email]'))"});
+  } else if (emailCount > 0) {
+    items.push({label:'Emails', text: emailCount + ' email' + (emailCount > 1 ? 's' : '') + ' in your inbox from the last 14 days.', action: "show('email',document.querySelector('[onclick*=email]'))"});
+  }
+  if (attachments > 0) {
+    items.push({label:'Attachments', text: attachments + ' email' + (attachments > 1 ? 's' : '') + ' with attachments needing your attention.', action: "qa('Which of my emails have attachments that need action? Summarise each one.')"});
+  }
+  var missing2 = ALL_STAFF.filter(function(s){ var checked = SD.map(function(x){ return x.name.toLowerCase(); }); return !checked.some(function(n){ return n.includes(s.name.split(' ')[0].toLowerCase()); }); });
+  if (missing2.length > 0) {
+    items.push({label:'Staff check-ins', text: missing2.length + ' staff have not submitted their weekly check-in: ' + missing2.map(function(s){ return s.name.split(' ')[0]; }).join(', ') + '.', action: "show('staff',document.querySelector('[onclick*=staff]'))"});
+  }
+  if (items.length === 0) {
+    items.push({label:'All clear', text: 'No urgent items right now. Your inbox is up to date and meetings are covered.', action: "qa('What should I focus on today?')"});
+  }
+  el.innerHTML = items.map(function(item){
+    return '<div class="ins" onclick="' + item.action + '"><div class="il">' + item.label + '</div><div class="it">' + item.text + '</div></div>';
+  }).join('');
+}
+
+// ── OPENING NOTIFICATION POPUP ──
+function showOpeningNotification(briefingText) {
+  // Remove existing if present
+  var existing = document.getElementById('cinderella-notify');
+  if (existing) existing.remove();
+
+  var now = new Date();
+  var h = now.getHours();
+  var greet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+
+  var overlay = document.createElement('div');
+  overlay.id = 'cinderella-notify';
+  overlay.style.cssText = 'position:fixed;top:16px;right:16px;width:340px;max-height:80vh;background:var(--bg);border:0.5px solid var(--bm);border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.18);z-index:9999;overflow:hidden;display:flex;flex-direction:column;animation:slideIn 0.3s ease';
+
+  var style = document.createElement('style');
+  style.textContent = '@keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}';
+  document.head.appendChild(style);
+
+  overlay.innerHTML =
+    '<div style="background:linear-gradient(90deg,#0A7A7A,#5DCFC9 60%,#F4C0D1);padding:12px 14px;display:flex;align-items:center;justify-content:space-between">' +
+      '<div style="font-family:Georgia,serif;font-size:14px;color:#fff;font-style:italic">Cinderella</div>' +
+      '<button onclick="dismissNotify()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center">×</button>' +
+    '</div>' +
+    '<div style="padding:14px;overflow-y:auto;flex:1">' +
+      '<div style="font-size:13px;font-weight:500;color:var(--t1);margin-bottom:10px">' + greet + ', Kandia</div>' +
+      '<div style="font-size:12px;color:var(--t1);line-height:1.6;white-space:pre-wrap">' + (briefingText || 'Loading your briefing...') + '</div>' +
+    '</div>' +
+    '<div style="padding:10px 14px;border-top:0.5px solid var(--bl);display:flex;gap:8px">' +
+      '<button onclick="openChatFromNotify()" style="flex:1;background:var(--g);color:#fff;border:none;border-radius:8px;padding:7px;font-size:11px;cursor:pointer;font-family:var(--f)">Open chat</button>' +
+      '<button onclick="dismissNotify()" style="flex:1;background:var(--bg2);color:var(--t2);border:0.5px solid var(--bm);border-radius:8px;padding:7px;font-size:11px;cursor:pointer;font-family:var(--f)">Got it</button>' +
+    '</div>';
+
+  document.getElementById('appRoot').appendChild(overlay);
+
+  // Auto-dismiss after 60 seconds
+  setTimeout(function(){
+    var el = document.getElementById('cinderella-notify');
+    if (el) { el.style.opacity = '0'; el.style.transition = 'opacity 0.5s'; setTimeout(function(){ if(el)el.remove(); }, 500); }
+  }, 60000);
+}
+
+async function generateOpeningNotification() {
+  // Build quick briefing text for the popup
+  var lines = [];
+  if (M365.events.length > 0) {
+    lines.push('📅 ' + M365.events.length + ' meeting' + (M365.events.length > 1 ? 's' : '') + ' today:');
+    M365.events.forEach(function(e){
+      lines.push('  ' + new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'}) + ' — ' + e.subject);
+    });
+  }
+  var overdue = M365.emails.filter(function(e){ return e.hoursOld >= 24; });
+  if (overdue.length > 0) {
+    lines.push('');
+    lines.push('⚠ ' + overdue.length + ' overdue email' + (overdue.length > 1 ? 's' : '') + ':');
+    overdue.slice(0,3).forEach(function(e){ lines.push('  ' + e.from + ': ' + e.subject); });
+  }
+  var attachments = M365.emails.filter(function(e){ return e.hasAttachments; });
+  if (attachments.length > 0) {
+    lines.push('');
+    lines.push('📎 ' + attachments.length + ' email' + (attachments.length > 1 ? 's' : '') + ' with attachments needing attention');
+  }
+  var missing = ALL_STAFF.filter(function(s){ var checked = SD.map(function(x){ return x.name.toLowerCase(); }); return !checked.some(function(n){ return n.includes(s.name.split(' ')[0].toLowerCase()); }); });
+  if (missing.length > 0) {
+    lines.push('');
+    lines.push('👥 ' + missing.length + ' staff check-ins outstanding');
+  }
+  if (lines.length === 0) lines.push('No urgent items right now. Have a great day!');
+  showOpeningNotification(lines.join('\n'));
+}
+
+// ── INFO@ MAILBOX ──
+var infoEmails = [];
+
+async function loadInfoEmails() {
+  try {
+    var r = await fetch('/graph/info-emails');
+    if (!r.ok) {
+      var err = await r.json();
+      console.warn('info@ mailbox:', err.error);
+      return;
+    }
+    var d = await r.json();
+    infoEmails = d.emails || [];
+    renderInfoEmails();
+  } catch(e) {
+    console.warn('info@ load failed:', e.message);
+  }
+}
+
+function renderInfoEmails() {
+  var el = document.getElementById('infoEmailList');
+  if (!el || infoEmails.length === 0) return;
+  el.innerHTML = '<div style="font-size:10px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;padding:8px 0 4px">info@risk2solution.com</div>' +
+    infoEmails.map(function(e, idx) {
+      var attach = e.hasAttachments ? ' <span style="color:var(--a);font-size:9px">📎</span>' : '';
+      var unread = !e.isRead ? '<span style="width:6px;height:6px;border-radius:50%;background:var(--b);display:inline-block;margin-right:4px"></span>' : '';
+      var overdue = e.hoursOld >= 24 ? '<span class="eu">Overdue</span>' : '';
+      return '<div class="erow" onclick="openInfoEmailView(' + idx + ')">' +
+        '<div class="ei"><div class="ef" style="display:flex;align-items:center">' + unread + e.from + attach + '</div>' +
+        '<div class="es">' + e.subject + '</div></div>' +
+        '<div class="ea">' + e.hoursOld + 'h ' + overdue + '</div></div>';
+    }).join('');
+}
+
+function openInfoEmailView(idx) {
+  var e = infoEmails[idx];
+  if (!e) return;
+  var fromEmail = e.fromEmail || '';
+  var subj = (e.subject||'').replace(/'/g,'');
+  var from = (e.from||'').replace(/'/g,'');
+  openModal(e.from + ' → info@risk2solution.com', e.subject,
+    '<div style="background:var(--bl2);border-radius:var(--rm);padding:6px 10px;font-size:10px;color:#185FA5;margin-bottom:12px">📬 Received by <strong>info@risk2solution.com</strong></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">' +
+      '<button class="m-btn" style="background:#0078D4" onclick="openOutlook()">📧 Open in Outlook</button>' +
+      '<button class="m-btn" onclick="replyToInfoEmail(' + idx + ')">✉ Draft reply</button>' +
+    '</div>' +
+    '<div class="mfield"><div class="mfl">From</div><div class="mfv">' + e.from + (fromEmail ? ' &lt;' + fromEmail + '&gt;' : '') + '</div></div>' +
+    '<div class="mfield"><div class="mfl">Received</div><div class="mfv">' + e.hoursOld + ' hours ago</div></div>' +
+    (e.hasAttachments ? '<div class="alert-box warn"><div class="ab-title">📎 Has attachments</div></div>' : '') +
+    '<div class="mfield"><div class="mfl">Preview</div><div style="font-size:12px;color:var(--t1);line-height:1.6;background:var(--bg2);padding:10px 12px;border-radius:var(--rm);white-space:pre-wrap">' + (e.preview || 'No preview') + '</div></div>'
+  );
+}
+
+
+
+function replyToInfoEmail(idx) {
+  var e = infoEmails[idx];
+  if (!e) return;
+  openDraftModal(e.from, 'Reply to info@ email: ' + e.subject, 'Re: ' + e.subject, 'email', e.fromEmail);
+}
+
+function openOutlook(){ window.open('https://outlook.office.com/mail/inbox','_blank'); }
+function dismissNotify(){ var el=document.getElementById('cinderella-notify'); if(el)el.remove(); }
+function openChatFromNotify(){ dismissNotify(); show('chat',document.querySelector('[onclick*=chat]')); }
+
+
+// ── MONDAY.COM FUNCTIONS ──
+var mondayData = { boards: [], feedback: [] };
+
+async function loadMondayData() {
+  var statusEl = document.getElementById('mondayStatus');
+  try {
+    var results = await Promise.all([
+      fetch('/monday/projects').then(function(r){ return r.json(); }),
+      fetch('/monday/feedback').then(function(r){ return r.json(); })
+    ]);
+    var projectData = results[0];
+    var feedbackData = results[1];
+
+    if (projectData.error) {
+      if (statusEl) statusEl.innerHTML = '<div class="alert-box warn"><div class="ab-title">Monday.com not connected</div><div class="ab-text">Add MONDAY_API_KEY to Render environment variables.</div></div>';
+      return;
+    }
+
+    mondayData.boards = projectData.boards || [];
+    mondayData.feedback = feedbackData.feedback || [];
+
+    if (statusEl) {
+      var totalItems = mondayData.boards.reduce(function(acc, b){ return acc + (b.items ? b.items.length : 0); }, 0);
+      statusEl.innerHTML = '<div class="alert-box ok"><div class="ab-title">✅ Monday.com connected · ' + totalItems + ' items across ' + mondayData.boards.length + ' boards</div>' +
+        mondayData.boards.map(function(b){
+          var items = b.items || [];
+          return '<div style="margin-top:6px"><strong>' + b.name + '</strong> (' + items.length + ' items)' +
+            (items.length > 0 ? '<div style="margin-top:4px">' + items.slice(0,5).map(function(item){
+              var status = item.column_values ? item.column_values.find(function(cv){ return cv.title && (cv.title.toLowerCase().includes('status') || cv.title.toLowerCase().includes('state')); }) : null;
+              return '<div style="font-size:10px;padding:2px 0;border-bottom:0.5px solid rgba(0,0,0,0.06)">' + item.name + (status && status.text ? ' — <span style="color:var(--g)">' + status.text + '</span>' : '') + '</div>';
+            }).join('') + (items.length > 5 ? '<div style="font-size:10px;color:var(--t3);margin-top:3px">+ ' + (items.length-5) + ' more items</div>' : '') + '</div>' : '') + '</div>';
+        }).join('') + '</div>';
+    }
+  } catch(ex) {
+    if (statusEl) statusEl.innerHTML = '<div class="alert-box warn"><div class="ab-title">Monday.com error</div><div class="ab-text">' + ex.message + '</div></div>';
+  }
+}
+
+function analyseMondayData() {
+  if (mondayData.boards.length === 0) {
+    qa('Summarise the current status of all client projects at Risk 2 Solution and flag anything needing attention.');
+    return;
+  }
+  var ctx = 'MONDAY.COM LIVE DATA (' + new Date().toLocaleDateString('en-AU') + ')\n\n';
+  mondayData.boards.forEach(function(b) {
+    ctx += 'BOARD: ' + b.name + '\n';
+    var items = b.items || [];
+    items.forEach(function(item) {
+      var cols = item.column_values ? item.column_values.filter(function(cv){ return cv.text && cv.text.trim(); }).map(function(cv){ return cv.title + ': ' + cv.text; }).join(' | ') : '';
+      ctx += '  - ' + item.name + (item.state ? ' [' + item.state + ']' : '') + (cols ? ' | ' + cols : '') + '\n';
+    });
+    ctx += '\n';
+  });
+  if (mondayData.feedback.length > 0) {
+    ctx += 'CLIENT FEEDBACK (' + mondayData.feedback.length + ' items):\n';
+    mondayData.feedback.forEach(function(item) {
+      var cols = item.column_values ? item.column_values.filter(function(cv){ return cv.text && cv.text.trim(); }).map(function(cv){ return cv.title + ': ' + cv.text; }).join(' | ') : '';
+      ctx += '  - ' + item.name + (cols ? ' | ' + cols : '') + '\n';
+    });
+  }
+  qa('Here is my live Monday.com project and feedback data. Please: (1) summarise all active projects and their current status, (2) flag anything overdue, at risk, or needing my immediate attention, (3) summarise client feedback themes, (4) give me a prioritised action list.\n\n' + ctx.substring(0, 3500));
+}
+
+function exportMondayToExcel() {
+  if (mondayData.boards.length === 0) {
+    alert('No Monday.com data loaded yet. Open Client Delivery to load data first.');
+    return;
+  }
+  if (typeof XLSX === 'undefined') {
+    alert('Excel library not loaded. Please refresh the page and try again.');
+    return;
+  }
+
+  var wb = XLSX.utils.book_new();
+
+  // Sheet for each board
+  mondayData.boards.forEach(function(b) {
+    var items = b.items || [];
+    if (items.length === 0) return;
+
+    // Get all column titles
+    var allCols = [];
+    items.forEach(function(item) {
+      (item.column_values || []).forEach(function(cv) {
+        if (cv.title && !allCols.includes(cv.title)) allCols.push(cv.title);
+      });
+    });
+
+    var headers = ['Item Name', 'Status'].concat(allCols);
+    var rows = [headers];
+
+    items.forEach(function(item) {
+      var row = [item.name, item.state || ''];
+      allCols.forEach(function(col) {
+        var cv = (item.column_values || []).find(function(c){ return c.title === col; });
+        row.push(cv ? (cv.text || '') : '');
+      });
+      rows.push(row);
+    });
+
+    var ws = XLSX.utils.aoa_to_sheet(rows);
+    // Set column widths
+    ws['!cols'] = headers.map(function(){ return { wch: 20 }; });
+    var sheetName = b.name.substring(0, 31); // Excel sheet name limit
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  });
+
+  // Feedback sheet
+  if (mondayData.feedback.length > 0) {
+    var allFbCols = [];
+    mondayData.feedback.forEach(function(item) {
+      (item.column_values || []).forEach(function(cv) {
+        if (cv.title && !allFbCols.includes(cv.title)) allFbCols.push(cv.title);
+      });
+    });
+    var fbHeaders = ['Item Name'].concat(allFbCols);
+    var fbRows = [fbHeaders];
+    mondayData.feedback.forEach(function(item) {
+      var row = [item.name];
+      allFbCols.forEach(function(col) {
+        var cv = (item.column_values || []).find(function(c){ return c.title === col; });
+        row.push(cv ? (cv.text || '') : '');
+      });
+      fbRows.push(row);
+    });
+    var fbWs = XLSX.utils.aoa_to_sheet(fbRows);
+    fbWs['!cols'] = fbHeaders.map(function(){ return { wch: 20 }; });
+    XLSX.utils.book_append_sheet(wb, fbWs, 'Client Feedback');
+  }
+
+  var filename = 'R2S_Projects_' + new Date().toLocaleDateString('en-AU').replace(/\//g, '-') + '.xlsx';
+  XLSX.writeFile(wb, filename);
 }
 
 function loadCfg(){
@@ -1122,8 +1508,8 @@ async function autoBriefing(){
       renderLiveCalendar();
       if(M365.events.length>0){
         calCtx='CALENDAR TODAY:\n'+M365.events.map(function(e){
-          var t=new Date(e.start).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
-          var et=new Date(e.end).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
+          var t=new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+          var et=new Date(e.end.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
           return '- '+t+' to '+et+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
         }).join('\n');
       } else {
@@ -1242,7 +1628,7 @@ async function send(){
   }
   if(M365.events.length>0){
     liveCtx+='\n\nCALENDAR TODAY (real data):\n'+M365.events.map(function(e){
-      return '- '+new Date(e.start).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})+' to '+new Date(e.end).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
+      return '- '+new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})+' to '+new Date(e.end.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
     }).join('\n');
   }
   if(SD.length>0){
@@ -1513,63 +1899,20 @@ var MODALS={
   }},
   'duty-risk':{title:'Risk framework governance',sub:'Policy, compliance posture, ISO 27001',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box"><div class="ab-title">Critical gap — action today</div><div class="ab-text">Incident escalation pathway has no owner. Must be resolved before May 12 ISO audit.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Create incident pathway';b1.onclick=function(){qa('Generate the incident escalation pathway process document for Risk 2 Solution for ISO 27001 compliance');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Risk governance checklist';b2.onclick=function(){qa('Generate a complete risk framework governance checklist for Kandia at Risk 2 Solution');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
   'duty-strategy':{title:'Strategy execution',sub:'Translate CEO vision into operational reality',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">This week</div><div class="ab-text">Q2 OKR mid-cycle review due. Platform v3.3 roadmap review next week.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Q2 OKR review template';b.onclick=function(){qa('Create a Q2 OKR mid-cycle review framework for Risk 2 Solution for Kandia');cm();};d.appendChild(b);return d;}},
-  'duty-clients':{title:'Client Delivery',sub:'Project tracking, client feedback, SLA, Monday.com',build:function(){
+  'duty-clients':{title:'Client Delivery',sub:'Project tracking, client feedback, Monday.com',build:function(){
     var d=document.createElement('div');
-    // Check emails related to clients
-    var clientEmails = M365.emails.filter(function(e){
-      var subj=(e.subject||'').toLowerCase();
-      var from=(e.from||'').toLowerCase();
-      return subj.includes('titan') || subj.includes('delta') || subj.includes('prentice') || subj.includes('onboard') || subj.includes('project') || subj.includes('delivery') || subj.includes('feedback');
-    });
-    d.innerHTML =
-      '<div class="mfield"><div class="mfl">Active clients</div><div class="mfv">Titan Corp (wk 2 onboarding) · Delta Inc (wk 6) · Prentice Group (pending)<br>Platform SLA: <strong>96.4%</strong> · 2 open incidents</div></div>'+
-      (clientEmails.length>0 ? '<div class="alert-box ok"><div class="ab-title">📧 '+clientEmails.length+' client-related email'+(clientEmails.length>1?'s':'')+' this week</div><div class="ab-text">'+clientEmails.slice(0,3).map(function(e){return e.from+': '+e.subject;}).join('<br>')+'</div></div>' : '')+
-      '<div class="alert-box warn"><div class="ab-title">🔌 Monday.com — project data</div><div class="ab-text">To pull live project tracking, add your MONDAY_API_KEY to Render environment variables. Then click the button below.</div></div>';
+    var clientEmails=M365.emails.filter(function(e){var s=(e.subject||'').toLowerCase();return s.includes('titan')||s.includes('delta')||s.includes('prentice')||s.includes('onboard')||s.includes('project')||s.includes('delivery')||s.includes('feedback');});
+    d.innerHTML='<div id="mondayStatus"><div style="font-size:12px;color:var(--t2);padding:8px 0;display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:var(--a);flex-shrink:0"></span><span>Loading Monday.com project data...</span></div></div>'+
+      (clientEmails.length>0?'<div class="alert-box ok" style="margin-top:8px"><div class="ab-title">📧 '+clientEmails.length+' client-related email'+(clientEmails.length>1?'s':'')+' this week</div><div class="ab-text">'+clientEmails.slice(0,3).map(function(e){return e.from+': '+e.subject;}).join('<br>')+'</div></div>':'');
     var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-    var buttons=[
-      ['📊 Project status summary','Summarise the status of all active client projects at Risk 2 Solution: Titan Corp (week 2 onboarding), Delta Inc (week 6), and Prentice Group (pending). Flag any risks, delays, or items needing Kandia attention. Include SLA status and any open incidents.'],
-      ['🔴 Risk & issues log','What are the current delivery risks and open issues across all client projects at Risk 2 Solution? What does Kandia need to do about each one?'],
-      ['💬 Client feedback summary','Summarise any client feedback, complaints or compliments received this month across all Risk 2 Solution clients. Flag anything requiring immediate action.'],
-      ['📧 Draft client update','Draft a professional project status update email for our active clients summarising progress and next steps.']
-    ];
-    buttons.forEach(function(pair){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=pair[0];b.onclick=function(){qa(pair[1]);cm();};d.appendChild(b);});
-    var bm=document.createElement('button');bm.className='m-btn';bm.style.cssText='background:#f96e08;display:block;width:100%;margin-top:4px';bm.textContent='🟧 Load Monday.com projects';bm.onclick=function(){
-      bm.textContent='Loading...';bm.disabled=true;
-      Promise.all([
-        fetch('/monday/projects').then(function(r){return r.json();}),
-        fetch('/monday/feedback').then(function(r){return r.json();})
-      ]).then(function(results){
-        var projectData=results[0];var feedbackData=results[1];
-        if(projectData.error){alert('Monday.com error: '+projectData.error);bm.textContent='🟧 Load Monday.com projects';bm.disabled=false;return;}
-        var boards=projectData.boards||[];
-        var feedback=feedbackData.feedback||[];
-        if(boards.length===0){alert('No Monday.com boards found. Check MONDAY_API_KEY in Render environment variables.');bm.textContent='🟧 Load Monday.com projects';bm.disabled=false;return;}
-        var ctx='MONDAY.COM DATA ('+new Date().toLocaleDateString('en-AU')+')\n\n';
-        boards.forEach(function(b){
-          ctx+='BOARD: '+b.name+' ('+( b.items_count||0)+' items)\n';
-          if(b.items&&b.items.length>0){
-            b.items.slice(0,30).forEach(function(item){
-              var cols=item.column_values?item.column_values.filter(function(cv){return cv.text&&cv.text.trim();}).map(function(cv){return cv.title+': '+cv.text;}).join(' | '):'';
-              ctx+='  - '+item.name+(item.state?' ['+item.state+']':'')+(cols?' | '+cols:'')+'\n';
-            });
-          }
-          ctx+='\n';
-        });
-        if(feedback.length>0){
-          ctx+='CLIENT FEEDBACK ('+feedback.length+' items):\n';
-          feedback.slice(0,20).forEach(function(item){
-            var cols=item.column_values?item.column_values.filter(function(cv){return cv.text&&cv.text.trim();}).map(function(cv){return cv.title+': '+cv.text;}).join(' | '):'';
-            ctx+='  - '+item.name+(cols?' | '+cols:'')+'\n';
-          });
-        }
-        cm();
-        qa('Here is my live Monday.com data from the Client Projects and Client Feedback boards. Please: (1) summarise all active projects and their current status, (2) flag anything overdue, at risk, or needing my attention, (3) summarise any client feedback themes, (4) tell me what actions I need to take.\n\n'+ctx.substring(0,3000));
-      }).catch(function(e){
-        alert('Monday.com error: '+e.message);
-        bm.textContent='🟧 Load Monday.com projects';bm.disabled=false;
-      });
-    };
-    d.appendChild(bm);
+    var eb=document.createElement('button');eb.className='m-btn';eb.style.cssText='background:#217346;display:block;width:100%;margin-bottom:8px';eb.textContent='📊 Export to Excel';eb.onclick=function(){exportMondayToExcel();};d.appendChild(eb);
+    var ab=document.createElement('button');ab.className='m-btn sec';ab.style.cssText='display:block;width:100%;margin-bottom:6px';ab.textContent='🤖 Full Cinderella analysis';ab.onclick=function(){analyseMondayData();cm();};d.appendChild(ab);
+    var rb=document.createElement('button');rb.className='m-btn sec';rb.style.cssText='display:block;width:100%;margin-bottom:6px';rb.textContent='🔄 Refresh data';rb.onclick=function(){loadMondayData();};d.appendChild(rb);
+    [['🔴 Flag risks and issues','What are the current delivery risks and open issues across all client projects? Flag what Kandia needs to do about each one.'],
+     ['💬 Client feedback summary','Summarise all client feedback themes from Monday.com. Flag anything requiring immediate action.'],
+     ['📧 Draft client status update','Draft a professional project status update email for active clients.']
+    ].forEach(function(p){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b);});
+    setTimeout(function(){loadMondayData();},200);
     return d;
   }},
   'duty-people':{title:'People & Culture',sub:'Staffing, check-ins, performance, 1:1s, KPIs',build:function(){
