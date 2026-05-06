@@ -245,11 +245,17 @@ app.get('/graph/emails/search', async (req, res) => {
 // ── CALENDAR: Get today's events ──
 app.get('/graph/calendar', async (req, res) => {
   try {
-    // Use Brisbane time for day boundaries
+    // Brisbane is UTC+10 (no daylight saving)
+    const BRISBANE_OFFSET_MS = 10 * 60 * 60 * 1000;
     const now = new Date();
-    const brisbane = new Date(now.toLocaleString('en-AU', { timeZone: 'Australia/Brisbane' }));
-    const startOfDay = new Date(brisbane.getFullYear(), brisbane.getMonth(), brisbane.getDate(), 0, 0, 0).toISOString();
-    const endOfDay   = new Date(brisbane.getFullYear(), brisbane.getMonth(), brisbane.getDate(), 23, 59, 59).toISOString();
+    // Shift now forward by 10h to get Brisbane's current date
+    const brisbaneNow = new Date(now.getTime() + BRISBANE_OFFSET_MS);
+    const y = brisbaneNow.getUTCFullYear();
+    const m = brisbaneNow.getUTCMonth();
+    const d = brisbaneNow.getUTCDate();
+    // Brisbane midnight in UTC = subtract 10h offset
+    const startOfDay = new Date(Date.UTC(y, m, d, 0, 0, 0) - BRISBANE_OFFSET_MS).toISOString();
+    const endOfDay   = new Date(Date.UTC(y, m, d, 23, 59, 59) - BRISBANE_OFFSET_MS).toISOString();
     const data = await graphGet(
       `/me/calendarView?startDateTime=${startOfDay}&endDateTime=${endOfDay}&$orderby=start/dateTime&$select=subject,start,end,location,attendees`,
       { 'Prefer': 'outlook.timezone="Australia/Brisbane"' }
@@ -451,9 +457,12 @@ async function think() {
           hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000),
           subject: m.subject
         }));
-        const now = new Date();
-        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-        const end   = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+        const BRISBANE_MS = 10 * 60 * 60 * 1000;
+        const nowT = new Date();
+        const brisNow = new Date(nowT.getTime() + BRISBANE_MS);
+        const ty = brisNow.getUTCFullYear(), tm = brisNow.getUTCMonth(), td = brisNow.getUTCDate();
+        const start = new Date(Date.UTC(ty, tm, td, 0, 0, 0) - BRISBANE_MS).toISOString();
+        const end   = new Date(Date.UTC(ty, tm, td, 23, 59, 59) - BRISBANE_MS).toISOString();
         const calData = await graphGet(`/me/calendarView?startDateTime=${start}&endDateTime=${end}&$select=subject,start,end`);
         calendarSummary = calData.value.map(e =>
           `${new Date(e.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})} — ${e.subject}`
