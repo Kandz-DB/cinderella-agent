@@ -101,10 +101,10 @@ async function getValidToken() {
 }
 
 // ── GRAPH API HELPER ──
-async function graphGet(path) {
+async function graphGet(path, extraHeaders = {}) {
   const token = await getValidToken();
   const response = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
-    headers: { Authorization: `Bearer ${token}` }
+    headers: { Authorization: `Bearer ${token}`, ...extraHeaders }
   });
   if (!response.ok) {
     const err = await response.json();
@@ -122,7 +122,8 @@ app.get('/graph/emails', async (req, res) => {
       `/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${fourteenDaysAgo}&$orderby=receivedDateTime desc&$top=80&$select=subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,conversationId`
     );
     const noReply = ['noreply','no-reply','donotreply','do-not-reply','mailer-daemon','notifications@','notification@','automated@','alerts@','alert@','newsletter','@bounce','postmaster','news@','updates@','subscriptions@','unsubscribe','no_reply'];
-    const skipKeywords = ['capcoal','unsubscribe','notification','automated message','out of office','auto-reply','autoreply'];
+    const skipKeywords = ['capcoal','unsubscribe','notification','automated message','out of office','auto-reply','autoreply','luxury escapes','island printing','special offer','limited time','click here','dear customer','dear valued','congratulations you','winner','prize','survey','feedback request','receipt for','payment confirmation','order confirmation','shipping confirmation','your order','invoice #','statement of account'];
+    const spamDomains = ['luxuryescapes','islandprinting','mailchimp','constantcontact','campaignmonitor','sendgrid','klaviyo','hubspot','marketo','pardot','salesforce.com/email'];
     const emails = data.value
       .filter(m => {
         const addr = (m.from?.emailAddress?.address || '').toLowerCase();
@@ -130,7 +131,8 @@ app.get('/graph/emails', async (req, res) => {
         const subj = (m.subject || '').toLowerCase();
         const body = (m.bodyPreview || '').toLowerCase();
         if (noReply.some(p => addr.includes(p))) return false;
-        if (skipKeywords.some(p => subj.includes(p) || addr.includes(p) || name.includes(p))) return false;
+        if (skipKeywords.some(p => subj.toLowerCase().includes(p) || addr.includes(p) || name.includes(p))) return false;
+        if (spamDomains.some(p => addr.includes(p))) return false;
         if (name.includes('automated') || name.includes('no reply') || name.includes('no-reply')) return false;
         return true;
       })
@@ -173,6 +175,50 @@ app.get('/graph/email/:id', async (req, res) => {
   }
 });
 
+
+// ── EMAILS: Read info@risk2solution.com shared mailbox ──
+app.get('/graph/info-emails', async (req, res) => {
+  try {
+    const fourteenDaysAgo = new Date(Date.now() - 14*24*60*60*1000).toISOString();
+    const data = await graphGet(
+      `/users/info@risk2solution.com/mailFolders/inbox/messages?$filter=receivedDateTime ge ${fourteenDaysAgo}&$orderby=receivedDateTime desc&$top=30&$select=subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments`
+    );
+    const noReply = ['noreply','no-reply','donotreply','mailer-daemon','notifications@','automated@','newsletter','@bounce'];
+    const skipKeywords = ['unsubscribe','capcoal','luxury escapes','island printing','special offer','out of office','auto-reply','automated'];
+    const spamDomains = ['luxuryescapes','islandprinting','mailchimp','constantcontact','sendgrid','klaviyo'];
+    const emails = (data.value || [])
+      .filter(m => {
+        const addr = (m.from?.emailAddress?.address || '').toLowerCase();
+        const subj = (m.subject || '').toLowerCase();
+        if (noReply.some(p => addr.includes(p))) return false;
+        if (skipKeywords.some(p => subj.includes(p) || addr.includes(p))) return false;
+        if (spamDomains.some(p => addr.includes(p))) return false;
+        return true;
+      })
+      .slice(0, 15)
+      .map(m => ({
+        id: m.id,
+        subject: m.subject,
+        from: m.from?.emailAddress?.name || m.from?.emailAddress?.address,
+        fromEmail: m.from?.emailAddress?.address,
+        received: m.receivedDateTime,
+        preview: m.bodyPreview?.substring(0, 200),
+        hasAttachments: m.hasAttachments || false,
+        isRead: m.isRead || false,
+        mailbox: 'info@risk2solution.com',
+        hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000)
+      }));
+    res.json({ emails });
+  } catch (err) {
+    // If shared mailbox access is denied, return helpful message
+    if (err.message.includes('ErrorAccessDenied') || err.message.includes('AuthenticationError')) {
+      res.status(403).json({ error: 'info@ mailbox access denied. Add Mail.ReadWrite.Shared permission in Azure and grant Kandia delegate access to the info@ mailbox.' });
+    } else {
+      res.status(500).json({ error: err.message });
+    }
+  }
+});
+
 // ── EMAILS: Search emails by topic (for meeting prep) ──
 app.get('/graph/emails/search', async (req, res) => {
   try {
@@ -199,11 +245,14 @@ app.get('/graph/emails/search', async (req, res) => {
 // ── CALENDAR: Get today's events ──
 app.get('/graph/calendar', async (req, res) => {
   try {
+    // Use Brisbane time for day boundaries
     const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const endOfDay   = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+    const brisbane = new Date(now.toLocaleString('en-AU', { timeZone: 'Australia/Brisbane' }));
+    const startOfDay = new Date(brisbane.getFullYear(), brisbane.getMonth(), brisbane.getDate(), 0, 0, 0).toISOString();
+    const endOfDay   = new Date(brisbane.getFullYear(), brisbane.getMonth(), brisbane.getDate(), 23, 59, 59).toISOString();
     const data = await graphGet(
-      `/me/calendarView?startDateTime=${startOfDay}&endDateTime=${endOfDay}&$orderby=start/dateTime&$select=subject,start,end,location,attendees`
+      `/me/calendarView?startDateTime=${startOfDay}&endDateTime=${endOfDay}&$orderby=start/dateTime&$select=subject,start,end,location,attendees`,
+      { 'Prefer': 'outlook.timezone="Australia/Brisbane"' }
     );
     const events = data.value.map(e => ({
       subject: e.subject,
@@ -284,14 +333,16 @@ app.get('/monday/projects', async (req, res) => {
         name
         state
         items_count
-        items(limit: 100) {
-          id
-          name
-          state
-          column_values {
+        items_page(limit: 100) {
+          items {
             id
-            title
-            text
+            name
+            state
+            column_values {
+              id
+              title
+              text
+            }
           }
         }
       }
@@ -309,7 +360,10 @@ app.get('/monday/projects', async (req, res) => {
     if (data.errors) return res.status(400).json({ error: data.errors[0]?.message || 'Monday.com error' });
 
     // Only return the approved boards — safety check
-    const boards = (data.data?.boards || []).filter(b => MONDAY_BOARD_IDS.includes(parseInt(b.id)));
+    const boards = (data.data?.boards || []).filter(b => MONDAY_BOARD_IDS.includes(parseInt(b.id))).map(b => ({
+      ...b,
+      items: b.items_page?.items || []
+    }));
     res.json({ boards });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -324,12 +378,14 @@ app.get('/monday/feedback', async (req, res) => {
     const query = `{
       boards(ids: [2031906973]) {
         name
-        items(limit: 50) {
-          id
-          name
-          column_values {
-            title
-            text
+        items_page(limit: 50) {
+          items {
+            id
+            name
+            column_values {
+              title
+              text
+            }
           }
         }
       }
@@ -345,7 +401,7 @@ app.get('/monday/feedback', async (req, res) => {
     });
     const data = await response.json();
     if (data.errors) return res.status(400).json({ error: data.errors[0]?.message });
-    res.json({ feedback: data.data?.boards?.[0]?.items || [] });
+    res.json({ feedback: data.data?.boards?.[0]?.items_page?.items || [] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -372,7 +428,7 @@ app.post('/proxy', async (req, res) => {
 });
 
 // ── SERVE DASHBOARD ──
-app.use(express.static('public'));
+app.use(express.static('.'));
 
 // ── THINK LOOP ──
 async function think() {
@@ -439,7 +495,6 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
 think();
 setInterval(think, 300000);
 
-app.use(express.static('.'));
 app.get("/status", (req, res) => {
   res.json(Object.keys(latestOutput).length === 0 ? { status: "initialising" } : latestOutput);
 });
