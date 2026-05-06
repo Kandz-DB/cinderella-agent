@@ -439,11 +439,8 @@ async function think() {
   if (isRunning) return;
   isRunning = true;
   try {
-    let emails = [
-      { sender: "Marcus Webb", hoursOld: 26, subject: "Vendor contract approval" },
-      { sender: "Karen Liu", hoursOld: 18, subject: "System access approval" }
-    ];
-    let calendarSummary = "No live calendar connected yet";
+    let emails = [];
+    let calendarSummary = "No calendar data yet";
 
     if (tokenStore.access_token) {
       try {
@@ -470,7 +467,7 @@ async function think() {
       }
     }
 
-    const staff = [{ name: "John", capacity: 92 }, { name: "Sarah", capacity: 55 }];
+    const staff = []; // Staff data comes from JSONBin check-ins
     const prompt = `You are Cinderella, an elite COO executive assistant. Analyse and return ONLY raw JSON with no markdown.
 Emails: ${JSON.stringify(emails)}
 Calendar today: ${calendarSummary}
