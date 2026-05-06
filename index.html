@@ -666,6 +666,15 @@ let msgs=[];
 let busy=false;
 let charts={};
 const AV_STYLES=['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
+const ALL_STAFF=[
+  {name:'Janita Zhang',email:'janita.z@risk2solution.com'},
+  {name:'Reinette Kruger',email:'reinette.k@risk2solution.com'},
+  {name:'Diane Kruger',email:'diane.k@risk2solution.com'},
+  {name:'Garima Arora',email:'garima.a@risk2solution.com'},
+  {name:'Paul Johnston',email:'paul.j@risk2solution.com'},
+  {name:'Dani Stevenson',email:'dani.s@risk2solution.com'},
+  {name:'Ross Mackenzie',email:'ross.m@risk2solution.com'}
+];
 
 
 /* ── MICROSOFT GRAPH LIVE DATA ── */
@@ -1113,8 +1122,8 @@ async function autoBriefing(){
       renderLiveCalendar();
       if(M365.events.length>0){
         calCtx='CALENDAR TODAY:\n'+M365.events.map(function(e){
-          var t=new Date(e.start).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
-          var et=new Date(e.end).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+          var t=new Date(e.start).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
+          var et=new Date(e.end).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
           return '- '+t+' to '+et+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
         }).join('\n');
       } else {
@@ -1233,7 +1242,7 @@ async function send(){
   }
   if(M365.events.length>0){
     liveCtx+='\n\nCALENDAR TODAY (real data):\n'+M365.events.map(function(e){
-      return '- '+new Date(e.start).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})+' to '+new Date(e.end).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
+      return '- '+new Date(e.start).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})+' to '+new Date(e.end).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
     }).join('\n');
   }
   if(SD.length>0){
@@ -1445,6 +1454,34 @@ function actionEfficiency(title,detail,staffInvolved){
   );
 }
 
+
+
+function getMissingCheckIns() {
+  var checked = SD.map(function(s){ return s.name.toLowerCase(); });
+  var missing = ALL_STAFF.filter(function(s){
+    var first = s.name.split(' ')[0].toLowerCase();
+    return !checked.some(function(n){ return n.includes(first); });
+  });
+  if (missing.length === 0) {
+    return '<div class="alert-box ok"><div class="ab-title">All staff have submitted check-ins this week</div></div>';
+  }
+  window._missingStaff = {};
+  var rows = missing.map(function(s, i) {
+    window._missingStaff[i] = s;
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid rgba(162,45,45,0.2)">' +
+      '<span>' + s.name + '</span>' +
+      '<button onclick="sendCheckinReminder(' + i + ')" style="font-size:9px;padding:2px 8px;border-radius:8px;background:#A32D2D;color:#fff;border:none;cursor:pointer;font-family:var(--f)">Send reminder</button>' +
+    '</div>';
+  }).join('');
+  return '<div class="alert-box"><div class="ab-title">' + missing.length + ' staff have not submitted their check-in this week</div><div class="ab-text" style="margin-top:6px">' + rows + '</div></div>';
+}
+
+function sendCheckinReminder(idx) {
+  var s = window._missingStaff && window._missingStaff[idx];
+  if (!s) return;
+  openDraftModal(s.name, 'Weekly check-in reminder', 'Action required: weekly check-in this week', 'email', s.email);
+}
+
 var MODALS={
   mtg:{title:'Meetings today',sub:'5 scheduled — 2 need prep',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">Needs prep</div><div class="ab-text">Risk framework review (09:30) and Titan Corp (11:00) — no prep blocks in calendar.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate full prep plan';b.onclick=function(){qa('Create a complete meeting prep plan for all of today\'s meetings for Kandia');cm();};d.appendChild(b);return d;}},
   pri:{title:'Open priorities',sub:'7 items — 2 urgent today',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box"><div class="ab-title">Vendor contract — Marcus Webb</div><div class="ab-text">26 hours overdue. Approve or respond today.</div></div><div class="alert-box warn"><div class="ab-title">Staff utilisation report — due 30 April</div><div class="ab-text">Collect check-in data from all 12 staff and submit before end of week.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Cinderella to prioritise';b.onclick=function(){qa('What are my top priorities this week and how should they be ordered?');cm();};d.appendChild(b);return d;}},
@@ -1497,13 +1534,40 @@ var MODALS={
     ];
     buttons.forEach(function(pair){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=pair[0];b.onclick=function(){qa(pair[1]);cm();};d.appendChild(b);});
     var bm=document.createElement('button');bm.className='m-btn';bm.style.cssText='background:#f96e08;display:block;width:100%;margin-top:4px';bm.textContent='🟧 Load Monday.com projects';bm.onclick=function(){
-      fetch('/monday/projects').then(function(r){return r.json();}).then(function(data){
-        if(data.error){alert('Monday.com error: '+data.error);return;}
-        var boards=data.data&&data.data.boards?data.data.boards:[];
-        if(boards.length===0){alert('No Monday.com boards found. Check your API key in Render environment variables.');return;}
-        qa('Here is my Monday.com project data: '+JSON.stringify(boards).substring(0,2000)+'. Please summarise all projects, their status, and flag anything needing my attention. Also identify any client feedback items.');
-      }).catch(function(e){alert('Monday.com not connected: '+e.message);});
-      cm();
+      bm.textContent='Loading...';bm.disabled=true;
+      Promise.all([
+        fetch('/monday/projects').then(function(r){return r.json();}),
+        fetch('/monday/feedback').then(function(r){return r.json();})
+      ]).then(function(results){
+        var projectData=results[0];var feedbackData=results[1];
+        if(projectData.error){alert('Monday.com error: '+projectData.error);bm.textContent='🟧 Load Monday.com projects';bm.disabled=false;return;}
+        var boards=projectData.boards||[];
+        var feedback=feedbackData.feedback||[];
+        if(boards.length===0){alert('No Monday.com boards found. Check MONDAY_API_KEY in Render environment variables.');bm.textContent='🟧 Load Monday.com projects';bm.disabled=false;return;}
+        var ctx='MONDAY.COM DATA ('+new Date().toLocaleDateString('en-AU')+')\n\n';
+        boards.forEach(function(b){
+          ctx+='BOARD: '+b.name+' ('+( b.items_count||0)+' items)\n';
+          if(b.items&&b.items.length>0){
+            b.items.slice(0,30).forEach(function(item){
+              var cols=item.column_values?item.column_values.filter(function(cv){return cv.text&&cv.text.trim();}).map(function(cv){return cv.title+': '+cv.text;}).join(' | '):'';
+              ctx+='  - '+item.name+(item.state?' ['+item.state+']':'')+(cols?' | '+cols:'')+'\n';
+            });
+          }
+          ctx+='\n';
+        });
+        if(feedback.length>0){
+          ctx+='CLIENT FEEDBACK ('+feedback.length+' items):\n';
+          feedback.slice(0,20).forEach(function(item){
+            var cols=item.column_values?item.column_values.filter(function(cv){return cv.text&&cv.text.trim();}).map(function(cv){return cv.title+': '+cv.text;}).join(' | '):'';
+            ctx+='  - '+item.name+(cols?' | '+cols:'')+'\n';
+          });
+        }
+        cm();
+        qa('Here is my live Monday.com data from the Client Projects and Client Feedback boards. Please: (1) summarise all active projects and their current status, (2) flag anything overdue, at risk, or needing my attention, (3) summarise any client feedback themes, (4) tell me what actions I need to take.\n\n'+ctx.substring(0,3000));
+      }).catch(function(e){
+        alert('Monday.com error: '+e.message);
+        bm.textContent='🟧 Load Monday.com projects';bm.disabled=false;
+      });
     };
     d.appendChild(bm);
     return d;
@@ -1516,7 +1580,7 @@ var MODALS={
     var hasCheckIn = checkInMeetings.length > 0;
     d.innerHTML =
       (hasCheckIn ? '<div class="alert-box ok"><div class="ab-title">📅 Check-in meeting today</div><div class="ab-text">'+checkInMeetings.map(function(e){return e.subject;}).join(', ')+'</div></div>' : '<div class="alert-box warn"><div class="ab-title">No check-in meetings scheduled today</div><div class="ab-text">Consider scheduling 1:1s with your team.</div></div>') +
-      (SD.length>0 ? '<div class="mfield"><div class="mfl">Staff without check-ins this week</div><div class="mfv" style="color:var(--r)">'+( 12-SD.length)+' of 12 staff have not submitted their weekly check-in</div></div>' : '<div class="mfield"><div class="mfl">Check-ins</div><div class="mfv" style="color:var(--a)">No check-ins received this week — send the form to all staff</div></div>');
+      getMissingCheckIns();
     var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
     var buttons=[
       ['Generate action plan','Generate a complete people and culture action plan for Kandia this week at Risk 2 Solution based on staff check-in data'],
@@ -1543,7 +1607,21 @@ var MODALS={
       return subj.includes('finance') || subj.includes('p&l') || subj.includes('budget') || subj.includes('diane') || subj.includes('nicole');
     });
     d.innerHTML =
-      (financeEmails.length>0 ? '<div class="alert-box ok"><div class="ab-title">📧 '+financeEmails.length+' finance-related email'+(financeEmails.length>1?'s':'')+' this week</div><div class="ab-text">'+financeEmails.map(function(e){return e.from+': '+e.subject;}).join('<br>')+'</div></div>' : '<div class="alert-box warn"><div class="ab-title">No finance emails from Diane or Nicole this week</div><div class="ab-text">Consider requesting a P&amp;L update.</div></div>') +
+      (financeEmails.length>0 ?
+      '<div class="alert-box ok"><div class="ab-title">📧 '+financeEmails.length+' finance-related email'+(financeEmails.length>1?'s':'')+' this week</div>'+
+      '<div class="ab-text" style="margin-top:6px">'+financeEmails.map(function(e){
+        var outlookUrl='https://outlook.office.com/mail/inbox';
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.08)">'+
+          '<span style="flex:1;min-width:0"><strong>'+e.from+'</strong><br><span style="font-size:10px">'+e.subject+'</span></span>'+
+          '<div style="display:flex;gap:4px;margin-left:8px;flex-shrink:0">'+
+            '<button onclick="window.open(\''+outlookUrl+'\',\'_blank\')" style="font-size:9px;padding:2px 8px;border-radius:8px;background:#0078D4;color:#fff;border:none;cursor:pointer;font-family:var(--f)">Open</button>'+
+            '<button onclick="openDraftModal(\''+e.from+'\',\'Reply to finance email: '+e.subject.replace(/'/g,'')+'\',' +
+              '\'Re: '+e.subject.replace(/'/g,'')+'\',' +
+              '\'email\',\''+e.fromEmail+'\')" style="font-size:9px;padding:2px 8px;border-radius:8px;background:var(--g);color:#fff;border:none;cursor:pointer;font-family:var(--f)">Reply</button>'+
+          '</div>'+
+        '</div>';
+      }).join('')+'</div></div>'
+      : '<div class="alert-box warn"><div class="ab-title">No finance emails from Diane or Nicole this week</div><div class="ab-text">Consider requesting a P&amp;L update.</div></div>') +
       (financeMeetings.length>0 ? '<div class="alert-box ok"><div class="ab-title">📅 Finance meeting today: '+financeMeetings[0].subject+'</div></div>' : '');
     var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
     var b1=document.createElement('button');b1.className='m-btn';b1.style.marginBottom='6px';b1.textContent='📊 Summarise finance update';b1.onclick=function(){qa('Based on any finance-related emails and information available, give Kandia a summary of the current financial position at Risk 2 Solution including P&L, outstanding debt collection, and any cash flow concerns.');cm();};d.appendChild(b1);
