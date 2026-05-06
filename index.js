@@ -271,18 +271,81 @@ app.get('/graph/teams', async (req, res) => {
 });
 
 
-// ── MONDAY.COM: Get project boards ──
+// ── MONDAY.COM: Get approved boards only ──
+const MONDAY_BOARD_IDS = [2031906973, 2005758439]; // Project/Client Feedback + Client Projects ONLY
+
 app.get('/monday/projects', async (req, res) => {
   const apiKey = process.env.MONDAY_API_KEY;
   if (!apiKey) return res.status(400).json({ error: 'MONDAY_API_KEY not configured in Render environment variables' });
   try {
+    const query = `{
+      boards(ids: [2031906973, 2005758439]) {
+        id
+        name
+        state
+        items_count
+        items(limit: 100) {
+          id
+          name
+          state
+          column_values {
+            id
+            title
+            text
+          }
+        }
+      }
+    }`;
     const response = await fetch('https://api.monday.com/v2', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
-      body: JSON.stringify({ query: `{ boards(limit:20) { id name state items_count groups { id title } items(limit:50) { id name state column_values { id text } } } }` })
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+        'API-Version': '2024-01'
+      },
+      body: JSON.stringify({ query })
     });
     const data = await response.json();
-    res.json(data);
+    if (data.errors) return res.status(400).json({ error: data.errors[0]?.message || 'Monday.com error' });
+
+    // Only return the approved boards — safety check
+    const boards = (data.data?.boards || []).filter(b => MONDAY_BOARD_IDS.includes(parseInt(b.id)));
+    res.json({ boards });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── MONDAY.COM: Get client feedback only ──
+app.get('/monday/feedback', async (req, res) => {
+  const apiKey = process.env.MONDAY_API_KEY;
+  if (!apiKey) return res.status(400).json({ error: 'MONDAY_API_KEY not configured' });
+  try {
+    const query = `{
+      boards(ids: [2031906973]) {
+        name
+        items(limit: 50) {
+          id
+          name
+          column_values {
+            title
+            text
+          }
+        }
+      }
+    }`;
+    const response = await fetch('https://api.monday.com/v2', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+        'API-Version': '2024-01'
+      },
+      body: JSON.stringify({ query })
+    });
+    const data = await response.json();
+    if (data.errors) return res.status(400).json({ error: data.errors[0]?.message });
+    res.json({ feedback: data.data?.boards?.[0]?.items || [] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -376,7 +439,6 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
 think();
 setInterval(think, 300000);
 
-app.use(express.static('.'));
 app.get("/status", (req, res) => {
   res.json(Object.keys(latestOutput).length === 0 ? { status: "initialising" } : latestOutput);
 });
