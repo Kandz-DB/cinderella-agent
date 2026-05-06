@@ -393,16 +393,12 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
         <div class="met" onclick="omKey('mtg')"><div class="ml">Meetings today</div><div class="mv" id="todayMtgCount">—</div><div class="ms" id="todayMtgSub">Loading...</div></div>
         <div class="met" onclick="show('email',document.querySelector('[onclick*=email]'))"><div class="ml">Unanswered emails</div><div class="mv" id="todayEmailCount" style="color:var(--r)">—</div><div class="ms" id="todayEmailSub">Loading...</div></div>
         <div class="met" onclick="show('staff',document.querySelector('[onclick*=staff]'))"><div class="ml">Check-ins received</div><div class="mv" id="todayCount" style="color:var(--a)">0</div><div class="ms">of 12 this week</div></div>
-        <div class="met" onclick="omKey('pri')"><div class="ml">Open priorities</div><div class="mv">7</div><div class="ms">2 high urgency</div></div>
+        <div class="met" onclick="refreshTodayPriorities()"><div class="ml">Open priorities</div><div class="mv" id="todayPriCount">—</div><div class="ms">from your inbox</div></div>
       </div>
       <div class="two">
         <div class="card">
-          <div id="liveCalendar" style="display:none"></div><div class="ct">Today's schedule <span class="ct-action" onclick="qa('Create a prep plan for all of my meetings today')">Generate prep plan</span></div>
-          <div class="row" onclick="omKey('standup')"><div class="mtime">08:30</div><div><div class="mt">Leadership stand-up</div><div class="mm">15 min · Teams · Recurring</div><span class="tag to">Operations</span></div></div>
-          <div class="row" onclick="omKey('risk')"><div class="mtime">09:30</div><div><div class="mt">Risk framework review</div><div class="mm">60 min · Board room · J. Ellis, S. Patel</div><span class="tag tr">Risk</span></div></div>
-          <div class="row" onclick="omKey('titan')"><div class="mtime">11:00</div><div><div class="mt">Client onboarding — Titan Corp</div><div class="mm">45 min · Zoom · External</div><span class="tag te">External</span></div></div>
-          <div class="row" onclick="omKey('q2')"><div class="mtime">14:00</div><div><div class="mt">Q2 ops review + KPI deep-dive</div><div class="mm">90 min · Conf room A</div><span class="tag to">Operations</span></div></div>
-          <div class="row" onclick="omKey('11')"><div class="mtime">16:00</div><div><div class="mt">1:1 — People &amp; Culture lead</div><div class="mm">30 min · Office</div><span class="tag th">People</span></div></div>
+          <div id="liveCalendar"></div><div class="ct">Today's schedule <span class="ct-action" onclick="qa('Create a prep plan for all of my meetings today')">Generate prep plan</span></div>
+          <div id="staticCalendar"><div style="font-size:12px;color:var(--t3);padding:12px 0;text-align:center">Connecting to your calendar...</div></div>
         </div>
         <div>
           <div class="card">
@@ -428,16 +424,15 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
         <div>
           <div class="card">
             <div id="liveEmailList"></div><div class="ct">Needs your reply <span class="ct-action" onclick="qa('Draft replies to all my overdue emails')">Draft all replies</span></div>
-            <div class="erow" onclick="omKey('email-marcus')"><div class="ei"><div class="ef">Marcus Webb</div><div class="es">Vendor contract approval</div></div><div class="ea">26h <span class="eu">Overdue</span></div></div>
-            <div class="erow" onclick="omKey('email-karen')"><div class="ei"><div class="ef">Karen Liu</div><div class="es">System access approval</div></div><div class="ea">18h</div></div>
-            <div class="erow" onclick="omKey('email-david')"><div class="ei"><div class="ef">David Park</div><div class="es">Board pack — COO narrative</div></div><div class="ea">5h</div></div>
-            <div class="erow" onclick="omKey('email-sofia')"><div class="ei"><div class="ef">Sofia Ng</div><div class="es">Process audit findings</div></div><div class="ea">3h</div></div>
+            
+            
+            
+            
           </div>
           <div id="infoEmailList"></div>
           <div class="card">
             <div class="ct">Watching — awaiting replies</div>
-            <div class="erow" onclick="omKey('email-titan')"><div class="ei"><div class="ef">Titan Corp</div><div class="es">Onboarding checklist</div></div><div class="ea">2 days</div></div>
-            <div class="erow" onclick="omKey('email-hr')"><div class="ei"><div class="ef">HR Team</div><div class="es">Policy update sign-off</div></div><div class="ea">3 days</div></div>
+            <div style="font-size:12px;color:var(--t3);padding:8px 0">Live email data loading from Outlook...</div>
           </div>
         </div>
         <div>
