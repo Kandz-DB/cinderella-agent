@@ -1148,7 +1148,7 @@ function exportMondayToExcel() {
     var allCols = [];
     items.forEach(function(item) {
       (item.column_values || []).forEach(function(cv) {
-        if (cv.title && !allCols.includes(cv.title)) allCols.push(cv.title);
+        if (cv.title && !allCols.includes(cv.id)) allCols.push(cv.id);
       });
     });
 
@@ -1164,7 +1164,9 @@ function exportMondayToExcel() {
       rows.push(row);
     });
 
-    var ws = XLSX.utils.aoa_to_sheet(rows);
+    // Convert column ids to readable headers
+rows[0] = rows[0].map(function(h){ return h.replace(/_/g,' ').replace(/\b\w/g, function(l){ return l.toUpperCase(); }); });
+var ws = XLSX.utils.aoa_to_sheet(rows);
     // Set column widths
     ws['!cols'] = headers.map(function(){ return { wch: 20 }; });
     var sheetName = b.name.substring(0, 31); // Excel sheet name limit
@@ -1176,7 +1178,7 @@ function exportMondayToExcel() {
     var allFbCols = [];
     mondayData.feedback.forEach(function(item) {
       (item.column_values || []).forEach(function(cv) {
-        if (cv.title && !allFbCols.includes(cv.title)) allFbCols.push(cv.title);
+        if (cv.title && !allFbCols.includes(cv.id)) allFbCols.push(cv.id);
       });
     });
     var fbHeaders = ['Item Name'].concat(allFbCols);
