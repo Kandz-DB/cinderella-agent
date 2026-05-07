@@ -79,8 +79,8 @@ app.get('/logout', (req, res) => {
 
 // Auth middleware — protect everything except /login
 function requireAuth(req, res, next) {
-  // Allow login routes through
-  if (req.path === '/login' || req.path === '/logout') return next();
+  // Allow login, logout and checkin through without password
+  if (req.path === '/login' || req.path === '/logout' || req.path === '/checkin') return next();
   // Check session cookie
   const cookie = req.headers.cookie || '';
   const match = cookie.match(/cin_session=([^;]+)/);
@@ -88,6 +88,11 @@ function requireAuth(req, res, next) {
   // Not authenticated - redirect to login
   res.redirect('/login');
 }
+
+// ── STAFF CHECK-IN (public — no password) ──
+app.get('/checkin', (req, res) => {
+  res.sendFile('checkin.html', { root: '.' });
+});
 
 app.use(requireAuth);
 
