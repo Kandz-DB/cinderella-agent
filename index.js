@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "crypto";
 const app = express();
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -13,7 +14,7 @@ let isRunning = false;
 
 // ── SIMPLE PASSWORD PROTECTION ──
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'changeme';
-const SESSION_TOKEN = require('crypto').randomBytes(32).toString('hex');
+const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
 const activeSessions = new Set();
 
 // Login page
@@ -58,7 +59,7 @@ app.get('/login', (req, res) => {
 // Handle login form submission
 app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
   if (req.body.password === DASHBOARD_PASSWORD) {
-    const token = require('crypto').randomBytes(16).toString('hex');
+    const token = crypto.randomBytes(16).toString('hex');
     activeSessions.add(token);
     res.setHeader('Set-Cookie', `cin_session=${token}; Path=/; HttpOnly; Max-Age=86400`);
     res.redirect('/');
