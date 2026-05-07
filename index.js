@@ -11,6 +11,85 @@ const PORT = process.env.PORT || 3000;
 let latestOutput = {};
 let isRunning = false;
 
+// ── SIMPLE PASSWORD PROTECTION ──
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'changeme';
+const SESSION_TOKEN = require('crypto').randomBytes(32).toString('hex');
+const activeSessions = new Set();
+
+// Login page
+app.get('/login', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Cinderella — Login</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#0A7A7A,#5DCFC9 50%,#F4C0D1);min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .box{background:#fff;border-radius:20px;padding:40px;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,0.15)}
+    .logo{font-family:Georgia,serif;font-size:28px;color:#0A7A7A;font-style:italic;text-align:center;margin-bottom:6px}
+    .sub{font-size:12px;color:#9a9994;text-align:center;margin-bottom:28px;letter-spacing:.06em;text-transform:uppercase}
+    input{width:100%;border:1px solid #e0e0e0;border-radius:10px;padding:12px 14px;font-size:14px;margin-bottom:14px;outline:none;transition:border-color .2s}
+    input:focus{border-color:#0A7A7A}
+    button{width:100%;background:linear-gradient(90deg,#0A7A7A,#0E9E9E);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:500;cursor:pointer}
+    button:hover{opacity:.9}
+    .err{color:#E24B4A;font-size:12px;text-align:center;margin-bottom:10px;display:none}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="logo">Cinderella</div>
+    <div class="sub">Executive Assistant · Risk 2 Solution</div>
+    <div class="err" id="err">Incorrect password. Please try again.</div>
+    <form method="POST" action="/login">
+      <input type="password" name="password" placeholder="Enter password" autofocus />
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+  <script>
+    if (window.location.search.includes('error')) {
+      document.getElementById('err').style.display = 'block';
+    }
+  </script>
+</body>
+</html>`);
+});
+
+// Handle login form submission
+app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
+  if (req.body.password === DASHBOARD_PASSWORD) {
+    const token = require('crypto').randomBytes(16).toString('hex');
+    activeSessions.add(token);
+    res.setHeader('Set-Cookie', \`cin_session=\${token}; Path=/; HttpOnly; Max-Age=86400\`);
+    res.redirect('/');
+  } else {
+    res.redirect('/login?error=1');
+  }
+});
+
+// Logout
+app.get('/logout', (req, res) => {
+  const cookie = req.headers.cookie || '';
+  const match = cookie.match(/cin_session=([^;]+)/);
+  if (match) activeSessions.delete(match[1]);
+  res.setHeader('Set-Cookie', 'cin_session=; Path=/; Max-Age=0');
+  res.redirect('/login');
+});
+
+// Auth middleware — protect everything except /login
+function requireAuth(req, res, next) {
+  // Allow login routes through
+  if (req.path === '/login' || req.path === '/logout') return next();
+  // Check session cookie
+  const cookie = req.headers.cookie || '';
+  const match = cookie.match(/cin_session=([^;]+)/);
+  if (match && activeSessions.has(match[1])) return next();
+  // Not authenticated - redirect to login
+  res.redirect('/login');
+}
+
+app.use(requireAuth);
+
 // ── MICROSOFT GRAPH CONFIG ──
 const TENANT_ID     = process.env.AZURE_TENANT_ID;
 const CLIENT_ID     = process.env.AZURE_CLIENT_ID;
