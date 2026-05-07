@@ -60,7 +60,7 @@ app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
   if (req.body.password === DASHBOARD_PASSWORD) {
     const token = require('crypto').randomBytes(16).toString('hex');
     activeSessions.add(token);
-    res.setHeader('Set-Cookie', \`cin_session=\${token}; Path=/; HttpOnly; Max-Age=86400\`);
+    res.setHeader('Set-Cookie', `cin_session=${token}; Path=/; HttpOnly; Max-Age=86400`);
     res.redirect('/');
   } else {
     res.redirect('/login?error=1');
