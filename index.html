@@ -2014,10 +2014,20 @@ async function send(){
   inp.value='';resize(inp);
 
   // Build live context from real M365 data + staff check-ins
+  // Build full week date reference so Cinderella picks correct dates
   var now = new Date();
-  var todayStr = now.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Australia/Brisbane'});
-  var liveCtx='TODAY IS: ' + todayStr + ' (Brisbane AEST)\n';
-  liveCtx += 'When calculating dates like "next Tuesday", count from today\'s date above.\n\n';
+  var brisbaneNow = new Date(now.toLocaleString('en-US', {timeZone:'Australia/Brisbane'}));
+  var todayStr = brisbaneNow.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  var liveCtx = 'TODAY IS: ' + todayStr + ' (Brisbane AEST)\n';
+  liveCtx += 'DATE REFERENCE — use these exact dates when scheduling:\n';
+  var dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  for (var di = 0; di < 14; di++) {
+    var futureDate = new Date(brisbaneNow);
+    futureDate.setDate(brisbaneNow.getDate() + di);
+    var dayLabel = di === 0 ? 'Today' : di === 1 ? 'Tomorrow' : futureDate.toLocaleDateString('en-AU',{weekday:'long'});
+    liveCtx += dayLabel + ' = ' + futureDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'}) + '\n';
+  }
+  liveCtx += 'IMPORTANT: Always use the exact date from the reference above — never guess the date from the day name alone.\n\n';
   if(M365.emails.length>0){
     liveCtx+='\n\nLIVE EMAILS (unread, real data from Outlook):\n'+M365.emails.slice(0,15).map(function(e){
       return '- FROM: '+e.from+(e.fromEmail?' <'+e.fromEmail+'>':'')+' | '+e.hoursOld+'h ago'+(e.hasAttachments?' [HAS ATTACHMENT]':'')+' | SUBJECT: '+e.subject+(e.preview?' | PREVIEW: '+e.preview:'');
@@ -2073,7 +2083,8 @@ function addMsg(role,text){
     var idx = Object.keys(window._pendingMeetings||{}).length;
     window._pendingMeetings = window._pendingMeetings || {};
     window._pendingMeetings[idx] = scheduleData;
-    var startStr = scheduleData.start ? new Date(scheduleData.start).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+    var startDate = scheduleData.start ? new Date(scheduleData.start) : null;
+    var startStr = startDate ? startDate.toLocaleString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long',day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
     schedBtn = '<div style="margin-top:10px;background:var(--bl2);border-radius:var(--rm);padding:10px 12px">' +
       '<div style="font-size:11px;font-weight:500;color:#185FA5;margin-bottom:6px">📅 Ready to create in your calendar:</div>' +
       '<div style="font-size:11px;color:var(--t1);margin-bottom:8px"><strong>' + (scheduleData.subject||'Meeting') + '</strong><br>' + startStr + '<br>With: ' + (scheduleData.attendees||[]).join(', ') + '</div>' +
