@@ -1348,6 +1348,11 @@ function showMonthFromBtn(btn) {
 
 function showMonth(monthKey, byMonth) {
   window._currentMonthKey = monthKey;
+  if (byMonth) window._allMonthData = byMonth;
+  renderMonthContent(monthKey);
+}
+function _showMonthOld(monthKey, byMonth) {
+  window._currentMonthKey = monthKey;
   var data = byMonth || window._allMonthData || {};
   document.querySelectorAll('.month-tab').forEach(function(t) {
     t.classList.toggle('active', t.textContent === getMonthLabel(monthKey));
@@ -1647,24 +1652,38 @@ function openStaffModal(idx){
   const st=sorted[idx];
   if(!st)return;
   const pct=st.capacity||0;
+  const pctNext=st.capacityNext||0;
   const matches=findMatches().filter(m=>m.busy.name===st.name||m.free.name===st.name);
-  let matchHtml=matches.length>0?`<div class="mfl" style="margin-top:12px">Skill match alerts</div>`+matches.map(m=>`<div class="alert-box ok" style="margin-bottom:6px"><div class="ab-title">${m.busy.name===st.name?`Support available from ${m.free.name} (${m.free.capacity}%)`:`Can support ${m.busy.name} (${m.busy.capacity}%)`}</div><div class="ab-text">Shared skills: ${m.shared.join(', ')}</div></div>`).join(''):'';
-  openModal(cap(st.name),`${cap(st.role)||'Staff member'} · ${pct}% capacity · ${st.weekEnding||''}`,
-    `<div class="mfield"><div class="mfl">Capacity</div><div style="display:flex;align-items:center;gap:10px"><div class="bw" style="flex:1;height:8px"><div class="bar ${bc(pct)}" style="width:${pct}%"></div></div><strong>${pct}%</strong></div></div>
-    <div class="mfield"><div class="mfl">Workload trend</div><div class="mfv">${st.trend||'—'}</div></div>
-    <div class="mfield"><div class="mfl">Current projects</div><div class="mfv">${st.projects||'—'}</div></div>
-    <div class="mfield"><div class="mfl">Skills</div><div class="mfv">${(st.skills||'').split(',').filter(x=>x.trim()).map(s=>`<span class="mfv-tag" style="background:var(--gl);color:#0F6E56">${s.trim()}</span>`).join('')||'—'}</div></div>
-    <div class="mfield"><div class="mfl">Availability</div><div class="mfv">${st.availability||'Full week'}${st.leave?` — ${st.leave}`:''}</div></div>
-    ${st.blockers?`<div class="mfield"><div class="mfl">Blocker</div><div class="mfv" style="color:var(--r)">${st.blockers}</div></div>`:''}
-    ${st.notes?`<div class="mfield"><div class="mfl">Notes to COO</div><div class="mfv">${st.notes}</div></div>`:''}
-    ${matchHtml}
-    <hr class="m-divider">
-    <button class="m-btn" onclick="openDraftModal('${st.name}','Check in on workload — they are at ${pct}% capacity this week','Checking in — how can I support you?','email')">✉ Email ${st.name}</button>
-    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${st.name}','1:1 check-in — capacity and workload discussion','1:1 — workload check-in','meeting')">📅 Schedule 1:1</button>
-    ${st.blockers?`<button class="m-btn sec" onclick="actionBlocker('${st.name}','${(st.blockers||'').replace(/'/g,"\\'")}')">🚧 Resolve blocker →</button>`:''}
-    ${matches.length>0?`<button class="m-btn sec" onclick="show('skills',null);closeModal()">View skill matches</button>`:''}`
-  );
+  const matchHtml=matches.length>0?'<div class="mfl" style="margin-top:12px">Skill match alerts</div>'+
+    matches.map(m=>'<div class="alert-box ok" style="margin-bottom:6px"><div class="ab-title">'+(m.busy.name===st.name?'Support available from '+m.free.name+' ('+m.free.capacity+'%)':'Can support '+m.busy.name+' ('+m.busy.capacity+'%)')+'</div><div class="ab-text">Shared skills: '+m.shared.join(', ')+'</div></div>').join(''):'';
+
+  var html=
+    '<div class="mfield"><div class="mfl">This week — capacity</div>'+
+    '<div style="display:flex;align-items:center;gap:10px"><div class="bw" style="flex:1;height:8px"><div class="bar '+bc(pct)+'" style="width:'+pct+'%"></div></div><strong style="color:'+(pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)')+'">'+pct+'%</strong></div></div>'+
+    (pctNext?'<div class="mfield"><div class="mfl">Next week — forecast capacity</div>'+
+    '<div style="display:flex;align-items:center;gap:10px"><div class="bw" style="flex:1;height:8px"><div class="bar '+bc(pctNext)+'" style="width:'+pctNext+'%"></div></div><strong style="color:'+(pctNext>=85?'var(--r)':pctNext>=70?'var(--a)':'var(--g)')+'">'+pctNext+'%</strong></div></div>':'')+
+    '<div class="mfield"><div class="mfl">Workload trend vs last week</div><div class="mfv">'+(st.trend||'—')+'</div></div>'+
+    '<div class="mfield"><div class="mfl">Projects this week</div><div class="mfv">'+(st.projects||'—')+'</div></div>'+
+    (st.blockers?'<div class="mfield"><div class="mfl">Blockers</div><div class="mfv" style="color:var(--r)">'+st.blockers+'</div></div>':'')+
+    '<div class="mfield"><div class="mfl">Skills</div><div class="mfv">'+((st.skills||'').split(',').filter(x=>x.trim()).map(s=>'<span class="mfv-tag" style="background:var(--gl);color:#0F6E56">'+s.trim()+'</span>').join('')||'—')+'</div></div>'+
+    '<div class="mfield"><div class="mfl">Availability next week</div><div class="mfv">'+(st.availability||'Full week')+(st.leave?' — '+st.leave:'')+'</div></div>'+
+    (st.notes?'<div class="mfield"><div class="mfl">Notes to COO</div><div class="mfv">'+st.notes+'</div></div>':'')+
+    '<div class="mfield"><div class="mfl">Submitted</div><div class="mfv" style="color:var(--t3)">'+(st.submitted?new Date(st.submitted).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'Unknown')+'</div></div>'+
+    matchHtml+
+    '<hr class="m-divider">'+
+    '<div style="display:flex;flex-wrap:wrap;gap:6px">'+
+    '<button class="m-btn" onclick="staffAction(0)">✉ Email</button>'+
+    '<button class="m-btn" style="background:#217346" onclick="staffAction(1)">📅 1:1</button>'+
+    (st.blockers?'<button class="m-btn sec" onclick="staffAction(2)">🚧 Blocker</button>':'')+
+    (matches.length>0?'<button class="m-btn sec" onclick="staffAction(3)">Skill matches</button>':'')+
+    '</div>'+
+    '<hr class="m-divider">'+
+    '<button class="m-btn sec" style="color:var(--r);border-color:var(--r);width:100%;margin-top:4px" onclick="staffAction(4)">🗑 Delete this check-in</button>';
+
+  window._currentStaff = st;
+  openModal(cap(st.name), (cap(st.role)||'Staff member')+' · Week ending '+(st.weekEnding||''), html);
 }
+
 
 function parseSkills(str){return(str||'').split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);}
 
@@ -2174,6 +2193,175 @@ function sendCheckinReminder(idx) {
   var s = window._missingStaff && window._missingStaff[idx];
   if (!s) return;
   openDraftModal(s.name, 'Weekly check-in reminder', 'Action required: weekly check-in this week', 'email', s.email);
+}
+
+
+// ── DELETE CHECK-IN ──
+async function deleteCheckIn(name, weekEnding) {
+  if (!confirm('Delete check-in for ' + name + ' (week ending ' + weekEnding + ')? This cannot be undone.')) return;
+  if (!C.bin || !C.key) { alert('JSONBin not configured'); return; }
+  try {
+    const r = await fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } });
+    const d = await r.json();
+    const existing = (Array.isArray(d.record) ? d.record : []).filter(function(e) {
+      return !(e.name && e.name.toLowerCase() === name.toLowerCase() && e.weekEnding === weekEnding);
+    });
+    const put = await fetch('https://api.jsonbin.io/v3/b/' + C.bin, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Master-Key': C.key },
+      body: JSON.stringify(existing)
+    });
+    if (!put.ok) throw new Error('Save failed');
+    closeModal();
+    await syncNow();
+    alert('Check-in deleted successfully.');
+  } catch(e) {
+    alert('Could not delete: ' + e.message);
+  }
+}
+
+// ── MONTH METRICS CLICK — show who is in each category ──
+function showMonthMetricDetail(type) {
+  var monthKey = window._currentMonthKey || '';
+  var data = window._allMonthData || {};
+  var subs = data[monthKey] || [];
+  var byWeek = groupByWeek(subs);
+  var weeks = Object.keys(byWeek).sort().reverse();
+
+  if (type === 'overloaded') {
+    var overWeeks = weeks.filter(function(w) { return calcWeekStats(byWeek[w]).overloaded > 0; });
+    var html = overWeeks.map(function(w) {
+      var over = byWeek[w].filter(function(s) { return s.capacity >= 85; });
+      return '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:500;color:var(--t3);margin-bottom:4px">Week ending ' + new Date(w).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) + '</div>' +
+        over.map(function(s) {
+          return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:0.5px solid var(--bl)"><span style="flex:1">' + cap(s.name) + ' (' + (s.role||'staff') + ')</span><span style="font-weight:500;color:var(--r)">' + s.capacity + '%</span></div>';
+        }).join('') + '</div>';
+    }).join('');
+    openModal('Overloaded staff — ' + getMonthLabel(monthKey), 'Weeks where capacity was above 85%', html || '<div style="color:var(--t3);padding:8px 0">No overloaded staff this month.</div>');
+
+  } else if (type === 'blockers') {
+    var html2 = weeks.map(function(w) {
+      var bl = byWeek[w].filter(function(s) { return hasBlocker(s.blockers); });
+      if (!bl.length) return '';
+      return '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:500;color:var(--t3);margin-bottom:4px">Week ending ' + new Date(w).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) + '</div>' +
+        bl.map(function(s) {
+          return '<div style="padding:6px 0;border-bottom:0.5px solid var(--bl)"><strong>' + cap(s.name) + '</strong><div style="font-size:11px;color:var(--a);margin-top:2px">' + s.blockers + '</div></div>';
+        }).join('') + '</div>';
+    }).join('');
+    openModal('Blockers — ' + getMonthLabel(monthKey), 'All blockers reported this month', html2 || '<div style="color:var(--t3);padding:8px 0">No blockers reported this month.</div>');
+  }
+}
+
+// ── FIXED: showMonth with clickable metrics and working week rows ──
+function renderMonthContent(monthKey) {
+  window._currentMonthKey = monthKey;
+  var data = window._allMonthData || {};
+  var submissions = data[monthKey] || [];
+  var byWeek = groupByWeek(submissions);
+  var weeks = Object.keys(byWeek).sort().reverse();
+  var el = document.getElementById('monthContent');
+  if (!el) return;
+  if (weeks.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No data for this month.</div>'; return; }
+
+  var allStats = calcWeekStats(submissions);
+  var overloadedWeeks = weeks.filter(function(w) { return calcWeekStats(byWeek[w]).overloaded > 0; }).length;
+  var html = '<div class="mrow" style="margin-bottom:16px">' +
+    '<div class="met" onclick="showMonthMetricDetail(&quot;overloaded&quot;)"><div class="ml">Month avg capacity</div><div class="mv" style="color:'+(allStats.avg>=80?'var(--a)':'var(--g)')+'">'+allStats.avg+'%</div><div class="ms">'+allStats.count+' submissions</div></div>'+
+    '<div class="met" onclick="showMonthMetricDetail(&quot;overloaded&quot;)"><div class="ml">Overloaded weeks</div><div class="mv" style="color:var(--r)">'+overloadedWeeks+'</div><div class="ms">click to see who</div></div>'+
+    '<div class="met" onclick="showMonthMetricDetail(&quot;blockers&quot;)"><div class="ml">Blockers raised</div><div class="mv" style="color:var(--a)">'+allStats.blockers+'</div><div class="ms">click to see details</div></div>'+
+    '<div class="met" onclick="generateMonthReport(window._currentMonthKey)"><div class="ml">AI analysis</div><div class="mv" style="font-size:14px;color:var(--b)">Ask</div><div class="ms">Cinderella</div></div>'+
+    '</div>';
+
+  // Week by week
+  html += '<div class="card"><div class="ct">Week by week — ' + getMonthLabel(monthKey) + '</div>';
+  weeks.forEach(function(wk) {
+    var ws = calcWeekStats(byWeek[wk]);
+    var wkLabel = 'Week ending ' + new Date(wk).toLocaleDateString('en-AU',{day:'numeric',month:'short'});
+    html += '<div style="padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer" data-wk="'+wk+'" onclick="showWeekDetailFromEl(this)">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'+
+        '<span style="font-size:12px;font-weight:500;color:var(--t1)">'+wkLabel+'</span>'+
+        '<span style="font-size:11px;color:'+(ws.avg>=80?'var(--a)':'var(--g)')+'">'+ws.avg+'% avg · '+ws.count+' check-ins</span>'+
+      '</div>'+
+      '<div style="display:flex;gap:12px;font-size:10px;color:var(--t2)">'+
+        (ws.overloaded>0?'<span style="color:var(--r)">⚠ '+ws.overloaded+' overloaded — click to see who</span>':'')+
+        (ws.available>0?'<span style="color:var(--g)">✓ '+ws.available+' available</span>':'')+
+        (ws.blockers>0?'<span style="color:var(--a)">🚧 '+ws.blockers+' blockers</span>':'')+
+        (ws.overloaded===0&&ws.available===0&&ws.blockers===0?'<span>Team looking healthy</span>':'')+
+      '</div>'+
+    '</div>';
+  });
+  html += '</div>';
+
+  // Trends chart container + table
+  html += '<div class="card"><div class="ct">Staff capacity trends</div>'+
+    '<div style="position:relative;height:200px;margin-bottom:12px"><canvas id="trendChart"></canvas></div>'+
+    renderStaffTrends(byWeek, weeks)+'</div>';
+
+  el.innerHTML = html;
+
+  // Build trends chart
+  buildTrendChart(byWeek, weeks);
+}
+
+function buildTrendChart(byWeek, weeks) {
+  var ctx = document.getElementById('trendChart');
+  if (!ctx) return;
+  if (window._trendChart) window._trendChart.destroy();
+
+  // Get all staff names
+  var staffNames = [];
+  weeks.forEach(function(w) {
+    byWeek[w].forEach(function(s) {
+      if (!staffNames.includes(s.name)) staffNames.push(s.name);
+    });
+  });
+
+  var colors = ['#1D9E75','#378ADD','#EF9F27','#E24B4A','#9B59B6','#E67E22','#27AE60'];
+  var datasets = staffNames.map(function(name, i) {
+    return {
+      label: cap(name).split(' ')[0],
+      data: weeks.slice().reverse().map(function(w) {
+        var entry = byWeek[w].find(function(s) { return s.name === name; });
+        return entry ? entry.capacity : null;
+      }),
+      borderColor: colors[i % colors.length],
+      backgroundColor: colors[i % colors.length] + '20',
+      tension: 0.3,
+      spanGaps: true,
+      pointRadius: 4
+    };
+  });
+
+  var labels = weeks.slice().reverse().map(function(w) {
+    return new Date(w).toLocaleDateString('en-AU',{day:'numeric',month:'short'});
+  });
+
+  window._trendChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: labels, datasets: datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } },
+      scales: {
+        y: { min: 0, max: 100, ticks: { callback: function(v) { return v+'%'; }, font: { size: 10 } },
+          grid: { color: 'rgba(128,128,128,0.1)' } },
+        x: { ticks: { font: { size: 10 } } }
+      }
+    }
+  });
+}
+
+// ── FIX: showMonth now calls renderMonthContent ──
+
+function staffAction(type) {
+  var st = window._currentStaff;
+  if (!st) return;
+  if (type === 0) openDraftModal(st.name, 'Checking in on workload', 'Checking in — how can I support you?', 'email');
+  else if (type === 1) openDraftModal(st.name, '1:1 check-in', '1:1 — workload check-in', 'meeting');
+  else if (type === 2) { closeModal(); actionBlocker(st.name, st.blockers || ''); }
+  else if (type === 3) { show('skills',null); closeModal(); }
+  else if (type === 4) { deleteCheckIn(st.name, st.weekEnding||''); }
 }
 
 var MODALS={
