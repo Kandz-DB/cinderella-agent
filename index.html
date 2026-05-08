@@ -168,6 +168,10 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 .cin{flex:1;border:0.5px solid var(--bm);border-radius:var(--rl2);padding:7px 11px;font-size:12px;resize:none;max-height:90px;font-family:var(--f);background:var(--bg);color:var(--t1);line-height:1.5}
 .cin:focus{outline:none;border-color:var(--g)}
 .csend{background:var(--g);color:#fff;border:none;border-radius:var(--rm);padding:7px 14px;font-size:12px;cursor:pointer;font-weight:500;white-space:nowrap;height:34px;font-family:var(--f)}
+.cmic{background:none;border:0.5px solid var(--bm);color:var(--t2);border-radius:var(--rm);padding:7px 10px;font-size:16px;cursor:pointer;height:34px;transition:all .2s;flex-shrink:0}
+.cmic:hover{border-color:var(--g);color:var(--g)}
+.cmic.listening{background:var(--rl);border-color:var(--r);color:var(--r);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
 .csend:disabled{opacity:.45;cursor:not-allowed}
 .think{display:flex;gap:3px;padding:3px 0;align-items:center}
 .think span{width:5px;height:5px;border-radius:50%;background:var(--t3);animation:blink 1.2s infinite}
@@ -657,7 +661,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
         <button class="qa" onclick="qa('Write the COO board pack narrative section for April')">Write board pack section</button>
         <button class="qa" onclick="qa('What HR actions should I take based on this week\'s staff data?')">HR action plan</button>
       </div>
-      <div class="cin-wrap"><textarea class="cin" id="cinput" rows="1" placeholder="Ask Cinderella anything..." onkeydown="handleKey(event)" oninput="resize(this)"></textarea><button class="csend" id="csend" onclick="send()">Send</button></div>
+      <div class="cin-wrap"><button class="cmic" id="micBtn" onclick="toggleVoice()" title="Voice input">🎤</button><textarea class="cin" id="cinput" rows="1" placeholder="Ask Cinderella anything..." onkeydown="handleKey(event)" oninput="resize(this)"></textarea><button class="csend" id="csend" onclick="send()">Send</button></div>
     </div>
 
     <!-- SCHEDULER -->
@@ -1518,6 +1522,91 @@ async function generateMonthReport(monthKey) {
   qa('Analyse this staff data for ' + getMonthLabel(monthKey) + ' and give me: (1) overall team health summary, (2) capacity trends and concerns, (3) any staff with persistent blockers or burnout risk, (4) skill matching opportunities I missed, (5) recommendations for next month.\n\n' + summary.substring(0, 2500));
 }
 
+
+// ── VOICE INPUT ──
+var recognition = null;
+var isListening = false;
+
+function toggleVoice() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    alert('Voice input is not supported in this browser. Please use Chrome or Edge.');
+    return;
+  }
+  if (isListening) {
+    stopVoice();
+  } else {
+    startVoice();
+  }
+}
+
+function startVoice() {
+  var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-AU';
+  recognition.continuous = false;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+
+  var micBtn = document.getElementById('micBtn');
+  var cinput = document.getElementById('cinput');
+  var originalPlaceholder = cinput.placeholder;
+
+  recognition.onstart = function() {
+    isListening = true;
+    micBtn.classList.add('listening');
+    micBtn.title = 'Listening... click to stop';
+    cinput.placeholder = 'Listening...';
+  };
+
+  recognition.onresult = function(event) {
+    var transcript = '';
+    for (var i = event.resultIndex; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript;
+    }
+    cinput.value = transcript;
+    resize(cinput);
+    // If final result, auto-send
+    if (event.results[event.results.length - 1].isFinal) {
+      setTimeout(function() {
+        if (cinput.value.trim()) send();
+      }, 500);
+    }
+  };
+
+  recognition.onerror = function(event) {
+    console.warn('Voice error:', event.error);
+    if (event.error === 'not-allowed') {
+      alert('Microphone access was denied. Please allow microphone access in your browser settings.');
+    }
+    stopVoice();
+  };
+
+  recognition.onend = function() {
+    stopVoice();
+    cinput.placeholder = originalPlaceholder;
+  };
+
+  try {
+    recognition.start();
+  } catch(e) {
+    console.warn('Voice start error:', e);
+    stopVoice();
+  }
+}
+
+function stopVoice() {
+  isListening = false;
+  var micBtn = document.getElementById('micBtn');
+  if (micBtn) {
+    micBtn.classList.remove('listening');
+    micBtn.title = 'Voice input';
+  }
+  if (recognition) {
+    try { recognition.stop(); } catch(e) {}
+    recognition = null;
+  }
+}
+
 function loadCfg(){
   try{const s=localStorage.getItem('cin_cfg_v3');if(s){const p=JSON.parse(s);if(p.api)C.api=p.api;if(p.bin)C.bin=p.bin;if(p.key)C.key=p.key;}}catch(e){}
   document.getElementById('setupMo').style.display='none';
@@ -1809,6 +1898,8 @@ async function autoBriefing(){
   setB(true);
 
   // Fetch real emails and calendar first
+  var briefNow = new Date();
+  var briefToday = briefNow.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Australia/Brisbane'});
   var emailCtx='No emails loaded.';
   var calCtx='No calendar loaded.';
 
@@ -1856,7 +1947,7 @@ async function autoBriefing(){
     return '- '+s.name+' ('+( s.role||'staff')+'): '+(s.capacity||0)+'% capacity, trend: '+(s.trend||'unknown')+', projects: '+(s.projects||'none')+', blockers: '+(s.blockers||'none');
   }).join('\n'):'\nNo staff check-ins received yet this week.';
 
-  const briefingPrompt='Give me my daily briefing now using ONLY the real data below. Do not make up or assume any information not in this data.\n\n'+
+  const briefingPrompt='TODAY IS: ' + briefToday + ' (Brisbane AEST).\nGive me my daily briefing now using ONLY the real data below. Do not make up or assume any information not in this data.\n\n'+
     emailCtx+'\n\n'+calCtx+staffCtx+
     '\n\nFormat your response in exactly these 4 sections:\n\n'+
     '**1. TOP PRIORITIES**\n'+
@@ -1923,7 +2014,10 @@ async function send(){
   inp.value='';resize(inp);
 
   // Build live context from real M365 data + staff check-ins
-  var liveCtx='';
+  var now = new Date();
+  var todayStr = now.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Australia/Brisbane'});
+  var liveCtx='TODAY IS: ' + todayStr + ' (Brisbane AEST)\n';
+  liveCtx += 'When calculating dates like "next Tuesday", count from today\'s date above.\n\n';
   if(M365.emails.length>0){
     liveCtx+='\n\nLIVE EMAILS (unread, real data from Outlook):\n'+M365.emails.slice(0,15).map(function(e){
       return '- FROM: '+e.from+(e.fromEmail?' <'+e.fromEmail+'>':'')+' | '+e.hoursOld+'h ago'+(e.hasAttachments?' [HAS ATTACHMENT]':'')+' | SUBJECT: '+e.subject+(e.preview?' | PREVIEW: '+e.preview:'');
@@ -1998,7 +2092,10 @@ function addMsg(role,text){
 function draftMeetingInvite(idx) {
   var data = window._pendingMeetings && window._pendingMeetings[idx];
   if (!data) return;
-  openDraftModal((data.attendees||[''])[0], 'Meeting invitation: ' + (data.subject||'Meeting'), data.subject||'Meeting', 'meeting');
+  var attendee = (data.attendees||[''])[0];
+  var startStr = data.start ? new Date(data.start).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}) : '';
+  var context = 'Send a meeting invitation email for: ' + (data.subject||'Meeting') + ' on ' + startStr;
+  openDraftModal(attendee, context, 'Invitation: ' + (data.subject||'Meeting'), 'email', attendee);
 }
 
 async function createCalendarEvent(idx) {
