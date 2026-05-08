@@ -1338,7 +1338,14 @@ function renderMonthSummary() {
 
 function showMonthFromCard(card) {
   var mk = card.getAttribute('data-monthkey');
+  // Switch to monthly view first
+  setStaffView('month');
+  // Then render the month - data is already in window._allMonthData
   showMonth(mk);
+  // Update nav buttons if present
+  document.querySelectorAll('.month-tab').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-mk') === mk);
+  });
 }
 
 function showMonthFromBtn(btn) {
@@ -2299,41 +2306,59 @@ function renderMonthContent(monthKey) {
 
   el.innerHTML = html;
 
-  // Build trends chart
-  buildTrendChart(byWeek, weeks);
+  // Build trends chart after DOM renders
+  setTimeout(function(){ buildTrendChart(byWeek, weeks); }, 50);
 }
 
 function buildTrendChart(byWeek, weeks) {
   var ctx = document.getElementById('trendChart');
-  if (!ctx) return;
-  if (window._trendChart) window._trendChart.destroy();
+  if (!ctx) { console.warn('trendChart canvas not found'); return; }
+  if (window._trendChart) { try { window._trendChart.destroy(); } catch(e){} }
 
-  // Get all staff names
+  // Get unique staff names across all weeks
   var staffNames = [];
   weeks.forEach(function(w) {
-    byWeek[w].forEach(function(s) {
-      if (!staffNames.includes(s.name)) staffNames.push(s.name);
+    (byWeek[w] || []).forEach(function(s) {
+      if (s.name && !staffNames.includes(s.name)) staffNames.push(s.name);
     });
   });
 
-  var colors = ['#1D9E75','#378ADD','#EF9F27','#E24B4A','#9B59B6','#E67E22','#27AE60'];
+  var colors = ['#1D9E75','#378ADD','#EF9F27','#E24B4A','#9B59B6','#E67E22','#16A085','#D35400'];
+  var sortedWeeks = weeks.slice().reverse(); // chronological order
+
   var datasets = staffNames.map(function(name, i) {
+    var data = sortedWeeks.map(function(w) {
+      var entry = (byWeek[w] || []).find(function(s) { return s.name === name; });
+      return entry ? entry.capacity : null;
+    });
+    var col = colors[i % colors.length];
     return {
       label: cap(name).split(' ')[0],
-      data: weeks.slice().reverse().map(function(w) {
-        var entry = byWeek[w].find(function(s) { return s.name === name; });
-        return entry ? entry.capacity : null;
-      }),
-      borderColor: colors[i % colors.length],
-      backgroundColor: colors[i % colors.length] + '20',
+      data: data,
+      borderColor: col,
+      backgroundColor: col + '22',
+      borderWidth: 2,
       tension: 0.3,
       spanGaps: true,
-      pointRadius: 4
+      pointRadius: 5,
+      pointHoverRadius: 7,
+      pointBackgroundColor: col
     };
   });
 
-  var labels = weeks.slice().reverse().map(function(w) {
-    return new Date(w).toLocaleDateString('en-AU',{day:'numeric',month:'short'});
+  var labels = sortedWeeks.map(function(w) {
+    return new Date(w).toLocaleDateString('en-AU', { day:'numeric', month:'short' });
+  });
+
+  // Add 85% danger line
+  datasets.push({
+    label: '85% threshold',
+    data: sortedWeeks.map(function() { return 85; }),
+    borderColor: '#E24B4A',
+    borderWidth: 1,
+    borderDash: [4,4],
+    pointRadius: 0,
+    fill: false
   });
 
   window._trendChart = new Chart(ctx, {
@@ -2342,181 +2367,30 @@ function buildTrendChart(byWeek, weeks) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { boxWidth: 12, padding: 10, font: { size: 11 } }
+        },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              return ctx.dataset.label + ': ' + (ctx.raw !== null ? ctx.raw + '%' : 'No data');
+            }
+          }
+        }
+      },
       scales: {
-        y: { min: 0, max: 100, ticks: { callback: function(v) { return v+'%'; }, font: { size: 10 } },
-          grid: { color: 'rgba(128,128,128,0.1)' } },
-        x: { ticks: { font: { size: 10 } } }
+        y: {
+          min: 0, max: 100,
+          ticks: { callback: function(v) { return v + '%'; }, font: { size: 10 }, stepSize: 20 },
+          grid: { color: 'rgba(128,128,128,0.1)' }
+        },
+        x: { ticks: { font: { size: 10 } }, grid: { color: 'rgba(128,128,128,0.05)' } }
       }
     }
   });
 }
 
-// ── FIX: showMonth now calls renderMonthContent ──
 
-function staffAction(type) {
-  var st = window._currentStaff;
-  if (!st) return;
-  if (type === 0) openDraftModal(st.name, 'Checking in on workload', 'Checking in — how can I support you?', 'email');
-  else if (type === 1) openDraftModal(st.name, '1:1 check-in', '1:1 — workload check-in', 'meeting');
-  else if (type === 2) { closeModal(); actionBlocker(st.name, st.blockers || ''); }
-  else if (type === 3) { show('skills',null); closeModal(); }
-  else if (type === 4) { deleteCheckIn(st.name, st.weekEnding||''); }
-}
-
-var MODALS={
-  mtg:{title:'Meetings today',sub:'5 scheduled — 2 need prep',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">Needs prep</div><div class="ab-text">Risk framework review (09:30) and Titan Corp (11:00) — no prep blocks in calendar.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate full prep plan';b.onclick=function(){qa('Create a complete meeting prep plan for all of today\'s meetings for Kandia');cm();};d.appendChild(b);return d;}},
-  pri:{title:'Open priorities',sub:'7 items — 2 urgent today',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box"><div class="ab-title">Vendor contract — Marcus Webb</div><div class="ab-text">26 hours overdue. Approve or respond today.</div></div><div class="alert-box warn"><div class="ab-title">Staff utilisation report — due 30 April</div><div class="ab-text">Collect check-in data from all 12 staff and submit before end of week.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Cinderella to prioritise';b.onclick=function(){qa('What are my top priorities this week and how should they be ordered?');cm();};d.appendChild(b);return d;}},
-  standup:{title:'Leadership stand-up',sub:'08:30 · 15 min · Teams',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">Cinderella suggests raising</div><div class="mfv">Vendor contract (Marcus Webb) · ISO audit progress · Titan Corp onboarding · Staff blockers</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft talking points';b.onclick=function(){qa('Draft talking points for the leadership stand-up this morning');cm();};d.appendChild(b);return d;}},
-  risk:{title:'Risk framework review',sub:'09:30 · 60 min · Board room',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">Prep required before 09:00</div><div class="ab-text">No preparation block found in your calendar.</div></div><div class="mfield"><div class="mfl">What to prepare</div><div class="mfv">Q1 incident register · Updated risk matrix · ISO 27001 progress (68%) · Incident escalation pathway — no owner</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate briefing doc';b.onclick=function(){qa('Prepare a full briefing for the 09:30 risk framework review for Kandia');cm();};d.appendChild(b);return d;}},
-  titan:{title:'Client onboarding — Titan Corp',sub:'11:00 · 45 min · Zoom',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">No prep time blocked</div><div class="ab-text">10:15 to 10:45 is free. Book a prep block now.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Full prep brief';b.onclick=function(){qa('What does Kandia need to prepare for the Titan Corp onboarding meeting?');cm();};d.appendChild(b);return d;}},
-  q2:{title:'Q2 ops review + KPI deep-dive',sub:'14:00 · 90 min · Conf room A',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">Key topics</div><div class="mfv">Q2 OKR mid-cycle progress · Staff utilisation · Client SLA (96.4%) · ISO audit readiness</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate agenda';b.onclick=function(){qa('Generate a Q2 ops review agenda and talking points for the KPI deep-dive');cm();};d.appendChild(b);return d;}},
-  '11':{title:'1:1 — People & Culture lead',sub:'16:00 · 30 min · Office',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">Suggested agenda</div><div class="mfv">Staff capacity concerns · Blockers from check-ins · ISO audit readiness · Recruitment pipeline</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate 1:1 agenda';b.onclick=function(){qa('Generate 1:1 agenda items for Kandia and the People and Culture lead today');cm();};d.appendChild(b);return d;}},
-  'email-marcus':{title:'Marcus Webb — Webb Legal',sub:'Vendor services agreement · 26h · OVERDUE',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box"><div class="ab-title">Overdue — action required today</div><div class="ab-text">26 hours with no response.</div></div><div class="mfield"><div class="mfl">Email content</div><div class="mfv" style="white-space:pre-wrap;background:var(--bg2);padding:10px 12px;border-radius:8px">Hi Kandia,\n\nFollowing up on the vendor services agreement. We need your sign-off to proceed. Please note the termination clause in section 4.3 has been updated.\n\nBest,\nMarcus Webb</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Draft approval email';b1.onclick=function(){qa('Draft an approval email to Marcus Webb for the vendor services agreement');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Request clarification';b2.onclick=function(){qa('Draft an email to Marcus Webb requesting clarification on the termination clause before signing');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
-  'email-karen':{title:'Karen Liu — IT Ops',sub:'System access approval · 18h',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">New analyst cannot start without access</div><div class="ab-text">Emma Rodriguez starts tomorrow and needs system access today.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Approve via email';b.onclick=function(){qa('Draft an approval email to Karen Liu granting system access for Emma Rodriguez');cm();};d.appendChild(b);return d;}},
-  'email-david':{title:'David Park — Board',sub:'Board pack COO narrative · 5h',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">Deadline end of business today</div><div class="ab-text">Board pack section 3 COO narrative needed.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Generate COO narrative';b.onclick=function(){qa('Write a complete COO board pack narrative section for April for Risk 2 Solution');cm();};d.appendChild(b);return d;}},
-  'email-sofia':{title:'Sofia Ng — Risk 2 Solution',sub:'Process audit findings · 3h',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Review required before ISO audit</div><div class="ab-text">4 findings: incident escalation no owner, vendor review overdue, access control gaps, security training overdue.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Prep for review';b1.onclick=function(){qa('What should Kandia look for when reviewing process audit findings before an ISO 27001 audit?');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Acknowledge receipt';b2.onclick=function(){qa('Draft an email to Sofia Ng acknowledging receipt of the audit findings');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
-  'email-titan':{title:'Titan Corp — Procurement',sub:'Onboarding checklist · 2 days',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Watching</div><div class="ab-text">Week 2 of onboarding — follow-up appropriate.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft follow-up';b.onclick=function(){qa('Draft a follow-up email to Titan Corp procurement about the onboarding checklist');cm();};d.appendChild(b);return d;}},
-  'email-hr':{title:'HR Team',sub:'Policy update sign-off · 3 days',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box ok"><div class="ab-title">Watching</div><div class="ab-text">HR have not confirmed receipt of your sign-off sent 3 days ago.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Draft chase email';b.onclick=function(){qa('Draft a chasing email to the HR team about the policy update sign-off');cm();};d.appendChild(b);return d;}},
-  'duty-ops':{title:'Operations Oversight',sub:'Policies, SOPs, compliance, governance, projects',build:function(){
-    var d=document.createElement('div');
-    d.innerHTML='<div class="mfield"><div class="mfl">Weekly operations checklist</div><div class="mfv">Click below to generate each area or get the full checklist in one go.</div></div>';
-    var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-    var buttons=[
-      ['📋 Full operations checklist','Generate a complete weekly operations checklist for Kandia at Risk 2 Solution covering: policies and procedures review, SOPs review, project status, compliance and governance, staff utilisation, client delivery, platform health, and any other operational flows. Format as a clear checklist she can work through.'],
-      ['📁 Policies & procedures review','Generate a policies and procedures review checklist for Risk 2 Solution. What should Kandia check, when should each policy be reviewed, and are there any overdue reviews?'],
-      ['📝 SOPs review','List all SOPs that Risk 2 Solution should have in place, flag which ones Cinderella knows exist, which need creating, and which need reviewing.'],
-      ['✅ Compliance & governance','Generate a compliance and governance checklist for this week at Risk 2 Solution including ISO 27001 progress, any overdue audits, policy sign-offs, and access control reviews.'],
-      ['🔄 Process improvement','What process improvements should Kandia prioritise this quarter at Risk 2 Solution? Rank by impact and effort.'],
-      ['📊 Operational metrics','What operational metrics should Kandia review weekly? Generate a dashboard summary with current known values.']
-    ];
-    buttons.forEach(function(pair){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=pair[0];b.onclick=function(){qa(pair[1]);cm();};d.appendChild(b);});
-    return d;
-  }},
-  'duty-risk':{title:'Risk framework governance',sub:'Policy, compliance posture, ISO 27001',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box"><div class="ab-title">Critical gap — action today</div><div class="ab-text">Incident escalation pathway has no owner. Must be resolved before May 12 ISO audit.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b1=document.createElement('button');b1.className='m-btn';b1.textContent='Create incident pathway';b1.onclick=function(){qa('Generate the incident escalation pathway process document for Risk 2 Solution for ISO 27001 compliance');cm();};var b2=document.createElement('button');b2.className='m-btn sec';b2.textContent='Risk governance checklist';b2.onclick=function(){qa('Generate a complete risk framework governance checklist for Kandia at Risk 2 Solution');cm();};d.appendChild(b1);d.appendChild(b2);return d;}},
-  'duty-strategy':{title:'Strategy execution',sub:'Translate CEO vision into operational reality',build:function(){var d=document.createElement('div');d.innerHTML='<div class="alert-box warn"><div class="ab-title">This week</div><div class="ab-text">Q2 OKR mid-cycle review due. Platform v3.3 roadmap review next week.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Q2 OKR review template';b.onclick=function(){qa('Create a Q2 OKR mid-cycle review framework for Risk 2 Solution for Kandia');cm();};d.appendChild(b);return d;}},
-  'duty-clients':{title:'Client Delivery',sub:'Project tracking, client feedback, Monday.com',build:function(){
-    var d=document.createElement('div');
-    var clientEmails=M365.emails.filter(function(e){var s=(e.subject||'').toLowerCase();return s.includes('titan')||s.includes('delta')||s.includes('prentice')||s.includes('onboard')||s.includes('project')||s.includes('delivery')||s.includes('feedback');});
-    d.innerHTML='<div id="mondayStatus"><div style="font-size:12px;color:var(--t2);padding:8px 0;display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:var(--a);flex-shrink:0"></span><span>Loading Monday.com project data...</span></div></div>'+
-      (clientEmails.length>0?'<div class="alert-box ok" style="margin-top:8px"><div class="ab-title">📧 '+clientEmails.length+' client-related email'+(clientEmails.length>1?'s':'')+' this week</div><div class="ab-text">'+clientEmails.slice(0,3).map(function(e){return e.from+': '+e.subject;}).join('<br>')+'</div></div>':'');
-    var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-    var eb=document.createElement('button');eb.className='m-btn';eb.style.cssText='background:#217346;display:block;width:100%;margin-bottom:8px';eb.textContent='📊 Export to Excel';eb.onclick=function(){exportMondayToExcel();};d.appendChild(eb);
-    var ab=document.createElement('button');ab.className='m-btn sec';ab.style.cssText='display:block;width:100%;margin-bottom:6px';ab.textContent='🤖 Full Cinderella analysis';ab.onclick=function(){analyseMondayData();cm();};d.appendChild(ab);
-    var rb=document.createElement('button');rb.className='m-btn sec';rb.style.cssText='display:block;width:100%;margin-bottom:6px';rb.textContent='🔄 Refresh data';rb.onclick=function(){loadMondayData();};d.appendChild(rb);
-    [['🔴 Flag risks and issues','What are the current delivery risks and open issues across all client projects? Flag what Kandia needs to do about each one.'],
-     ['💬 Client feedback summary','Summarise all client feedback themes from Monday.com. Flag anything requiring immediate action.'],
-     ['📧 Draft client status update','Draft a professional project status update email for active clients.']
-    ].forEach(function(p){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b);});
-    setTimeout(function(){loadMondayData();},200);
-    return d;
-  }},
-  'duty-people':{title:'People & Culture',sub:'Staffing, check-ins, performance, 1:1s, KPIs',build:function(){
-    var d=document.createElement('div');
-    var staffNames = SD.length>0 ? SD.map(function(s){return s.name;}) : [];
-    // Check calendar for check-in meetings
-    var checkInMeetings = M365.events.filter(function(e){ return e.subject&&(e.subject.toLowerCase().includes('check') || e.subject.toLowerCase().includes('1:1') || e.subject.toLowerCase().includes('one on one')); });
-    var hasCheckIn = checkInMeetings.length > 0;
-    d.innerHTML =
-      (hasCheckIn ? '<div class="alert-box ok"><div class="ab-title">📅 Check-in meeting today</div><div class="ab-text">'+checkInMeetings.map(function(e){return e.subject;}).join(', ')+'</div></div>' : '<div class="alert-box warn"><div class="ab-title">No check-in meetings scheduled today</div><div class="ab-text">Consider scheduling 1:1s with your team.</div></div>') +
-      getMissingCheckIns();
-    var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-    var buttons=[
-      ['Generate action plan','Generate a complete people and culture action plan for Kandia this week at Risk 2 Solution based on staff check-in data'],
-      ['Schedule 1:1 meetings','Which staff members does Kandia most need to have a 1:1 with this week and why? List them in priority order.'],
-      ['Send weekly check-in','Draft a message to send to all 12 staff asking them to complete their weekly check-in form for this week'],
-      ['Review KPIs','What KPIs should Kandia be reviewing for her team this week? List them with current status where known.'],
-      ['Performance reviews','Generate a performance review schedule and process for Risk 2 Solution staff for this quarter'],
-      ['Burnout risk check','Which staff members are at risk of burnout based on check-in data? What should Kandia do for each one?']
-    ];
-    buttons.forEach(function(pair){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=pair[0];b.onclick=function(){qa(pair[1]);cm();};d.appendChild(b);});
-    return d;
-  }},
-  'duty-finance':{title:'Financial Oversight',sub:'P&L, debt collection, finance updates',build:function(){
-    var d=document.createElement('div');
-    // Check emails from Diane or Nicole
-    var financeEmails = M365.emails.filter(function(e){
-      var from = (e.from||'').toLowerCase();
-      var subj = (e.subject||'').toLowerCase();
-      return from.includes('diane') || from.includes('kruger') || from.includes('nicole') || from.includes('sofianos') || subj.includes('p&l') || subj.includes('finance') || subj.includes('debt') || subj.includes('invoice') || subj.includes('payment') || subj.includes('cash flow');
-    });
-    // Check calendar for finance meetings
-    var financeMeetings = M365.events.filter(function(e){
-      var subj=(e.subject||'').toLowerCase();
-      return subj.includes('finance') || subj.includes('p&l') || subj.includes('budget') || subj.includes('diane') || subj.includes('nicole');
-    });
-    d.innerHTML =
-      (financeEmails.length>0 ?
-      '<div class="alert-box ok"><div class="ab-title">📧 '+financeEmails.length+' finance-related email'+(financeEmails.length>1?'s':'')+' this week</div>'+
-      '<div class="ab-text" style="margin-top:6px">'+financeEmails.map(function(e){
-        var outlookUrl='https://outlook.office.com/mail/inbox';
-        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.08)">'+
-          '<span style="flex:1;min-width:0"><strong>'+e.from+'</strong><br><span style="font-size:10px">'+e.subject+'</span></span>'+
-          '<div style="display:flex;gap:4px;margin-left:8px;flex-shrink:0">'+
-            '<button onclick="window.open(\''+outlookUrl+'\',\'_blank\')" style="font-size:9px;padding:2px 8px;border-radius:8px;background:#0078D4;color:#fff;border:none;cursor:pointer;font-family:var(--f)">Open</button>'+
-            '<button onclick="openDraftModal(\''+e.from+'\',\'Reply to finance email: '+e.subject.replace(/'/g,'')+'\',' +
-              '\'Re: '+e.subject.replace(/'/g,'')+'\',' +
-              '\'email\',\''+e.fromEmail+'\')" style="font-size:9px;padding:2px 8px;border-radius:8px;background:var(--g);color:#fff;border:none;cursor:pointer;font-family:var(--f)">Reply</button>'+
-          '</div>'+
-        '</div>';
-      }).join('')+'</div></div>'
-      : '<div class="alert-box warn"><div class="ab-title">No finance emails from Diane or Nicole this week</div><div class="ab-text">Consider requesting a P&amp;L update.</div></div>') +
-      (financeMeetings.length>0 ? '<div class="alert-box ok"><div class="ab-title">📅 Finance meeting today: '+financeMeetings[0].subject+'</div></div>' : '');
-    var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-    var b1=document.createElement('button');b1.className='m-btn';b1.style.marginBottom='6px';b1.textContent='📊 Summarise finance update';b1.onclick=function(){qa('Based on any finance-related emails and information available, give Kandia a summary of the current financial position at Risk 2 Solution including P&L, outstanding debt collection, and any cash flow concerns.');cm();};d.appendChild(b1);
-    var b2=document.createElement('button');b2.className='m-btn';b2.style.cssText='background:#0078D4;margin-bottom:6px;display:block';b2.textContent='📅 Schedule finance meeting';b2.onclick=function(){openDraftModal('Diane Kruger','Schedule a finance review meeting to discuss P&L, debt collection and cash flow','Finance review meeting','meeting','diane.k@risk2solution.com');cm();};d.appendChild(b2);
-    var b3=document.createElement('button');b3.className='m-btn sec';b3.style.cssText='margin-bottom:6px;display:block';b3.textContent='📧 Request finance information';b3.onclick=function(){openDraftModal('Diane Kruger','Request the latest P&L, debt collection status and cash flow forecast','Finance update request — this week','email','diane.k@risk2solution.com');cm();};d.appendChild(b3);
-    var b4=document.createElement('button');b4.className='m-btn sec';b4.style.cssText='display:block';b4.textContent='💡 Financial KPIs to watch';b4.onclick=function(){qa('What are the most important financial KPIs Kandia should be tracking as COO of Risk 2 Solution and what does healthy look like for each?');cm();};d.appendChild(b4);
-    return d;
-  }},
-  'duty-tech':{title:'Technology & systems',sub:'Platform health, tooling, automation roadmap',build:function(){var d=document.createElement('div');d.innerHTML='<div class="mfield"><div class="mfl">Current</div><div class="mfv">R2S v3.2 live. SLA 96.4%. 2 open incidents. v3.3 roadmap review next week.</div></div>';var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);var b=document.createElement('button');b.className='m-btn';b.textContent='Tech priorities';b.onclick=function(){qa('What technology and systems priorities should Kandia focus on this quarter at Risk 2 Solution?');cm();};d.appendChild(b);return d;}},
-  'duty-reporting':{title:'Board Reporting',sub:'Monthly board report — succinct, 2 pages max',build:function(){
-    var d=document.createElement('div');
-    // Check if board meeting is coming up in calendar
-    var boardMeetings = M365.events.filter(function(e){ var s=(e.subject||'').toLowerCase(); return s.includes('board') || s.includes('directors'); });
-    var now = new Date();
-    var lastMonth = new Date(now.getFullYear(), now.getMonth()-1, 1).toLocaleString('en-AU',{month:'long',year:'numeric'});
-    var thisMonth = now.toLocaleString('en-AU',{month:'long',year:'numeric'});
-    d.innerHTML =
-      (boardMeetings.length>0 ? '<div class="alert-box ok"><div class="ab-title">📅 Board meeting: '+boardMeetings[0].subject+'</div><div class="ab-text">Prepare your board report before this meeting.</div></div>' : '<div class="mfield"><div class="mfl">Board meeting</div><div class="mfv">Check your calendar for the next scheduled board meeting.</div></div>')+
-      '<div class="mfield"><div class="mfl">Report scope</div><div class="mfv">Month prior: <strong>'+lastMonth+'</strong><br>Month ahead: <strong>'+thisMonth+'</strong><br>Format: Succinct, 2 pages maximum</div></div>';
-    var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-    var buttons=[
-      ['📄 Generate board report','Generate a succinct COO board report for Risk 2 Solution. Cover: (1) Month in review — key highlights, wins, risks, incidents, client updates, staff updates, financial snapshot. (2) Month ahead — priorities, upcoming risks, decisions required from the board. Maximum 2 pages. Plain language, no jargon. Format with clear headings.'],
-      ['✅ Month in review','Give me a summary of last month at Risk 2 Solution for the board report. Cover: client delivery, staff, platform, compliance, and any incidents or escalations.'],
-      ['🔭 Month ahead priorities','What are the top priorities for Risk 2 Solution next month that the board needs to know about? Frame these as decisions needed, risks to watch, and opportunities.'],
-      ['📊 Key metrics summary','Generate a key metrics summary for the board: SLA performance, staff utilisation, client onboarding status, ISO 27001 compliance progress, and financial highlights.']
-    ];
-    buttons.forEach(function(pair){var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=pair[0];b.onclick=function(){qa(pair[1]);cm();};d.appendChild(b);});
-    return d;
-  }}
-};
-
-function omKey(key){
-  var m=MODALS[key];if(!m)return;
-  if(document.getElementById('omKey-bg'))return;
-  var bg=document.createElement('div');bg.className='mo open';bg.id='omKey-bg';
-  bg.onclick=function(e){if(e.target===bg)cm();};
-  var box=document.createElement('div');box.className='mb';
-  var hd=document.createElement('div');hd.className='mh';
-  var hdl=document.createElement('div');
-  var t=document.createElement('div');t.className='mh-title';t.textContent=m.title;
-  var s=document.createElement('div');s.className='mh-sub';s.textContent=m.sub||'';
-  hdl.appendChild(t);hdl.appendChild(s);
-  var cl=document.createElement('button');cl.className='mclose';cl.textContent='×';cl.onclick=cm;
-  hd.appendChild(hdl);hd.appendChild(cl);
-  var bd=document.createElement('div');bd.className='mc';
-  bd.appendChild(m.build());
-  box.appendChild(hd);box.appendChild(bd);bg.appendChild(box);
-  document.getElementById('appRoot').appendChild(bg);
-}
-
-function cm(){
-  var el=document.getElementById('omKey-bg');
-  if(el)el.remove();
-}
-
-// M365 data loaded via graph API endpoints
-</script>
-</body>
-</html>
