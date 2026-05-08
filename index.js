@@ -198,27 +198,37 @@ async function graphGet(path, extraHeaders = {}) {
   return response.json();
 }
 
-// ── EMAILS: Get unread emails ──
+// ── EMAILS: Get unreplied emails (cross-referenced with Sent Items) ──
 app.get('/graph/emails', async (req, res) => {
   try {
-    // Get last 14 days of inbox emails (not just unread - user may have read but not replied)
     const fourteenDaysAgo = new Date(Date.now() - 14*24*60*60*1000).toISOString();
-    const data = await graphGet(
-      `/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${fourteenDaysAgo}&$orderby=receivedDateTime desc&$top=80&$select=subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,conversationId`
+
+    // Fetch inbox and sent items in parallel
+    const [inboxData, sentData] = await Promise.all([
+      graphGet(`/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${fourteenDaysAgo}&$orderby=receivedDateTime desc&$top=80&$select=subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,conversationId`),
+      graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${fourteenDaysAgo}&$select=conversationId&$top=100`)
+    ]);
+
+    // Build set of conversation IDs already replied to
+    const repliedConversations = new Set(
+      (sentData.value || []).map(m => m.conversationId).filter(Boolean)
     );
+
     const noReply = ['noreply','no-reply','donotreply','do-not-reply','mailer-daemon','notifications@','notification@','automated@','alerts@','alert@','newsletter','@bounce','postmaster','news@','updates@','subscriptions@','unsubscribe','no_reply'];
-    const skipKeywords = ['capcoal','unsubscribe','notification','automated message','out of office','auto-reply','autoreply','luxury escapes','island printing','special offer','limited time','click here','dear customer','dear valued','congratulations you','winner','prize','survey','feedback request','receipt for','payment confirmation','order confirmation','shipping confirmation','your order','invoice #','statement of account'];
-    const spamDomains = ['luxuryescapes','islandprinting','mailchimp','constantcontact','campaignmonitor','sendgrid','klaviyo','hubspot','marketo','pardot','salesforce.com/email'];
-    const emails = data.value
+    const skipKeywords = ['capcoal','unsubscribe','notification','automated message','out of office','auto-reply','autoreply','luxury escapes','island printing','special offer','limited time','click here','dear customer','dear valued','winner','prize','survey','feedback request','receipt for','payment confirmation','order confirmation','shipping confirmation','your order','invoice #','statement of account'];
+    const spamDomains = ['luxuryescapes','islandprinting','mailchimp','constantcontact','campaignmonitor','sendgrid','klaviyo','hubspot','marketo','pardot'];
+
+    const emails = inboxData.value
       .filter(m => {
         const addr = (m.from?.emailAddress?.address || '').toLowerCase();
         const name = (m.from?.emailAddress?.name || '').toLowerCase();
         const subj = (m.subject || '').toLowerCase();
-        const body = (m.bodyPreview || '').toLowerCase();
         if (noReply.some(p => addr.includes(p))) return false;
-        if (skipKeywords.some(p => subj.toLowerCase().includes(p) || addr.includes(p) || name.includes(p))) return false;
+        if (skipKeywords.some(p => subj.includes(p) || addr.includes(p))) return false;
         if (spamDomains.some(p => addr.includes(p))) return false;
         if (name.includes('automated') || name.includes('no reply') || name.includes('no-reply')) return false;
+        // Exclude if already replied to in this conversation
+        if (m.conversationId && repliedConversations.has(m.conversationId)) return false;
         return true;
       })
       .slice(0, 25)
@@ -240,69 +250,6 @@ app.get('/graph/emails', async (req, res) => {
   }
 });
 
-
-
-// ── EMAILS: Get full email body by ID ──
-app.get('/graph/email/:id', async (req, res) => {
-  try {
-    const data = await graphGet(`/me/messages/${req.params.id}?$select=subject,from,toRecipients,receivedDateTime,body,hasAttachments,attachments`);
-    res.json({
-      subject: data.subject,
-      from: data.from?.emailAddress?.name || data.from?.emailAddress?.address,
-      fromEmail: data.from?.emailAddress?.address,
-      to: data.toRecipients?.map(r => r.emailAddress?.address).join(', '),
-      received: data.receivedDateTime,
-      body: data.body?.content?.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 3000),
-      hasAttachments: data.hasAttachments,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
-// ── EMAILS: Read info@risk2solution.com shared mailbox ──
-app.get('/graph/info-emails', async (req, res) => {
-  try {
-    const fourteenDaysAgo = new Date(Date.now() - 14*24*60*60*1000).toISOString();
-    const data = await graphGet(
-      `/users/info@risk2solution.com/mailFolders/inbox/messages?$filter=receivedDateTime ge ${fourteenDaysAgo}&$orderby=receivedDateTime desc&$top=30&$select=subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments`
-    );
-    const noReply = ['noreply','no-reply','donotreply','mailer-daemon','notifications@','automated@','newsletter','@bounce'];
-    const skipKeywords = ['unsubscribe','capcoal','luxury escapes','island printing','special offer','out of office','auto-reply','automated'];
-    const spamDomains = ['luxuryescapes','islandprinting','mailchimp','constantcontact','sendgrid','klaviyo'];
-    const emails = (data.value || [])
-      .filter(m => {
-        const addr = (m.from?.emailAddress?.address || '').toLowerCase();
-        const subj = (m.subject || '').toLowerCase();
-        if (noReply.some(p => addr.includes(p))) return false;
-        if (skipKeywords.some(p => subj.includes(p) || addr.includes(p))) return false;
-        if (spamDomains.some(p => addr.includes(p))) return false;
-        return true;
-      })
-      .slice(0, 15)
-      .map(m => ({
-        id: m.id,
-        subject: m.subject,
-        from: m.from?.emailAddress?.name || m.from?.emailAddress?.address,
-        fromEmail: m.from?.emailAddress?.address,
-        received: m.receivedDateTime,
-        preview: m.bodyPreview?.substring(0, 200),
-        hasAttachments: m.hasAttachments || false,
-        isRead: m.isRead || false,
-        mailbox: 'info@risk2solution.com',
-        hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000)
-      }));
-    res.json({ emails });
-  } catch (err) {
-    // If shared mailbox access is denied, return helpful message
-    if (err.message.includes('ErrorAccessDenied') || err.message.includes('AuthenticationError')) {
-      res.status(403).json({ error: 'info@ mailbox access denied. Add Mail.ReadWrite.Shared permission in Azure and grant Kandia delegate access to the info@ mailbox.' });
-    } else {
-      res.status(500).json({ error: err.message });
-    }
-  }
-});
 
 // ── EMAILS: Search emails by topic (for meeting prep) ──
 app.get('/graph/emails/search', async (req, res) => {
