@@ -1901,7 +1901,7 @@ const SYS=[
   '',
   'COMMUNICATION: Warm EA tone. Professional but human. Lead with the most important thing first. Plain English, no jargon. Short answers when short will do.',
   '',
-  'SCHEDULING: When Kandia asks to schedule a meeting, confirm who, when, how long and purpose, then create the invite. You CAN schedule meetings. Do not say you cannot.',
+  'SCHEDULING: When Kandia asks to schedule a meeting, ALWAYS respond with the meeting details AND include a special block at the end in this exact format (no deviations): SCHEDULE_MEETING:{"subject":"Meeting title","attendees":["email@domain.com"],"start":"2026-05-12T10:00:00","end":"2026-05-12T10:30:00","body":"Meeting notes here"}. Use ISO datetime strings in Brisbane time (UTC+10). This triggers the calendar creation button. Always include it when scheduling is requested.',
   '',
   'BRIEFING FORMAT: 1. TOP PRIORITIES (based on emails and calendar, ranked by urgency) 2. EMAILS NEEDING REPLY (most overdue first) 3. TEAM FLAGS (capacity, blockers, missing check-ins) 4. CALENDAR TODAY (meetings with times, flag anything needing prep).',
   '',
@@ -1953,8 +1953,85 @@ function addMsg(role,text){
   const el=document.getElementById('msgs');
   const d=document.createElement('div');
   d.className='msg '+role;
-  d.innerHTML=`<div class="sndr">${role==='u'?'You':'Cinderella'}</div><div class="bub ${role}">${text.replace(/\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/^### (.*)/gm,'<strong>$1</strong>').replace(/^## (.*)/gm,'<strong style="font-size:13px">$1</strong>')}</div>`;
-  el.appendChild(d);el.scrollTop=el.scrollHeight;
+
+  // Detect SCHEDULE_MEETING block in Cinderella's response
+  var displayText = text;
+  var scheduleData = null;
+  if (role === 'a') {
+    var schedMatch = text.match(/SCHEDULE_MEETING:({[^}]+})/);
+    if (schedMatch) {
+      try {
+        scheduleData = JSON.parse(schedMatch[1]);
+        // Remove the raw JSON from display text
+        displayText = text.replace(/SCHEDULE_MEETING:{[^}]+}/, '').trim();
+      } catch(e) { scheduleData = null; }
+    }
+  }
+
+  var formatted = displayText
+    .replace(/\n/g,'<br>')
+    .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
+    .replace(/^### (.*)/gm,'<strong>$1</strong>')
+    .replace(/^## (.*)/gm,'<strong style="font-size:13px">$1</strong>');
+
+  var schedBtn = '';
+  if (scheduleData) {
+    var idx = Object.keys(window._pendingMeetings||{}).length;
+    window._pendingMeetings = window._pendingMeetings || {};
+    window._pendingMeetings[idx] = scheduleData;
+    var startStr = scheduleData.start ? new Date(scheduleData.start).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+    schedBtn = '<div style="margin-top:10px;background:var(--bl2);border-radius:var(--rm);padding:10px 12px">' +
+      '<div style="font-size:11px;font-weight:500;color:#185FA5;margin-bottom:6px">📅 Ready to create in your calendar:</div>' +
+      '<div style="font-size:11px;color:var(--t1);margin-bottom:8px"><strong>' + (scheduleData.subject||'Meeting') + '</strong><br>' + startStr + '<br>With: ' + (scheduleData.attendees||[]).join(', ') + '</div>' +
+      '<button onclick="createCalendarEvent(' + idx + ')" style="background:#0078D4;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:500;cursor:pointer;font-family:var(--f)">✅ Add to Outlook Calendar</button>' +
+      '<button onclick="draftMeetingInvite(' + idx + ')" style="background:none;border:0.5px solid var(--bm);color:var(--t2);border-radius:6px;padding:7px 14px;font-size:11px;cursor:pointer;font-family:var(--f);margin-left:6px">📧 Also draft invite email</button>' +
+    '</div>';
+  }
+
+  d.innerHTML = '<div class="sndr">' + (role==='u'?'You':'Cinderella') + '</div>' +
+    '<div class="bub ' + role + '">' + formatted + schedBtn + '</div>';
+  el.appendChild(d);
+  el.scrollTop=el.scrollHeight;
+}
+
+
+function draftMeetingInvite(idx) {
+  var data = window._pendingMeetings && window._pendingMeetings[idx];
+  if (!data) return;
+  openDraftModal((data.attendees||[''])[0], 'Meeting invitation: ' + (data.subject||'Meeting'), data.subject||'Meeting', 'meeting');
+}
+
+async function createCalendarEvent(idx) {
+  var data = window._pendingMeetings && window._pendingMeetings[idx];
+  if (!data) { alert('Meeting data not found.'); return; }
+  var btn = event.target;
+  btn.textContent = 'Creating...';
+  btn.disabled = true;
+  try {
+    var r = await fetch('/graph/calendar/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subject: data.subject,
+        start: data.start,
+        end: data.end,
+        attendees: data.attendees || [],
+        body: data.body || ''
+      })
+    });
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    btn.textContent = '✅ Created in Outlook!';
+    btn.style.background = 'var(--g)';
+    // Refresh calendar data
+    try { await loadM365Data(); } catch(e) {}
+    addMsg('a', 'Done Kandia — the meeting has been added to your Outlook calendar. Diane will receive the invite.');
+  } catch(e) {
+    btn.textContent = 'Failed — try again';
+    btn.disabled = false;
+    btn.style.background = 'var(--r)';
+    addMsg('a', 'I could not create the calendar event: ' + e.message + '. You can create it manually in Outlook.');
+  }
 }
 
 function setB(on){
