@@ -809,16 +809,21 @@ function renderLiveCalendar() {
   const staticRows = document.querySelectorAll('#pnl-today .card .row');
   staticRows.forEach(r => r.style.display = 'none');
 
-  // Brisbane time: UTC+10
-  var brisbaneOffset = 10 * 60 * 60 * 1000;
-  var nowBrisbane = new Date(Date.now() + brisbaneOffset);
+  // Graph API returns Brisbane local time (no Z suffix due to Prefer header)
+  // Parse as local time and compare to current Brisbane time
+  var nowUTC = new Date();
+  var brisbaneHour = new Date(nowUTC.toLocaleString('en-US', {timeZone: 'Australia/Brisbane'}));
 
-  // Only show meetings that haven't ended yet (upcoming)
+  // Only show meetings that haven't ended yet
   var upcoming = M365.events.filter(function(e) {
-    var endStr = e.end ? e.end.replace('Z','') : '';
-    var endDate = new Date(endStr);
-    // Add Brisbane offset since times are returned as Brisbane local (no Z)
-    return endDate > new Date(Date.now() - brisbaneOffset);
+    if (!e.end) return true;
+    // End time from Graph is already Brisbane local - parse directly
+    var endStr = e.end.replace('Z','').replace('z','');
+    var endParts = endStr.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    if (!endParts) return true;
+    var endBris = new Date(endParts[0].replace('T',' ') + ' ' + (endStr.split('T')[1]||''));
+    // Compare end time (Brisbane) to current Brisbane time
+    return endBris > brisbaneHour;
   });
 
   if (upcoming.length === 0) {
@@ -1087,13 +1092,20 @@ async function loadInfoEmails() {
   try {
     var r = await fetch('/graph/info-emails');
     if (!r.ok) {
-      var err = await r.json().catch(function(){ return {}; });
-      console.warn('info@ mailbox:', err.error);
+      var errText = await r.text().catch(function(){ return 'unknown error'; });
+      console.warn('info@ mailbox error:', r.status, errText);
+      // Show error in email panel
+      var el = document.getElementById('infoEmailList');
+      if (el) el.innerHTML = '<div style="font-size:10px;color:var(--t3);padding:4px 0">info@ mailbox: reconnect M365 via /auth/login</div>';
       return;
     }
     var d = await r.json();
     infoEmails = d.emails || [];
-    console.log('info@ emails loaded:', infoEmails.length);
+    console.log('info@ emails loaded:', infoEmails.length, 'emails');
+    if (infoEmails.length === 0) {
+      var el2 = document.getElementById('infoEmailList');
+      if (el2) el2.innerHTML = '<div style="font-size:10px;color:var(--t3);padding:4px 0">info@ — no unreplied emails</div>';
+    }
     renderInfoEmails();
   } catch(e) {
     console.warn('info@ load failed:', e.message);
@@ -1557,12 +1569,13 @@ function renderHistory() {
       el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">No history yet. Data accumulates as staff submit weekly check-ins.</div>';
       return;
     }
-    var html = '<div id="historyMonthList">' + months.map(function(mk) {
+    window._historyMonthData = byMonth; // store for onclick access
+    var html = '<div id="historyMonthList">' + months.map(function(mk, mi) {
       var subs = byMonth[mk];
       var wkData = groupByWeek(subs);
       var wkCount = Object.keys(wkData).length;
       var stats = calcWeekStats(subs);
-      return '<div class="card" style="cursor:pointer;margin-bottom:8px" onclick="showHistoryMonth(' + JSON.stringify(mk) + ')">' +
+      return '<div class="card" style="cursor:pointer;margin-bottom:8px" data-mi="' + mi + '" onclick="showHistoryMonthByIndex(this.dataset.mi)">' +
         '<div class="ct">' + getMonthLabel(mk) + '<span class="ct-action">View all submissions →</span></div>' +
         '<div style="display:flex;gap:16px;font-size:12px;color:var(--t1);flex-wrap:wrap">' +
           '<span><strong>' + stats.avg + '%</strong> avg</span>' +
@@ -1573,10 +1586,18 @@ function renderHistory() {
         '</div>' +
       '</div>';
     }).join('') + '</div>';
+    window._historyMonths = months; // store for index lookup
     el.innerHTML = html;
   }).catch(function(e) {
     el.innerHTML = '<div style="font-size:12px;color:var(--r);padding:8px 0">Error: ' + e.message + '</div>';
   });
+}
+
+function showHistoryMonthByIndex(idx) {
+  var months = window._historyMonths || [];
+  var mk = months[parseInt(idx)];
+  if (!mk) return;
+  showHistoryMonth(mk);
 }
 
 function showHistoryMonth(monthKey) {
@@ -1834,7 +1855,7 @@ function buildModals() {
       d.innerHTML = (boardMeetings.length>0?'<div class="alert-box ok"><div class="ab-title">📅 Board meeting: '+boardMeetings[0].subject+'</div><div class="ab-text">Prepare your board report before this meeting.</div></div>':'') +
         '<div class="mfield"><div class="mfl">Report scope</div><div class="mfv">Month prior: <strong>'+lastMonth+'</strong><br>Month ahead: <strong>'+thisMonth+'</strong><br>Format: Succinct, 2 pages max</div></div>';
       var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-      [['📄 Generate board report','Generate a succinct COO board report for Risk 2 Solution. Cover: (1) Month in review — key highlights, wins, risks, incidents, client updates, staff updates, financial snapshot. (2) Month ahead — priorities, upcoming risks, decisions required from the board. Maximum 2 pages. Plain language.'],
+      [['📄 Generate board paper','Generate a formal COO Board Paper for Risk 2 Solution for the period ending ' + new Date().toLocaleDateString('en-AU',{month:'long',year:'numeric'}) + '. Format it as a proper board paper with these sections:\n\n**BOARD PAPER — COO REPORT**\n**Period:** [Month Year]\n**Prepared by:** Kandia, Chief Operating Officer\n**Date:** ' + new Date().toLocaleDateString('en-AU') + '\n\n**1. EXECUTIVE SUMMARY**\nBrief 3-sentence summary of the month.\n\n**2. OPERATIONAL PERFORMANCE**\nClient delivery status, SLA performance, platform health, active onboardings (Titan Corp, Delta Inc, Prentice Group).\n\n**3. PEOPLE & CULTURE**\nStaff utilisation, any capacity or performance issues, recruitment, training.\n\n**4. FINANCIAL SNAPSHOT**\nKey financial highlights, P&L status, debt collection, any variances.\n\n**5. RISK & COMPLIANCE**\nISO 27001 progress, any incidents, compliance status, governance items.\n\n**6. MONTH AHEAD — PRIORITIES**\nTop 3-5 priorities for the coming month. Decisions required from the board.\n\n**7. ITEMS FOR BOARD NOTING**\nAny other matters for the board to note.\n\nKeep each section concise. Use available email and calendar data. Flag where information is not available. Maximum 2 pages total.'],
        ['✅ Month in review','Give me a summary of last month at Risk 2 Solution for the board report covering client delivery, staff, platform, compliance, and any incidents.'],
        ['🔭 Month ahead priorities','What are the top priorities for Risk 2 Solution next month that the board needs to know about?'],
        ['📊 Key metrics summary','Generate a key metrics summary for the board: SLA performance, staff utilisation, client onboarding status, and financial highlights.']
@@ -2067,9 +2088,21 @@ async function syncNow(){
     const d=await r.json();
     const allRaw=(Array.isArray(d.record)?d.record:[]).filter(e=>e&&e.name);
     window._allCheckIns = allRaw; // store all for history/monthly views
-    // Filter to CURRENT week only for main dashboard
-    const currentWeek = getCurrentWeekEnding();
-    const thisWeek = allRaw.filter(function(e){ return e.weekEnding === currentWeek; });
+    // Show check-ins submitted since last Monday (current calendar week)
+    var lastMonday = new Date();
+    lastMonday.setHours(0,0,0,0);
+    var dow = lastMonday.getDay();
+    lastMonday.setDate(lastMonday.getDate() - (dow === 0 ? 6 : dow - 1));
+    var thisWeek = allRaw.filter(function(e){
+      if (!e.submitted) return false;
+      return new Date(e.submitted) >= lastMonday;
+    });
+    // If no check-ins this week, also include most recent prior week so dashboard isn't empty
+    if (thisWeek.length === 0) {
+      var prevMonday = new Date(lastMonday);
+      prevMonday.setDate(prevMonday.getDate() - 7);
+      thisWeek = allRaw.filter(function(e){ return e.submitted && new Date(e.submitted) >= prevMonday && new Date(e.submitted) < lastMonday; });
+    }
     const byP={};
     thisWeek.forEach(e=>{const k=e.name.toLowerCase();if(!byP[k]||new Date(e.submitted)>new Date(byP[k].submitted))byP[k]=e;});
     SD=Object.values(byP);
@@ -2449,6 +2482,7 @@ async function send(){
   inp.value='';resize(inp);
 
   // Build live context from real M365 data + staff check-ins
+  var docCtx = (typeof getDocContext === 'function') ? getDocContext() : '';
   // Build full week date reference so Cinderella picks correct dates
   var now = new Date();
   var brisbaneNow = new Date(now.toLocaleString('en-US', {timeZone:'Australia/Brisbane'}));
