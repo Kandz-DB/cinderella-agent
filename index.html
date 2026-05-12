@@ -394,6 +394,8 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
     <div class="ng">Assistant</div>
     <button class="ni" onclick="show('chat',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M14 10a2 2 0 01-2 2H5l-3 3V4a2 2 0 012-2h8a2 2 0 012 2z"/></svg>Ask Cinderella</button>
     <button class="ni" onclick="show('sched',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l2.5 2.5"/></svg>Scheduler</button>
+    <div class="ng">Documents</div>
+    <button class="ni" onclick="show('docs',this)"><div class="nic">📁</div><div class="nn">Document library</div></button>
     <div class="ng">Settings</div>
     <div style="padding:5px 14px 6px;font-size:10px;color:var(--t3)">M365: <span id="m365Status">Checking...</span></div>
     <button class="ni" id="m365LoginBtn" onclick="window.open('/auth/login','_blank')" style="display:none;color:var(--a)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5"/><rect x="9" y="2" width="5" height="5"/><rect x="2" y="9" width="5" height="5"/><rect x="9" y="9" width="5" height="5"/></svg>Connect M365</button>
@@ -519,6 +521,25 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
         <div id="historyContent"></div>
       </div>
 
+    </div>
+
+    <!-- DOCUMENT LIBRARY -->
+    <div class="pnl" id="pnl-docs">
+      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Document library</span>
+        <label style="background:var(--g);color:#fff;border-radius:8px;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:500">
+          + Upload <input type="file" id="docUpload" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv" style="display:none" onchange="handleDocUpload(event)">
+        </label>
+      </div>
+      <div style="font-size:11px;color:var(--t3);margin-bottom:12px">Upload documents for Cinderella to reference when drafting reports, processes and analysis. Stored for this session.</div>
+      <div id="docList" style="margin-bottom:12px"></div>
+      <div id="docEmpty" style="font-size:12px;color:var(--t3);padding:20px;text-align:center;border:1px dashed var(--bm);border-radius:var(--rm)">
+        No documents uploaded yet.<br>Upload PDFs, Word docs, or text files for Cinderella to reference.
+      </div>
+      <div style="margin-top:12px">
+        <button class="m-btn sec" style="width:100%;margin-bottom:6px" onclick="qa('Based on the documents in my library, give me a summary of the key information Cinderella should know about.')">🤖 Summarise all documents</button>
+        <button class="m-btn sec" style="width:100%" onclick="qa('Review the documents in my library and identify any gaps, inconsistencies or areas that need updating.')">🔍 Identify gaps in documents</button>
+      </div>
     </div>
 
     <!-- SKILL MATCHING -->
@@ -768,8 +789,15 @@ async function loadM365Data() {
   // Load info@ mailbox
   try { await loadInfoEmails(); } catch(e) { console.warn('info@ failed:', e.message); }
 
-  // Show opening notification popup
-  try { await generateOpeningNotification(); } catch(e) { console.warn('Notification failed:', e.message); }
+  // Show opening notification popup - only once per day
+  try {
+    var today = new Date().toLocaleDateString('en-AU');
+    var lastNotify = sessionStorage.getItem('cinderella_notify_date');
+    if (lastNotify !== today) {
+      sessionStorage.setItem('cinderella_notify_date', today);
+      await generateOpeningNotification();
+    }
+  } catch(e) { console.warn('Notification failed:', e.message); }
 }
 
 
@@ -1038,12 +1066,13 @@ async function loadInfoEmails() {
   try {
     var r = await fetch('/graph/info-emails');
     if (!r.ok) {
-      var err = await r.json();
+      var err = await r.json().catch(function(){ return {}; });
       console.warn('info@ mailbox:', err.error);
       return;
     }
     var d = await r.json();
     infoEmails = d.emails || [];
+    console.log('info@ emails loaded:', infoEmails.length);
     renderInfoEmails();
   } catch(e) {
     console.warn('info@ load failed:', e.message);
@@ -1315,8 +1344,12 @@ function renderMonthSummary() {
     return;
   }
   document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading monthly data...</div>';
-  fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } })
-    .then(function(r) { return r.json(); })
+  // Use cached data if available, otherwise fetch
+  var fetchPromise = window._allCheckIns && window._allCheckIns.length > 0 ?
+    Promise.resolve({ record: window._allCheckIns }) :
+    fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } }).then(function(r) { return r.json(); });
+
+  fetchPromise
     .then(function(d) {
       var all = (Array.isArray(d.record) ? d.record : []).filter(function(e) { return e && e.name; });
       var byMonth = groupByMonth(all);
@@ -1472,8 +1505,12 @@ function renderHistory() {
     return;
   }
   document.getElementById('historyContent').innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading all historical data...</div>';
-  fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } })
-    .then(function(r) { return r.json(); })
+  // Use cached data if available, otherwise fetch
+  var fetchPromise = window._allCheckIns && window._allCheckIns.length > 0 ?
+    Promise.resolve({ record: window._allCheckIns }) :
+    fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } }).then(function(r) { return r.json(); });
+
+  fetchPromise
     .then(function(d) {
       var all = (Array.isArray(d.record) ? d.record : []).filter(function(e) { return e && e.name; });
       var byMonth = groupByMonth(all);
@@ -1607,6 +1644,310 @@ function stopVoice() {
   }
 }
 
+
+// ── MODAL KEY LOOKUP (COO duties + other keyed modals) ──
+function omKey(key) {
+  var MODALS = buildModals();
+  var m = MODALS[key];
+  if (!m) { console.warn('No modal for key:', key); return; }
+  var body = typeof m.build === 'function' ? m.build() : m.body || '';
+  if (body instanceof Element) {
+    var wrapper = document.createElement('div');
+    wrapper.appendChild(body);
+    openModal(m.title, m.sub || '', wrapper.innerHTML);
+  } else {
+    openModal(m.title, m.sub || '', body);
+  }
+}
+
+// Close modal shorthand
+function cm() { closeModal(); }
+
+// ── GENERATE EMAIL INSIGHTS ──
+async function generateEmailInsights() {
+  if (M365.emails.length === 0) { qa('Analyse my emails and give me insights'); return; }
+  var insEl = document.getElementById('emailInsights');
+  if (insEl) insEl.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Cinderella is analysing your inbox...</div>';
+  var emailSummary = M365.emails.slice(0,15).map(function(e){
+    return e.from+' ('+e.hoursOld+'h ago'+(e.hasAttachments?' HAS ATTACHMENT':'')+('): '+e.subject);
+  }).join('\n');
+  var infoSummary = infoEmails.slice(0,5).map(function(e){
+    return '[info@] '+e.from+' ('+e.hoursOld+'h ago): '+e.subject;
+  }).join('\n');
+  try {
+    var r = await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      model:'claude-sonnet-4-5',max_tokens:500,system:SYS,
+      messages:[{role:'user',content:'Analyse these emails and give me 4 specific, actionable insights in plain language. Each insight 1-2 sentences max. Start each with an emoji.\n\n'+emailSummary+'\n\n'+infoSummary}]
+    })});
+    var d = await r.json();
+    var rep = d.content&&d.content[0]?d.content[0].text:'';
+    if (insEl && rep) {
+      var lines = rep.split('\n').filter(function(l){ return l.trim(); });
+      insEl.innerHTML = lines.map(function(l){
+        return '<div class="ins" onclick="qa(\''+l.replace(/'/g,'').replace(/"/g,'').substring(0,100)+'\')" style="cursor:pointer"><div class="il">💡 Insight</div><div class="it">'+l+'</div></div>';
+      }).join('');
+    }
+  } catch(ex) {
+    if (insEl) insEl.innerHTML = '<div style="font-size:11px;color:var(--r)">Could not load insights: '+ex.message+'</div>';
+  }
+}
+
+function refreshEmailInsights() { generateEmailInsights(); }
+
+
+// ── COO DUTIES MODAL DEFINITIONS ──
+
+function replyToFinanceEmail(idx) {
+  var e = window._financeEmails && window._financeEmails[idx];
+  if (!e) return;
+  openDraftModal(e.from, 'Reply to finance email', 'Re: ' + (e.subject||''), 'email', e.fromEmail);
+}
+
+function buildModals() {
+  return {
+    'duty-people': {title:'People & Culture', sub:'Staffing, check-ins, performance, 1:1s, KPIs', build: function() {
+      var d = document.createElement('div');
+      var checkInMeetings = M365.events.filter(function(e){ var s=(e.subject||'').toLowerCase(); return s.includes('check')||s.includes('1:1')||s.includes('one on one'); });
+      d.innerHTML = (checkInMeetings.length>0 ?
+        '<div class="alert-box ok"><div class="ab-title">📅 Check-in meeting today: '+checkInMeetings[0].subject+'</div></div>' :
+        '<div class="alert-box warn"><div class="ab-title">No check-in meetings today</div><div class="ab-text">Consider scheduling 1:1s with your team.</div></div>') +
+        getMissingCheckIns();
+      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+      [['Generate action plan','Generate a complete people and culture action plan for Kandia this week at Risk 2 Solution based on staff check-in data and calendar.'],
+       ['Schedule 1:1 meetings','Which staff members does Kandia most need to have a 1:1 with this week and why? List them in priority order.'],
+       ['Send weekly check-in','Draft a message to send to all 7 staff asking them to complete their weekly check-in form for this week.'],
+       ['Review KPIs','What KPIs should Kandia be reviewing for her team this week? List them with current status where known.'],
+       ['Performance reviews','Generate a performance review schedule and process for Risk 2 Solution staff for this quarter.'],
+       ['Burnout risk check','Which staff members are at risk of burnout based on check-in data? What should Kandia do for each one?']
+      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
+      return d;
+    }},
+    'duty-finance': {title:'Financial Oversight', sub:'P&L, debt collection, finance updates', build: function() {
+      var d = document.createElement('div');
+      var financeEmails = M365.emails.concat(infoEmails).filter(function(e){
+        var from=(e.from||'').toLowerCase(); var subj=(e.subject||'').toLowerCase();
+        return from.includes('diane')||from.includes('kruger')||from.includes('nicole')||from.includes('sofianos')||subj.includes('p&l')||subj.includes('finance')||subj.includes('debt')||subj.includes('invoice')||subj.includes('payment');
+      });
+      var financeMeetings = M365.events.filter(function(e){ var s=(e.subject||'').toLowerCase(); return s.includes('finance')||s.includes('p&l')||s.includes('budget'); });
+      d.innerHTML = (financeEmails.length>0 ?
+        '<div class="alert-box ok"><div class="ab-title">📧 '+financeEmails.length+' finance-related email'+(financeEmails.length>1?'s':'')+' this week</div>'+
+        '<div class="ab-text" style="margin-top:6px">'+financeEmails.map(function(e,fi){ window._financeEmails=window._financeEmails||{}; window._financeEmails[fi]=e;
+          return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.08)">'+
+            '<span><strong>'+e.from+'</strong><br><span style="font-size:10px">'+e.subject+'</span></span>'+
+            '<div style="display:flex;gap:4px;margin-left:8px"><button onclick="openOutlook()" style="font-size:9px;padding:2px 8px;border-radius:8px;background:#0078D4;color:#fff;border:none;cursor:pointer">Open</button>'+
+            '<button onclick="replyToFinanceEmail('+fi+')" style="font-size:9px;padding:2px 8px;border-radius:8px;background:var(--g);color:#fff;border:none;cursor:pointer">Reply</button></div></div>';
+        }).join('')+'</div></div>' :
+        '<div class="alert-box warn"><div class="ab-title">No finance emails from Diane or Nicole this week</div><div class="ab-text">Consider requesting a P&L update.</div></div>') +
+        (financeMeetings.length>0?'<div class="alert-box ok"><div class="ab-title">📅 Finance meeting: '+financeMeetings[0].subject+'</div></div>':'');
+      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+      var b1=document.createElement('button');b1.className='m-btn';b1.style.marginBottom='6px';b1.textContent='📊 Summarise finance update';b1.onclick=function(){qa('Based on any finance-related emails, give Kandia a summary of the current financial position at Risk 2 Solution including P&L, outstanding debt collection, and any cash flow concerns.');cm();};d.appendChild(b1);
+      var b2=document.createElement('button');b2.className='m-btn';b2.style.cssText='background:#0078D4;margin-bottom:6px;display:block';b2.textContent='📅 Schedule finance meeting';b2.onclick=function(){openDraftModal('Diane Kruger','Schedule a finance review meeting','Finance review meeting','meeting','diane.k@risk2solution.com');cm();};d.appendChild(b2);
+      var b3=document.createElement('button');b3.className='m-btn sec';b3.style.cssText='margin-bottom:6px;display:block';b3.textContent='📧 Request finance information';b3.onclick=function(){openDraftModal('Diane Kruger','Request the latest P&L, debt collection status and cash flow forecast','Finance update request','email','diane.k@risk2solution.com');cm();};d.appendChild(b3);
+      return d;
+    }},
+    'duty-reporting': {title:'Board Reporting', sub:'Monthly board report — succinct, 2 pages max', build: function() {
+      var d = document.createElement('div');
+      var boardMeetings = M365.events.filter(function(e){ var s=(e.subject||'').toLowerCase(); return s.includes('board')||s.includes('directors'); });
+      var lastMonth = new Date(new Date().getFullYear(), new Date().getMonth()-1, 1).toLocaleString('en-AU',{month:'long',year:'numeric'});
+      var thisMonth = new Date().toLocaleString('en-AU',{month:'long',year:'numeric'});
+      d.innerHTML = (boardMeetings.length>0?'<div class="alert-box ok"><div class="ab-title">📅 Board meeting: '+boardMeetings[0].subject+'</div><div class="ab-text">Prepare your board report before this meeting.</div></div>':'') +
+        '<div class="mfield"><div class="mfl">Report scope</div><div class="mfv">Month prior: <strong>'+lastMonth+'</strong><br>Month ahead: <strong>'+thisMonth+'</strong><br>Format: Succinct, 2 pages max</div></div>';
+      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+      [['📄 Generate board report','Generate a succinct COO board report for Risk 2 Solution. Cover: (1) Month in review — key highlights, wins, risks, incidents, client updates, staff updates, financial snapshot. (2) Month ahead — priorities, upcoming risks, decisions required from the board. Maximum 2 pages. Plain language.'],
+       ['✅ Month in review','Give me a summary of last month at Risk 2 Solution for the board report covering client delivery, staff, platform, compliance, and any incidents.'],
+       ['🔭 Month ahead priorities','What are the top priorities for Risk 2 Solution next month that the board needs to know about?'],
+       ['📊 Key metrics summary','Generate a key metrics summary for the board: SLA performance, staff utilisation, client onboarding status, and financial highlights.']
+      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
+      return d;
+    }},
+    'duty-ops': {title:'Operations Oversight', sub:'Policies, SOPs, compliance, governance, projects', build: function() {
+      var d = document.createElement('div');
+      d.innerHTML = '<div class="mfield"><div class="mfl">Weekly operations checklist</div><div class="mfv">Click below to generate each area.</div></div>';
+      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+      [['📋 Full operations checklist','Generate a complete weekly operations checklist for Kandia at Risk 2 Solution covering: policies and procedures review, SOPs review, project status, compliance and governance, staff utilisation, client delivery, platform health, and any other operational flows.'],
+       ['📁 Policies & procedures review','Generate a policies and procedures review checklist for Risk 2 Solution. What should Kandia check, when should each be reviewed, and are there any overdue?'],
+       ['📝 SOPs review','List all SOPs that Risk 2 Solution should have in place, which exist, which need creating, and which need reviewing.'],
+       ['✅ Compliance & governance','Generate a compliance and governance checklist for this week at Risk 2 Solution including ISO 27001 progress, any overdue audits, policy sign-offs, and access control reviews.'],
+       ['🔄 Process improvement','What process improvements should Kandia prioritise this quarter? Rank by impact and effort.'],
+       ['📊 Operational metrics','What operational metrics should Kandia review weekly? Generate a dashboard summary.']
+      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
+      return d;
+    }},
+    'duty-clients': {title:'Client Delivery', sub:'Project tracking, client feedback, Monday.com', build: function() {
+      var d = document.createElement('div');
+      var clientEmails = M365.emails.filter(function(e){ var s=(e.subject||'').toLowerCase(); return s.includes('titan')||s.includes('delta')||s.includes('prentice')||s.includes('onboard')||s.includes('project')||s.includes('delivery'); });
+      d.innerHTML = '<div id="mondayStatus"><div style="font-size:12px;color:var(--t2);padding:8px 0;display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:var(--a);flex-shrink:0"></span><span>Loading Monday.com project data...</span></div></div>' +
+        (clientEmails.length>0?'<div class="alert-box ok" style="margin-top:8px"><div class="ab-title">📧 '+clientEmails.length+' client-related email'+(clientEmails.length>1?'s':'')+' this week</div><div class="ab-text">'+clientEmails.slice(0,3).map(function(e){return e.from+': '+e.subject;}).join('<br>')+'</div></div>':'');
+      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+      var eb=document.createElement('button');eb.className='m-btn';eb.style.cssText='background:#217346;display:block;width:100%;margin-bottom:8px';eb.textContent='📊 Export to Excel';eb.onclick=function(){exportMondayToExcel();};d.appendChild(eb);
+      var ab=document.createElement('button');ab.className='m-btn sec';ab.style.cssText='display:block;width:100%;margin-bottom:6px';ab.textContent='🤖 Full Cinderella analysis';ab.onclick=function(){analyseMondayData();cm();};d.appendChild(ab);
+      [['🔴 Flag risks and issues','What are the current delivery risks and open issues across all client projects? Flag what Kandia needs to do about each one.'],
+       ['💬 Client feedback summary','Summarise all client feedback themes from Monday.com. Flag anything requiring immediate action.'],
+       ['📧 Draft client status update','Draft a professional project status update email for active clients.']
+      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
+      var rb=document.createElement('button');rb.className='m-btn sec';rb.style.cssText='display:block;width:100%;margin-bottom:6px;background:#f96e08;color:#fff';rb.textContent='🟧 Load Monday.com projects';rb.onclick=function(){loadMondayData();};d.appendChild(rb);
+      setTimeout(function(){loadMondayData();},200);
+      return d;
+    }},
+    'duty-strategy': {title:'Strategy & Planning', sub:'OKRs, roadmap, market positioning', build: function() {
+      var d = document.createElement('div');
+      d.innerHTML = '<div class="mfield"><div class="mfl">Strategic focus</div><div class="mfv">Risk management SaaS · ISO 27001 compliance · Client growth · Platform v3.3</div></div>';
+      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+      [['📋 Quarterly OKR review','Generate a quarterly OKR review for Risk 2 Solution. Cover: progress on key objectives, wins, misses, and recommended adjustments for next quarter.'],
+       ['🎯 Strategic priorities','What are the top 3-5 strategic priorities for Risk 2 Solution this quarter and what does success look like for each?'],
+       ['📈 Growth opportunities','What growth opportunities should Risk 2 Solution be pursuing right now based on the current client base and market?'],
+       ['🗺 Roadmap review','Generate a product and operational roadmap summary for Risk 2 Solution for the next 6 months.']
+      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
+      return d;
+    }},
+    'duty-risk': {title:'Risk & Compliance', sub:'ISO 27001, incident management, governance', build: function() {
+      var d = document.createElement('div');
+      d.innerHTML = '<div class="mfield"><div class="mfl">Compliance status</div><div class="mfv">ISO 27001 in progress · Incident escalation process active · Governance framework in place</div></div>';
+      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+      [['🛡 ISO 27001 checklist','Generate a current ISO 27001 audit preparation checklist for Risk 2 Solution. Flag any overdue items.'],
+       ['⚠ Incident log review','Generate an incident review summary for this month. What patterns are emerging and what needs escalation?'],
+       ['📋 Compliance calendar','What compliance deadlines and review dates should Kandia have on her radar in the next 90 days?'],
+       ['🔍 Risk register review','Generate a top-level risk register for Risk 2 Solution covering operational, financial, client, staff and technology risks.']
+      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
+      return d;
+    }},
+    'duty-tech': {title:'Technology & Platform', sub:'Platform health, v3.3 roadmap, infrastructure', build: function() {
+      var d = document.createElement('div');
+      d.innerHTML = '<div class="mfield"><div class="mfl">Platform status</div><div class="mfv">R2S v3.2 live · v3.3 in development · SLA 96.4%</div></div>';
+      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
+      [['🖥 Platform health check','Generate a platform health summary for Risk 2 Solution. Cover: uptime, SLA performance, open incidents, and v3.3 development progress.'],
+       ['🔧 Technical debt review','What technical debt should Risk 2 Solution prioritise addressing this quarter?'],
+       ['🚀 v3.3 roadmap','Summarise the v3.3 platform roadmap and flag any risks to delivery.'],
+       ['🔐 Security review','Generate a security review checklist for the Risk 2 Solution platform covering access control, data encryption, and vulnerability management.']
+      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
+      return d;
+    }}
+  };
+}
+
+
+// ── DOCUMENT LIBRARY ──
+var docLibrary = []; // {name, type, content, size}
+
+async function handleDocUpload(event) {
+  var files = event.target.files;
+  if (!files.length) return;
+  for (var i = 0; i < files.length; i++) {
+    var file = files[i];
+    var content = await readFileContent(file);
+    docLibrary.push({ name: file.name, type: file.type, content: content, size: file.size, uploaded: new Date().toLocaleTimeString('en-AU') });
+  }
+  renderDocLibrary();
+  // Reset input
+  document.getElementById('docUpload').value = '';
+}
+
+function readFileContent(file) {
+  return new Promise(function(resolve) {
+    var reader = new FileReader();
+    reader.onload = function(e) { resolve(e.target.result); };
+    reader.onerror = function() { resolve('[Could not read file]'); };
+    if (file.type === 'text/plain' || file.type === 'text/markdown' || file.name.endsWith('.txt') || file.name.endsWith('.md') || file.name.endsWith('.csv')) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsDataURL(file); // base64 for binary files
+    }
+  });
+}
+
+function renderDocLibrary() {
+  var listEl = document.getElementById('docList');
+  var emptyEl = document.getElementById('docEmpty');
+  if (!listEl) return;
+  if (docLibrary.length === 0) {
+    listEl.innerHTML = '';
+    if (emptyEl) emptyEl.style.display = 'block';
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+  listEl.innerHTML = docLibrary.map(function(doc, idx) {
+    var icon = doc.name.endsWith('.pdf') ? '📄' : doc.name.endsWith('.docx') || doc.name.endsWith('.doc') ? '📝' : doc.name.endsWith('.csv') ? '📊' : '📃';
+    var kb = Math.round(doc.size / 1024);
+    return '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);border-radius:var(--rm);margin-bottom:6px">'+
+      '<span style="font-size:16px">'+icon+'</span>'+
+      '<div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:500;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+doc.name+'</div>'+
+      '<div style="font-size:10px;color:var(--t3)">'+kb+'KB · Uploaded '+doc.uploaded+'</div></div>'+
+      '<button onclick="askAboutDoc('+idx+')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--b);color:#fff;border:none;cursor:pointer;flex-shrink:0">Ask Cinderella</button>'+
+      '<button onclick="removeDoc('+idx+')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:none;border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;flex-shrink:0;margin-left:4px">✕</button>'+
+    '</div>';
+  }).join('');
+}
+
+function removeDoc(idx) {
+  docLibrary.splice(idx, 1);
+  renderDocLibrary();
+}
+
+function askAboutDoc(idx) {
+  var doc = docLibrary[idx];
+  if (!doc) return;
+  var content = typeof doc.content === 'string' && !doc.content.startsWith('data:') ? doc.content.substring(0, 3000) : '[Binary file — cannot read content directly]';
+  show('chat', document.querySelector('[onclick*=chat]'));
+  qa('I have uploaded a document called "' + doc.name + '". Here is its content:\n\n' + content + '\n\nPlease summarise this document and tell me what key information it contains that is relevant to Risk 2 Solution.');
+}
+
+function getDocContext() {
+  if (docLibrary.length === 0) return '';
+  var ctx = '\n\nDOCUMENT LIBRARY (' + docLibrary.length + ' document' + (docLibrary.length > 1 ? 's' : '') + ' uploaded by Kandia):\n';
+  docLibrary.forEach(function(doc) {
+    var content = typeof doc.content === 'string' && !doc.content.startsWith('data:') ? doc.content.substring(0, 1500) : '[Binary file]';
+    ctx += '\nDOCUMENT: ' + doc.name + '\n' + content + '\n---\n';
+  });
+  return ctx;
+}
+
+// ── WORD DOCUMENT EXPORT ──
+
+function downloadStoredDoc(idx) {
+  var doc = window._dlDocs && window._dlDocs[idx];
+  if (!doc) return;
+  downloadAsWord(doc.title, doc.content);
+}
+
+function downloadAsWord(title, content) {
+  // Create a simple HTML-based .doc file that Word can open
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>'+
+    'body{font-family:Calibri,sans-serif;font-size:11pt;line-height:1.4;margin:2cm}'+
+    'h1{font-size:16pt;color:#1a1a18;margin-bottom:6pt}'+
+    'h2{font-size:13pt;color:#1D9E75;margin-top:14pt;margin-bottom:4pt}'+
+    'h3{font-size:11pt;color:#378ADD;margin-top:10pt}'+
+    'p{margin-bottom:6pt}'+
+    '.header{border-bottom:2pt solid #1D9E75;padding-bottom:6pt;margin-bottom:14pt}'+
+    '.footer{border-top:1pt solid #ccc;padding-top:6pt;margin-top:20pt;font-size:9pt;color:#888}'+
+    '</style></head><body>'+
+    '<div class="header"><h1>'+title+'</h1>'+
+    '<p style="color:#888;font-size:9pt">Risk 2 Solution · Generated by Cinderella · '+new Date().toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'})+'</p></div>'+
+    content.replace(/\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/^# (.*)/gm,'<h1>$1</h1>').replace(/^## (.*)/gm,'<h2>$1</h2>').replace(/^### (.*)/gm,'<h3>$1</h3>')+
+    '<div class="footer">Risk 2 Solution · Confidential · Generated '+new Date().toLocaleString('en-AU')+'</div>'+
+    '</body></html>';
+
+  var blob = new Blob([html], { type: 'application/msword' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = title.replace(/[^a-z0-9]/gi,'_').substring(0,50) + '_' + new Date().toLocaleDateString('en-AU').replace(/\//g,'-') + '.doc';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function addDownloadButton(content, title) {
+  // Add a download button after any AI response that looks like a report
+  var btn = document.createElement('div');
+  btn.style.cssText = 'margin-top:8px';
+  var dlIdx = Object.keys(window._dlDocs||{}).length;
+  window._dlDocs = window._dlDocs || {};
+  window._dlDocs[dlIdx] = {title: title||'Report', content: content};
+  btn.innerHTML = '<button onclick="downloadStoredDoc('+dlIdx+')" style="font-size:11px;padding:5px 12px;border-radius:6px;background:#2B579A;color:#fff;border:none;cursor:pointer;font-family:var(--f)">📄 Download as Word document</button>';
+  return btn;
+}
+
 function loadCfg(){
   try{const s=localStorage.getItem('cin_cfg_v3');if(s){const p=JSON.parse(s);if(p.api)C.api=p.api;if(p.bin)C.bin=p.bin;if(p.key)C.key=p.key;}}catch(e){}
   document.getElementById('setupMo').style.display='none';
@@ -1624,6 +1965,15 @@ function saveSetup(){
   if(C.bin&&C.key){syncNow();setInterval(syncNow,5*60*1000);}
 }
 function skipSetup(){document.getElementById('setupMo').style.display='none';}
+
+function getCurrentWeekEnding() {
+  var d = new Date();
+  var day = d.getDay();
+  var daysToFri = day === 5 ? 0 : day === 6 ? 6 : 5 - day;
+  var fri = new Date(d);
+  fri.setDate(d.getDate() + daysToFri);
+  return fri.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+}
 
 async function syncNow(){
   if(!C.bin||!C.key){setSyncUI('off','JSONBin not configured');return;}
@@ -2045,7 +2395,7 @@ async function send(){
 
   addMsg('u',text);msgs.push({role:'user',content:text});setB(true);
   try{
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,system:SYS+liveCtx,messages:msgs})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,system:SYS+liveCtx+docCtx,messages:msgs})});
     const d=await r.json();
     if(d.error)throw new Error(d.error.message);
     const rep=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('\n')||'No response.';
