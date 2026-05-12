@@ -806,16 +806,37 @@ function renderLiveCalendar() {
   const el = document.getElementById('liveCalendar');
   if (!el || M365.events.length === 0) return;
   el.style.display = 'block';
-  // Hide static placeholder calendar rows when we have live data
   const staticRows = document.querySelectorAll('#pnl-today .card .row');
   staticRows.forEach(r => r.style.display = 'none');
-  el.innerHTML = M365.events.map(e => {
-    const start = new Date(e.start);
-    const end = new Date(e.end);
-    const time = start.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
-    const endTime = end.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
-    const durationMins = Math.round((end - start) / 60000);
-    return '<div class="row"><div class="mtime">'+time+'</div><div><div class="mt">'+e.subject+'</div><div class="mm">'+endTime+' · '+durationMins+' min'+(e.location?' · '+e.location:'')+'</div></div></div>';
+
+  // Brisbane time: UTC+10
+  var brisbaneOffset = 10 * 60 * 60 * 1000;
+  var nowBrisbane = new Date(Date.now() + brisbaneOffset);
+
+  // Only show meetings that haven't ended yet (upcoming)
+  var upcoming = M365.events.filter(function(e) {
+    var endStr = e.end ? e.end.replace('Z','') : '';
+    var endDate = new Date(endStr);
+    // Add Brisbane offset since times are returned as Brisbane local (no Z)
+    return endDate > new Date(Date.now() - brisbaneOffset);
+  });
+
+  if (upcoming.length === 0) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No more meetings today.</div>';
+    return;
+  }
+
+  el.innerHTML = upcoming.map(function(e) {
+    var start = new Date(e.start.replace('Z',''));
+    var end = new Date(e.end.replace('Z',''));
+    var time = start.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    var endTime = end.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    var durationMins = Math.round((end - start) / 60000);
+    // Check if in progress
+    var now = new Date(e.start); // use same reference
+    var inProgress = start <= new Date() && end >= new Date();
+    var badge = inProgress ? '<span style="font-size:9px;background:var(--g);color:#fff;padding:1px 6px;border-radius:8px;margin-left:6px">In progress</span>' : '';
+    return '<div class="row"><div class="mtime">'+time+'</div><div><div class="mt">'+e.subject+badge+'</div><div class="mm">'+endTime+' · '+durationMins+' min'+(e.location?' · '+e.location:'')+'</div></div></div>';
   }).join('');
 }
 
@@ -1306,7 +1327,6 @@ function groupByWeek(submissions) {
   submissions.forEach(function(s) {
     var wk = s.weekEnding || getWeekEnding(s.submitted);
     if (!weeks[wk]) weeks[wk] = [];
-    // Deduplicate by name - keep most recent
     var existing = weeks[wk].findIndex(function(e) { return e.name && s.name && e.name.toLowerCase() === s.name.toLowerCase(); });
     if (existing >= 0) {
       if (new Date(s.submitted) > new Date(weeks[wk][existing].submitted)) weeks[wk][existing] = s;
@@ -1315,6 +1335,17 @@ function groupByWeek(submissions) {
     }
   });
   return weeks;
+}
+
+function sortWeeks(weeks) {
+  // Sort week keys chronologically even if they are formatted strings like "16 May 2026"
+  return Object.keys(weeks).sort(function(a, b) {
+    var da = new Date(a);
+    var db = new Date(b);
+    if (isNaN(da)) da = new Date(a.replace(/(\d+)\s(\w+)\s(\d+)/, '$2 $1 $3'));
+    if (isNaN(db)) db = new Date(b.replace(/(\d+)\s(\w+)\s(\d+)/, '$2 $1 $3'));
+    return da - db;
+  });
 }
 
 function groupByMonth(submissions) {
@@ -1345,13 +1376,16 @@ function renderMonthSummary() {
   }
   document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading monthly data...</div>';
   // Use cached data if available, otherwise fetch
-  var fetchPromise = window._allCheckIns && window._allCheckIns.length > 0 ?
-    Promise.resolve({ record: window._allCheckIns }) :
-    fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } }).then(function(r) { return r.json(); });
+  // Always fetch fresh from JSONBin for accurate month/history data
+  var fetchFn = (window._allCheckIns && window._allCheckIns.length > 0)
+    ? Promise.resolve(window._allCheckIns)
+    : fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } })
+        .then(function(r){ return r.json(); })
+        .then(function(d){ return (Array.isArray(d.record)?d.record:[]).filter(function(e){return e&&e.name;}); });
 
-  fetchPromise
-    .then(function(d) {
-      var all = (Array.isArray(d.record) ? d.record : []).filter(function(e) { return e && e.name; });
+  fetchFn
+    .then(function(all) {
+      window._allCheckIns = all; // update cache
       var byMonth = groupByMonth(all);
       var months = Object.keys(byMonth).sort().reverse();
       if (months.length === 0) {
@@ -1375,11 +1409,14 @@ function renderMonthSummary() {
 
 function showMonthFromCard(card) {
   var mk = card.getAttribute('data-monthkey');
-  // Switch to monthly view first
+  // Stay in history view and show the month detail there
+  showHistoryMonth(mk);
+}
+
+function showMonthFromCardInMonthly(mk) {
+  // Switch to monthly view and show month
   setStaffView('month');
-  // Then render the month - data is already in window._allMonthData
   showMonth(mk);
-  // Update nav buttons if present
   document.querySelectorAll('.month-tab').forEach(function(btn) {
     btn.classList.toggle('active', btn.getAttribute('data-mk') === mk);
   });
@@ -1500,69 +1537,107 @@ function showWeekDetail(weekEnding) {
 }
 
 function renderHistory() {
-  if (!C.bin || !C.key) {
-    document.getElementById('historyContent').innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">JSONBin not configured.</div>';
-    return;
-  }
-  document.getElementById('historyContent').innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading all historical data...</div>';
-  // Use cached data if available, otherwise fetch
-  var fetchPromise = window._allCheckIns && window._allCheckIns.length > 0 ?
-    Promise.resolve({ record: window._allCheckIns }) :
-    fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } }).then(function(r) { return r.json(); });
+  var el = document.getElementById('historyContent');
+  if (!el) return;
+  if (!C.bin || !C.key) { el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">JSONBin not configured.</div>'; return; }
+  el.innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading historical data...</div>';
 
-  fetchPromise
-    .then(function(d) {
-      var all = (Array.isArray(d.record) ? d.record : []).filter(function(e) { return e && e.name; });
-      var byMonth = groupByMonth(all);
-      var months = Object.keys(byMonth).sort().reverse();
-      if (months.length === 0) {
-        document.getElementById('historyContent').innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">No history yet. Data accumulates as staff submit weekly check-ins.</div>';
-        return;
-      }
-      var html = months.map(function(mk) {
-        var subs = byMonth[mk];
-        var byWeek = groupByWeek(subs);
-        var weeks = Object.keys(byWeek).length;
-        var stats = calcWeekStats(subs);
-        return '<div class="card" style="cursor:pointer" data-monthkey="' + mk + '" onclick="showMonthFromCard(this)">' +
-          '<div class="ct">' + getMonthLabel(mk) + ' <span class="ct-action">View detail →</span></div>' +
-          '<div style="display:flex;gap:20px;font-size:12px;color:var(--t1)">' +
-            '<span><strong>' + stats.avg + '%</strong> avg capacity</span>' +
-            '<span><strong>' + weeks + '</strong> week' + (weeks !== 1 ? 's' : '') + ' of data</span>' +
-            '<span><strong>' + stats.count + '</strong> submissions</span>' +
-            (stats.overloaded > 0 ? '<span style="color:var(--r)"><strong>' + stats.overloaded + '</strong> overloaded</span>' : '') +
-            (stats.blockers > 0 ? '<span style="color:var(--a)"><strong>' + stats.blockers + '</strong> blockers</span>' : '') +
-          '</div>' +
-        '</div>';
-      }).join('');
-      document.getElementById('historyContent').innerHTML = html;
-      window._allMonthData = byMonth;
-    })
-    .catch(function(e) {
-      document.getElementById('historyContent').innerHTML = '<div style="font-size:12px;color:var(--r);padding:8px 0">Error: ' + e.message + '</div>';
-    });
+  var fetchFn = (window._allCheckIns && window._allCheckIns.length > 0)
+    ? Promise.resolve(window._allCheckIns)
+    : fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } })
+        .then(function(r){ return r.json(); })
+        .then(function(d){ return (Array.isArray(d.record)?d.record:[]).filter(function(e){return e&&e.name;}); });
+
+  fetchFn.then(function(all) {
+    window._allCheckIns = all;
+    var byMonth = groupByMonth(all);
+    window._allMonthData = byMonth;
+    var months = Object.keys(byMonth).sort().reverse();
+    if (months.length === 0) {
+      el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">No history yet. Data accumulates as staff submit weekly check-ins.</div>';
+      return;
+    }
+    var html = '<div id="historyMonthList">' + months.map(function(mk) {
+      var subs = byMonth[mk];
+      var wkData = groupByWeek(subs);
+      var wkCount = Object.keys(wkData).length;
+      var stats = calcWeekStats(subs);
+      return '<div class="card" style="cursor:pointer;margin-bottom:8px" onclick="showHistoryMonth(' + JSON.stringify(mk) + ')">' +
+        '<div class="ct">' + getMonthLabel(mk) + '<span class="ct-action">View all submissions →</span></div>' +
+        '<div style="display:flex;gap:16px;font-size:12px;color:var(--t1);flex-wrap:wrap">' +
+          '<span><strong>' + stats.avg + '%</strong> avg</span>' +
+          '<span><strong>' + wkCount + '</strong> week' + (wkCount !== 1 ? 's' : '') + '</span>' +
+          '<span><strong>' + stats.count + '</strong> submissions</span>' +
+          (stats.overloaded > 0 ? '<span style="color:var(--r)"><strong>' + stats.overloaded + '</strong> overloaded</span>' : '') +
+          (stats.blockers > 0 ? '<span style="color:var(--a)"><strong>' + stats.blockers + '</strong> blockers</span>' : '') +
+        '</div>' +
+      '</div>';
+    }).join('') + '</div>';
+    el.innerHTML = html;
+  }).catch(function(e) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--r);padding:8px 0">Error: ' + e.message + '</div>';
+  });
 }
 
-async function generateMonthReport(monthKey) {
+function showHistoryMonth(monthKey) {
   var data = window._allMonthData || {};
   var subs = data[monthKey] || [];
-  if (subs.length === 0) { qa('Generate a staff health report for ' + getMonthLabel(monthKey)); return; }
   var byWeek = groupByWeek(subs);
-  var summary = 'STAFF DATA FOR ' + getMonthLabel(monthKey).toUpperCase() + '\n\n';
-  Object.keys(byWeek).sort().forEach(function(wk) {
-    summary += 'Week ending ' + wk + ':\n';
-    byWeek[wk].forEach(function(s) {
-      summary += '  ' + cap(s.name) + ' (' + (s.role || 'staff') + '): ' + (s.capacity || 0) + '% capacity, trend: ' + (s.trend || 'unknown') + (hasBlocker(s.blockers) ? ', BLOCKER: ' + s.blockers : '') + '\n';
+  var sortedWks = sortWeeks(byWeek).reverse();
+  var histEl = document.getElementById('historyContent');
+  if (!histEl) return;
+
+  var html = '<div style="margin-bottom:12px"><button onclick="renderHistory()" style="font-size:11px;background:none;border:none;color:var(--b);cursor:pointer;padding:0;font-family:var(--f)">← Back to all months</button></div>' +
+    '<div style="font-size:14px;font-weight:600;color:var(--t1);margin-bottom:14px">' + getMonthLabel(monthKey) + ' — All check-ins</div>';
+
+  if (sortedWks.length === 0) { histEl.innerHTML = html + '<div style="color:var(--t3)">No submissions for this month.</div>'; return; }
+
+  window._historyEntries = {};
+  var entryIdx = 0;
+
+  sortedWks.forEach(function(wk) {
+    var entries = byWeek[wk];
+    html += '<div class="card" style="margin-bottom:10px"><div class="ct">Week ending ' + wk + ' <span style="font-size:10px;color:var(--t3)">(' + entries.length + ' check-ins)</span></div>';
+    entries.forEach(function(s) {
+      var pct = s.capacity || 0;
+      window._historyEntries[entryIdx] = s;
+      html += '<div style="padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer" onclick="showHistoryEntry(' + entryIdx + ')">' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+          '<strong style="font-size:12px;flex:1">' + cap(s.name) + '</strong>' +
+          '<span style="font-size:10px;color:var(--t2)">' + (s.role||'') + '</span>' +
+          '<span style="font-size:12px;font-weight:500;color:' + (pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)') + '">' + pct + '%</span>' +
+        '</div>' +
+        (s.projects ? '<div style="font-size:10px;color:var(--t2);margin-top:3px">Projects: ' + s.projects + '</div>' : '') +
+        (s.blockers ? '<div style="font-size:10px;color:var(--a);margin-top:2px">Blocker: ' + s.blockers + '</div>' : '') +
+        '<div style="font-size:9px;color:var(--t3);margin-top:3px">Click to see full submission</div>' +
+      '</div>';
+      entryIdx++;
     });
-    summary += '\n';
+    html += '</div>';
   });
-  qa('Analyse this staff data for ' + getMonthLabel(monthKey) + ' and give me: (1) overall team health summary, (2) capacity trends and concerns, (3) any staff with persistent blockers or burnout risk, (4) skill matching opportunities I missed, (5) recommendations for next month.\n\n' + summary.substring(0, 2500));
+
+  histEl.innerHTML = html;
 }
 
+function showHistoryEntry(idx) {
+  var s = window._historyEntries && window._historyEntries[idx];
+  if (!s) return;
+  var pct = s.capacity || 0;
+  var pctN = s.capacityNext || 0;
+  openModal(cap(s.name), (s.role||'Staff') + ' · Week ending ' + s.weekEnding,
+    '<div class="mfield"><div class="mfl">This week capacity</div>' +
+    '<div style="display:flex;align-items:center;gap:10px"><div class="bw" style="flex:1;height:8px"><div class="bar ' + bc(pct) + '" style="width:' + pct + '%"></div></div><strong style="color:' + (pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)') + '">' + pct + '%</strong></div></div>' +
+    (pctN ? '<div class="mfield"><div class="mfl">Next week forecast</div><div style="display:flex;align-items:center;gap:10px"><div class="bw" style="flex:1;height:8px"><div class="bar ' + bc(pctN) + '" style="width:' + pctN + '%"></div></div><strong>' + pctN + '%</strong></div></div>' : '') +
+    '<div class="mfield"><div class="mfl">Workload trend</div><div class="mfv">' + (s.trend||'—') + '</div></div>' +
+    '<div class="mfield"><div class="mfl">Projects</div><div class="mfv">' + (s.projects||'—') + '</div></div>' +
+    (s.blockers ? '<div class="mfield"><div class="mfl">Blockers</div><div class="mfv" style="color:var(--a)">' + s.blockers + '</div></div>' : '') +
+    '<div class="mfield"><div class="mfl">Skills</div><div class="mfv">' + ((s.skills||'').split(',').filter(function(x){return x.trim();}).map(function(sk){return '<span class="mfv-tag" style="background:var(--gl);color:#0F6E56">'+sk.trim()+'</span>';}).join('')||'—') + '</div></div>' +
+    '<div class="mfield"><div class="mfl">Availability next week</div><div class="mfv">' + (s.availability||'Full week') + (s.leave?' — '+s.leave:'') + '</div></div>' +
+    (s.notes ? '<div class="mfield"><div class="mfl">Notes to COO</div><div class="mfv">' + s.notes + '</div></div>' : '') +
+    '<div class="mfield"><div class="mfl">Submitted</div><div class="mfv" style="color:var(--t3)">' + (s.submitted ? new Date(s.submitted).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—') + '</div></div>'
+  );
+}
 
-// ── VOICE INPUT ──
-var recognition = null;
-var isListening = false;
 
 function toggleVoice() {
   if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
@@ -1650,13 +1725,19 @@ function omKey(key) {
   var MODALS = buildModals();
   var m = MODALS[key];
   if (!m) { console.warn('No modal for key:', key); return; }
-  var body = typeof m.build === 'function' ? m.build() : m.body || '';
-  if (body instanceof Element) {
-    var wrapper = document.createElement('div');
-    wrapper.appendChild(body);
-    openModal(m.title, m.sub || '', wrapper.innerHTML);
-  } else {
-    openModal(m.title, m.sub || '', body);
+  // Open modal with empty body first
+  openModal(m.title, m.sub || '', '');
+  // Then inject built element directly to preserve event handlers
+  var bodyEl = document.getElementById('m-body');
+  if (!bodyEl) return;
+  bodyEl.innerHTML = '';
+  if (typeof m.build === 'function') {
+    var built = m.build();
+    if (built instanceof Element) {
+      bodyEl.appendChild(built);
+    } else {
+      bodyEl.innerHTML = built || '';
+    }
   }
 }
 
@@ -1984,9 +2065,13 @@ async function syncNow(){
     const r=await fetch(`https://api.jsonbin.io/v3/b/${C.bin}/latest`,{headers:{'X-Master-Key':C.key}});
     if(!r.ok)throw new Error(`HTTP ${r.status}`);
     const d=await r.json();
-    const all=(Array.isArray(d.record)?d.record:[]).filter(e=>e&&e.name);
+    const allRaw=(Array.isArray(d.record)?d.record:[]).filter(e=>e&&e.name);
+    window._allCheckIns = allRaw; // store all for history/monthly views
+    // Filter to CURRENT week only for main dashboard
+    const currentWeek = getCurrentWeekEnding();
+    const thisWeek = allRaw.filter(function(e){ return e.weekEnding === currentWeek; });
     const byP={};
-    all.forEach(e=>{const k=e.name.toLowerCase();if(!byP[k]||new Date(e.submitted)>new Date(byP[k].submitted))byP[k]=e;});
+    thisWeek.forEach(e=>{const k=e.name.toLowerCase();if(!byP[k]||new Date(e.submitted)>new Date(byP[k].submitted))byP[k]=e;});
     SD=Object.values(byP);
     const t=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
     btn.textContent=`Synced ${t}`;btn.className='sync-btn ok';
@@ -2446,6 +2531,20 @@ function addMsg(role,text){
   d.innerHTML = '<div class="sndr">' + (role==='u'?'You':'Cinderella') + '</div>' +
     '<div class="bub ' + role + '">' + formatted + schedBtn + '</div>';
   el.appendChild(d);
+  // Download button for long reports
+  if (role === 'a' && !scheduleData && displayText.length > 500) {
+    var rw = ['report','summary','checklist','review','analysis','plan','board','register','assessment','briefing','audit','process','policy'];
+    if (rw.some(function(k){ return displayText.toLowerCase().includes(k); })) {
+      var dlDiv = document.createElement('div');
+      dlDiv.style.cssText = 'padding:4px 4px 8px 4px';
+      window._dlDocs = window._dlDocs || {};
+      var di = Object.keys(window._dlDocs).length;
+      window._dlDocs[di] = {title: displayText.split('\n')[0].replace(/[#*]/g,'').trim().substring(0,60)||'Report', content: displayText};
+      dlDiv.innerHTML = '<button onclick="downloadStoredDoc('+di+')" style="font-size:10px;padding:4px 12px;border-radius:6px;background:#2B579A;color:#fff;border:none;cursor:pointer;font-family:var(--f)">📄 Download as Word</button>';
+      var bb = d.querySelectorAll('.bub.a');
+      if (bb.length > 0) bb[0].appendChild(dlDiv);
+    }
+  }
   el.scrollTop=el.scrollHeight;
 }
 
@@ -2828,7 +2927,7 @@ function buildTrendChart(byWeek, weeks) {
   });
 
   var colors = ['#1D9E75','#378ADD','#EF9F27','#E24B4A','#9B59B6','#E67E22','#16A085','#D35400'];
-  var sortedWeeks = weeks.slice().reverse(); // chronological order
+  var sortedWeeks = sortWeeks(byWeek); // chronological order using proper date sort
 
   var datasets = staffNames.map(function(name, i) {
     var data = sortedWeeks.map(function(w) {
