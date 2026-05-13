@@ -682,6 +682,13 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
         <button class="qa" onclick="qa('Write the COO board pack narrative section for April')">Write board pack section</button>
         <button class="qa" onclick="qa('What HR actions should I take based on this week\'s staff data?')">HR action plan</button>
       </div>
+      <div id="chatQuickActions" style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 12px 0;border-top:0.5px solid var(--bl)">
+        <button onclick="qa('Load the full staff check-in history for all weeks and give me a complete skills and capacity analysis for each staff member.')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">📊 Load full check-in history</button>
+        <button onclick="qa('Give me my morning briefing based on today\'s emails and calendar.')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">☀ Morning briefing</button>
+        <button onclick="qa('What are my top priorities for today and this week based on my emails and calendar?')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">🎯 Today\'s priorities</button>
+        <button onclick="qa('Which emails in my inbox are most urgently needing a reply? Draft replies for the top 3.')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">✉ Draft urgent replies</button>
+        <button onclick="qa('Give me a staff health check based on all available check-in data. Who is overloaded, who has blockers, and what are the skill gaps?')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">👥 Staff health check</button>
+      </div>
       <div class="cin-wrap"><button class="cmic" id="micBtn" onclick="toggleVoice()" title="Voice input">🎤</button><textarea class="cin" id="cinput" rows="1" placeholder="Ask Cinderella anything..." onkeydown="handleKey(event)" oninput="resize(this)"></textarea><button class="csend" id="csend" onclick="send()">Send</button></div>
     </div>
 
@@ -2467,6 +2474,7 @@ const SYS=[
   'WHAT KEEPS KANDIA UP AT NIGHT: Cash flow and financial performance. Client delivery and project management. Staff time and effectiveness (capacity, burnout, blockers). Board reporting.',
   '',
   'BUSINESS CONTEXT: Risk 2 Solution, Australia. Team: Janita Zhang, Reinette Kruger, Diane Kruger (finance, diane.k@risk2solution.com), Garima Arora, Paul Johnston, Dani Stevenson, Ross Mackenzie. Dave Cohen is CEO. Clients: Titan Corp, Delta Inc, Prentice Group.',
+  'STAFF CHECK-IN DATA: When Kandia asks about staff history, check-ins, skills, capacity trends, cross-training or succession, full historical check-in data is included in the context above (FULL CHECK-IN HISTORY section). Use it to give specific, named answers about each staff member. Never say you cannot access this data — it is provided directly in the message.',
   '',
   'NEVER: Say M365 is not connected. Say you cannot access emails or calendar. Make decisions without checking with Kandia. Write essays when a paragraph will do. Be vague.',
   '',
@@ -2508,8 +2516,54 @@ async function send(){
     }).join('\n');
   }
   if(SD.length>0){
-    liveCtx+='\n\nSTAFF CHECK-INS:\n'+SD.map(s=>`- ${s.name} (${s.role||'?'}): ${s.capacity}% | projects: ${s.projects||'none'} | blockers: ${s.blockers||'none'} | skills: ${s.skills||'?'}`).join('\n');
+    liveCtx+='\n\nCURRENT WEEK STAFF CHECK-INS:\n'+SD.map(s=>`- ${s.name} (${s.role||'?'}): this week ${s.capacity}%${s.capacityNext?' | next week forecast '+s.capacityNext+'%':''} | trend: ${s.trend||'?'} | projects: ${s.projects||'none'} | blockers: ${s.blockers||'none'} | skills: ${s.skills||'?'}${s.notes?' | notes: '+s.notes:''}`).join('\n');
+  } else {
+    liveCtx+='\n\nNo check-ins received yet this week.';
   }
+
+  // Detect if user is asking about historical data and fetch it
+  var historyKeywords = ['history','previous week','last week','past week','all of may','whole of may','all of april','check-in history','check ins from','checkins from','previous check','staff history','all staff','whole month','may check','april check','historical','last month','previous month','all weeks','multiple weeks','cross-train','single point','succession','skill gap','capabilities'];
+  var needsHistory = historyKeywords.some(function(k){ return text.toLowerCase().includes(k); });
+
+  if (needsHistory && C.bin && C.key && (window._allCheckIns && window._allCheckIns.length > 0 || true)) {
+    try {
+      var allCI = window._allCheckIns && window._allCheckIns.length > 0 ? window._allCheckIns : null;
+      if (!allCI) {
+        var hRes = await fetch('https://api.jsonbin.io/v3/b/'+C.bin+'/latest', {headers:{'X-Master-Key':C.key}});
+        var hData = await hRes.json();
+        allCI = (Array.isArray(hData.record)?hData.record:[]).filter(function(e){return e&&e.name;});
+        window._allCheckIns = allCI;
+      }
+      if (allCI && allCI.length > 0) {
+        // Group by week for context
+        var byWk = groupByWeek(allCI);
+        var wkKeys = sortWeeks(byWk).reverse();
+        liveCtx += '\n\nFULL CHECK-IN HISTORY ('+allCI.length+' submissions across '+wkKeys.length+' weeks):';
+        wkKeys.forEach(function(wk) {
+          liveCtx += '\nWeek ending '+wk+':\n';
+          byWk[wk].forEach(function(s){
+            liveCtx += '  - '+s.name+(s.role?' ('+s.role+')':'')+': capacity '+( s.capacity||0)+'%'+(s.capacityNext?' next week '+(s.capacityNext||0)+'%':'')+' trend:'+(s.trend||'?')+' projects:'+(s.projects||'none')+(s.blockers?' BLOCKER:'+s.blockers:'')+' skills:'+(s.skills||'unknown')+'\n';
+          });
+        });
+        liveCtx += '\nSKILLS SUMMARY BY STAFF MEMBER:\n';
+        var staffSkills = {};
+        allCI.forEach(function(s){
+          if (!staffSkills[s.name]) staffSkills[s.name] = {skills:[], roles:[], capacity:[]};
+          if (s.skills) s.skills.split(',').forEach(function(sk){ if(sk.trim()&&!staffSkills[s.name].skills.includes(sk.trim())) staffSkills[s.name].skills.push(sk.trim()); });
+          if (s.role && !staffSkills[s.name].roles.includes(s.role)) staffSkills[s.name].roles.push(s.role);
+          if (s.capacity) staffSkills[s.name].capacity.push(s.capacity);
+        });
+        Object.keys(staffSkills).forEach(function(name){
+          var d = staffSkills[name];
+          var avgCap = d.capacity.length ? Math.round(d.capacity.reduce(function(a,b){return a+b;},0)/d.capacity.length) : 0;
+          liveCtx += '  - '+name+': skills=['+d.skills.join(', ')+'] avg capacity='+avgCap+'%\n';
+        });
+      }
+    } catch(ex) {
+      console.warn('History fetch failed:', ex.message);
+    }
+  }
+
   if(!liveCtx)liveCtx='\n\nNo live M365 data yet — M365 not connected or no data loaded.';
 
   addMsg('u',text);msgs.push({role:'user',content:text});setB(true);
