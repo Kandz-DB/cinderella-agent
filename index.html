@@ -2236,10 +2236,22 @@ function renderStaff(){
   insEl.innerHTML=html;
 }
 
+
+function staffAction(type) {
+  var st = window._currentStaff;
+  if (!st) return;
+  if (type === 0) openDraftModal(st.name, 'Checking in on workload', 'Checking in — how can I support you?', 'email');
+  else if (type === 1) openDraftModal(st.name, '1:1 check-in', '1:1 — workload check-in', 'meeting');
+  else if (type === 2) { closeModal(); actionBlocker(st.name, st.blockers || ''); }
+  else if (type === 3) { show('skills',null); closeModal(); }
+  else if (type === 4) { deleteCheckIn(st.name, st.weekEnding||''); }
+}
+
 function openStaffModal(idx){
+  try {
   const sorted=[...SD].sort((a,b)=>b.capacity-a.capacity);
   const st=sorted[idx];
-  if(!st)return;
+  if(!st){ console.warn('No staff at index', idx, 'SD length:', SD.length); return; }
   const pct=st.capacity||0;
   const pctNext=st.capacityNext||0;
   const matches=findMatches().filter(m=>m.busy.name===st.name||m.free.name===st.name);
@@ -2271,6 +2283,7 @@ function openStaffModal(idx){
 
   window._currentStaff = st;
   openModal(cap(st.name), (cap(st.role)||'Staff member')+' · Week ending '+(st.weekEnding||''), html);
+  } catch(err) { console.error('openStaffModal error:', err); alert('Error opening staff card: ' + err.message); }
 }
 
 
