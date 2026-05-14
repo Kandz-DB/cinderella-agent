@@ -732,7 +732,8 @@ const ALL_STAFF=[
   {name:'Garima Arora',email:'garima.a@risk2solution.com'},
   {name:'Paul Johnston',email:'paul.j@risk2solution.com'},
   {name:'Dani Stevenson',email:'dani.s@risk2solution.com'},
-  {name:'Ross Mackenzie',email:'ross.m@risk2solution.com'}
+  {name:'Ross Mackenzie',email:'ross.m@risk2solution.com'},
+  {name:'Cherry Abadeza',email:'cherry.a@risk2solution.com'}
 ];
 
 
@@ -2289,8 +2290,12 @@ function showMissingStaffModal() {
 function sendReminderFromModal(idx) {
   var s = window._missingStaffModal && window._missingStaffModal[idx];
   if (!s) return;
+  var firstName = s.name.split(' ')[0];
+  var emailBody = 'Hi ' + firstName + ',\n\nI hope you are having a great week so far!\n\nPlease don\'t forget to send your weekly check-in. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent.onrender.com/checkin\n\nThanks so much!\n\nKandia';
   closeModal();
-  openDraftModal(s.name, 'Weekly check-in reminder', 'Action required: weekly check-in this week', 'email', s.email);
+  // Store email body for draft modal to use
+  window._pendingEmailBody = emailBody;
+  openDraftModal(s.name, emailBody, 'Reminder: weekly check-in', 'email', s.email);
 }
 
 function sendAllReminders() {
@@ -2302,8 +2307,9 @@ function sendAllReminders() {
   if (missing.length === 0) { closeModal(); return; }
   var emails = missing.map(function(s){ return s.email; }).join('; ');
   var names = missing.map(function(s){ return s.name.split(' ')[0]; }).join(', ');
+  var emailBody = 'Hi team,\n\nI hope you are all having a great week so far!\n\nThis is a reminder to please submit your weekly check-in if you haven\'t already. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent.onrender.com/checkin\n\nThanks so much!\n\nKandia';
   closeModal();
-  openDraftModal('All staff', 'Weekly check-in reminder — ' + names, 'Action required: weekly check-in this week', 'email', emails);
+  openDraftModal('Team', emailBody, 'Reminder: weekly check-in', 'email', emails);
 }
 
 function staffAction(type) {
@@ -2810,8 +2816,16 @@ function openDraftModal(name,context,subject,defaultTab,emailAddress){
   document.getElementById('dm-sub').textContent=context;
   document.getElementById('dm-icon').textContent=defaultTab==='meeting'?'📅':'✉️';
   switchTab(defaultTab||'email');
-  if(!defaultTab||defaultTab==='email')generateEmailDraft(name,context,subject);
-  else setupMeetingPane(name,subject);
+  if(!defaultTab||defaultTab==='email'){
+    // If context is a pre-written email body (starts with Hi/Dear), show it directly
+    if(context && (context.startsWith('Hi ') || context.startsWith('Dear '))) {
+      showDraftResult(context);
+    } else {
+      generateEmailDraft(name,context,subject);
+    }
+  } else {
+    setupMeetingPane(name,subject);
+  }
 }
 
 function closeDraft(){document.getElementById('draftModal').classList.remove('open');}
@@ -2861,7 +2875,9 @@ function openInOutlook(){
   const to=encodeURIComponent(document.getElementById('dm-to').value);
   const subject=encodeURIComponent(document.getElementById('dm-subject').value);
   const body=encodeURIComponent(document.getElementById('dm-body').value);
-  window.location.href=`mailto:${to}?subject=${subject}&body=${body}`;
+  // Open compose in Outlook Web instead of desktop app
+  var outlookComposeUrl = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(to) + '&subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  window.open(outlookComposeUrl, '_blank');
 }
 
 function copyEmail(){
