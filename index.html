@@ -409,7 +409,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
       <div class="mrow">
         <div class="met" onclick="omKey('mtg')"><div class="ml">Meetings today</div><div class="mv" id="todayMtgCount">—</div><div class="ms" id="todayMtgSub">Loading...</div></div>
         <div class="met" onclick="show('email',document.querySelector('[onclick*=email]'))"><div class="ml">Unanswered emails</div><div class="mv" id="todayEmailCount" style="color:var(--r)">—</div><div class="ms" id="todayEmailSub">Loading...</div></div>
-        <div class="met" onclick="show('staff',document.querySelector('[onclick*=staff]'))"><div class="ml">Check-ins received</div><div class="mv" id="todayCount" style="color:var(--a)">0</div><div class="ms">of 12 this week</div></div>
+        <div class="met" onclick="showMissingStaffModal()" style="cursor:pointer"><div class="ml">Check-ins received</div><div class="mv" id="todayCount" style="color:var(--a)">0</div><div class="ms" id="checkinSub">of 7 this week</div></div>
         <div class="met" onclick="refreshTodayPriorities()"><div class="ml">Open priorities</div><div class="mv" id="todayPriCount">—</div><div class="ms">from your inbox</div></div>
       </div>
       <div class="two">
@@ -2159,7 +2159,12 @@ function updateAll(){
   if(badge){badge.textContent=n;badge.style.display=n>0?'inline-block':'none';}
   const bc=document.getElementById('briefingCheckin');
   if(bc){bc.textContent=n>0?`${n} of 12 check-ins this week. ${SD.filter(s=>s.capacity>=85).length} overloaded. ${SD.filter(s=>hasBlocker(s.blockers)).length} blockers.`:'No check-ins yet. Send the form to staff.';}
-  try{renderStaff();}catch(e){console.warn('renderStaff:',e.message);}
+  try{renderStaff();
+    // Update check-in count metric
+    var countEl = document.getElementById('todayCount');
+    var subEl = document.getElementById('checkinSub');
+    if (countEl) { countEl.textContent = SD.length; countEl.style.color = SD.length < ALL_STAFF.length ? 'var(--a)' : 'var(--g)'; }
+    if (subEl) subEl.textContent = 'of ' + ALL_STAFF.length + ' this week — click to see who is missing';}catch(e){console.warn('renderStaff:',e.message);}
   try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
   try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
   if(n>0){
@@ -2236,6 +2241,70 @@ function renderStaff(){
   insEl.innerHTML=html;
 }
 
+
+
+function showMissingStaffModal() {
+  var checked = SD.map(function(s){ return s.name.toLowerCase(); });
+  var missing = ALL_STAFF.filter(function(s){
+    var first = s.name.split(' ')[0].toLowerCase();
+    return !checked.some(function(n){ return n.includes(first); });
+  });
+  var received = ALL_STAFF.filter(function(s){
+    var first = s.name.split(' ')[0].toLowerCase();
+    return checked.some(function(n){ return n.includes(first); });
+  });
+
+  window._missingStaffModal = {};
+  var missingRows = missing.map(function(s, i) {
+    window._missingStaffModal[i] = s;
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--bl)">' +
+      '<div><div style="font-size:12px;font-weight:500;color:var(--t1)">' + s.name + '</div>' +
+      '<div style="font-size:10px;color:var(--t3)">' + s.email + '</div></div>' +
+      '<button onclick="sendReminderFromModal(' + i + ')" style="font-size:10px;padding:4px 12px;border-radius:8px;background:#A32D2D;color:#fff;border:none;cursor:pointer;font-family:var(--f);white-space:nowrap">Send reminder</button>' +
+    '</div>';
+  }).join('');
+
+  var receivedRows = received.map(function(s) {
+    var entry = SD.find(function(e){ return e.name.toLowerCase().includes(s.name.split(' ')[0].toLowerCase()); });
+    var pct = entry ? entry.capacity : 0;
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:0.5px solid var(--bl)">' +
+      '<div style="font-size:12px;color:var(--t1)">' + s.name + '</div>' +
+      '<span style="font-size:11px;font-weight:500;color:' + (pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)') + '">' + pct + '%</span>' +
+    '</div>';
+  }).join('');
+
+  var body =
+    (missing.length > 0 ?
+      '<div class="alert-box" style="margin-bottom:12px"><div class="ab-title">⚠ ' + missing.length + ' staff have not submitted their check-in this week</div></div>' +
+      missingRows :
+      '<div class="alert-box ok"><div class="ab-title">✅ All staff have submitted this week</div></div>') +
+    (received.length > 0 ?
+      '<div style="margin-top:16px"><div style="font-size:10px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Submitted this week</div>' + receivedRows + '</div>' : '') +
+    '<hr class="m-divider">' +
+    '<button class="m-btn" onclick="sendAllReminders()" style="width:100%">Send reminder to all ' + missing.length + ' missing staff</button>';
+
+  openModal('Staff check-in status', SD.length + ' of ' + ALL_STAFF.length + ' submitted this week', body);
+}
+
+function sendReminderFromModal(idx) {
+  var s = window._missingStaffModal && window._missingStaffModal[idx];
+  if (!s) return;
+  closeModal();
+  openDraftModal(s.name, 'Weekly check-in reminder', 'Action required: weekly check-in this week', 'email', s.email);
+}
+
+function sendAllReminders() {
+  var checked = SD.map(function(s){ return s.name.toLowerCase(); });
+  var missing = ALL_STAFF.filter(function(s){
+    var first = s.name.split(' ')[0].toLowerCase();
+    return !checked.some(function(n){ return n.includes(first); });
+  });
+  if (missing.length === 0) { closeModal(); return; }
+  var emails = missing.map(function(s){ return s.email; }).join('; ');
+  var names = missing.map(function(s){ return s.name.split(' ')[0]; }).join(', ');
+  closeModal();
+  openDraftModal('All staff', 'Weekly check-in reminder — ' + names, 'Action required: weekly check-in this week', 'email', emails);
+}
 
 function staffAction(type) {
   var st = window._currentStaff;
