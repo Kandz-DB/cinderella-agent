@@ -484,7 +484,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
       <div id="staffWeekView">
       <div class="mrow">
         <div class="met" onclick="filterStaff('over')"><div class="ml">Avg capacity</div><div class="mv" id="sm-avg">—</div><div class="ms">team average</div></div>
-        <div class="met"><div class="ml">Check-ins received</div><div class="mv" id="sm-n">0</div><div class="ms">of 12 this week</div></div>
+        <div class="met" onclick="showMissingStaffModal()" style="cursor:pointer"><div class="ml">Check-ins received</div><div class="mv" id="sm-n">0</div><div class="ms" id="sm-n-sub">of 8 this week</div></div>
         <div class="met" onclick="filterStaff('over')"><div class="ml">Overloaded &gt;85%</div><div class="mv" id="sm-ov" style="color:var(--r)">0</div><div class="ms">need action</div></div>
         <div class="met" onclick="filterStaff('free')"><div class="ml">Available &lt;65%</div><div class="mv" id="sm-fr" style="color:var(--g)">0</div><div class="ms">can absorb work</div></div>
       </div>
@@ -2171,6 +2171,8 @@ function updateAll(){
   if(n>0){
     const avg=Math.round(SD.reduce((a,s)=>a+s.capacity,0)/n);
     const els={'sm-avg':avg+'%','sm-n':n,'sm-ov':SD.filter(s=>s.capacity>=85).length,'sm-fr':SD.filter(s=>s.capacity<65).length,'sk-ov':SD.filter(s=>s.capacity>=85).length,'sk-fr':SD.filter(s=>s.capacity<70).length};
+    var snSub=document.getElementById('sm-n-sub');
+    if(snSub) snSub.textContent='of '+ALL_STAFF.length+' this week — click to see who is missing';
     Object.entries(els).forEach(([id,val])=>{const el=document.getElementById(id);if(el)el.textContent=val;});
     const smAvg=document.getElementById('sm-avg');
     if(smAvg)smAvg.style.color=avg>=80?'var(--a)':'var(--t1)';
