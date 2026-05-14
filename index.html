@@ -834,22 +834,22 @@ function renderLiveCalendar() {
   const staticRows = document.querySelectorAll('#pnl-today .card .row');
   staticRows.forEach(r => r.style.display = 'none');
 
-  // Graph API returns Brisbane local time (no Z suffix due to Prefer header)
-  // Parse as local time and compare to current Brisbane time
-  var nowUTC = new Date();
-  var brisbaneHour = new Date(nowUTC.toLocaleString('en-US', {timeZone: 'Australia/Brisbane'}));
-
-  // Only show meetings that haven't ended yet
+  // Graph returns Brisbane local times (no Z) due to Prefer header
+  // Browser is in Brisbane, so new Date() is also Brisbane — direct comparison works
+  var nowLocal = new Date();
   var upcoming = M365.events.filter(function(e) {
     if (!e.end) return true;
-    // End time from Graph is already Brisbane local - parse directly
-    var endStr = e.end.replace('Z','').replace('z','');
-    var endParts = endStr.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-    if (!endParts) return true;
-    var endBris = new Date(endParts[0].replace('T',' ') + ' ' + (endStr.split('T')[1]||''));
-    // Compare end time (Brisbane) to current Brisbane time
-    return endBris > brisbaneHour;
+    try {
+      // Strip Z if present, parse as local Brisbane time
+      var endDate = new Date(e.end.replace('Z','').replace('z',''));
+      if (isNaN(endDate.getTime())) return true;
+      return endDate > nowLocal;
+    } catch(ex) { return true; }
   });
+  // Safety: if filter removes everything but we have events, show all of them
+  if (upcoming.length === 0 && M365.events.length > 0) {
+    upcoming = M365.events; // fallback - show all rather than showing nothing
+  }
 
   if (upcoming.length === 0) {
     el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No more meetings today.</div>';
