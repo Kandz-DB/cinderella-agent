@@ -415,7 +415,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
       <div class="two">
         <div class="card">
           <div id="liveCalendar"></div><div class="ct">Today's schedule <span class="ct-action" onclick="qa('Create a prep plan for all of my meetings today')">Generate prep plan</span></div>
-          <div id="staticCalendar"><div style="font-size:12px;color:var(--t3);padding:12px 0;text-align:center">Connecting to your calendar...</div></div>
+          <div id="staticCalendar"><div style="font-size:12px;color:var(--t3);padding:8px 0">Loading your calendar...</div></div>
         </div>
         <div>
           <div class="card">
@@ -778,9 +778,17 @@ async function loadM365Data() {
     if (cr.ok) {
       const cd = await cr.json();
       M365.events = cd.events || [];
-      renderLiveCalendar();
+    } else {
+      // Show reconnect message if auth failed
+      var sc = document.getElementById('staticCalendar');
+      if (sc) sc.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">Calendar unavailable — <a href="/auth/login" style="color:var(--b)">reconnect M365</a></div>';
     }
-  } catch(e) { console.warn('Calendar load failed:', e.message); }
+    renderLiveCalendar();
+  } catch(e) {
+    console.warn('Calendar load failed:', e.message);
+    var sc2 = document.getElementById('staticCalendar');
+    if (sc2) sc2.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">Calendar error — <a href="/auth/login" style="color:var(--b)">reconnect M365</a></div>';
+  }
 
   try {
     const tr = await fetch('/graph/teams');
@@ -811,7 +819,17 @@ async function loadM365Data() {
 
 function renderLiveCalendar() {
   const el = document.getElementById('liveCalendar');
-  if (!el || M365.events.length === 0) return;
+  const staticCal = document.getElementById('staticCalendar');
+  if (!el) return;
+  el.style.display = 'block';
+
+  // Always clear the "Connecting..." placeholder
+  if (staticCal) staticCal.innerHTML = '';
+
+  if (M365.events.length === 0) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No meetings scheduled today.</div>';
+    return;
+  }
   el.style.display = 'block';
   const staticRows = document.querySelectorAll('#pnl-today .card .row');
   staticRows.forEach(r => r.style.display = 'none');
