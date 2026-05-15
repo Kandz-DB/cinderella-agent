@@ -100,11 +100,35 @@ app.use(requireAuth);
 const TENANT_ID     = process.env.AZURE_TENANT_ID;
 const CLIENT_ID     = process.env.AZURE_CLIENT_ID;
 const CLIENT_SECRET = process.env.AZURE_CLIENT_SECRET;
-const REDIRECT_URI  = 'https://cinderella-agent.onrender.com/auth/callback';
+const REDIRECT_URI  = process.env.REDIRECT_URI || 'https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/auth/callback';
 const SCOPES        = 'offline_access Mail.Read Calendars.ReadWrite Chat.Read ChannelMessage.Read.All';
 
-// Token storage (in-memory)
-let tokenStore = { access_token: null, refresh_token: null, expires_at: null };
+// ── TOKEN STORE: Persistent file-based storage for Azure ──
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+const TOKEN_PATH = process.env.TOKEN_STORE_PATH || '/home/tokens.json';
+
+function loadSavedToken() {
+  try {
+    if (existsSync(TOKEN_PATH)) {
+      const data = JSON.parse(readFileSync(TOKEN_PATH, 'utf8'));
+      if (data.expires_at && new Date(data.expires_at) > new Date()) {
+        console.log('✅ Loaded M365 token from disk (expires', new Date(data.expires_at).toLocaleString(), ')');
+        return data;
+      }
+      console.log('⚠ Saved token expired');
+    }
+  } catch(e) { console.warn('Token load error:', e.message); }
+  return { access_token: null, refresh_token: null, expires_at: null };
+}
+
+function persistToken(store) {
+  try {
+    writeFileSync(TOKEN_PATH, JSON.stringify(store, null, 2));
+    console.log('✅ M365 token saved to disk');
+  } catch(e) { console.warn('Token save error:', e.message); }
+}
+
+let tokenStore = loadSavedToken();
 
 // ── AUTH: Redirect Kandia to Microsoft login ──
 app.get('/auth/login', (req, res) => {
@@ -142,7 +166,8 @@ app.get('/auth/callback', async (req, res) => {
     tokenStore.access_token  = data.access_token;
     tokenStore.refresh_token = data.refresh_token;
     tokenStore.expires_at    = Date.now() + (data.expires_in * 1000);
-    console.log('✅ Microsoft 365 connected');
+    persistToken(tokenStore);
+    console.log('✅ Microsoft 365 connected and token saved to disk');
     res.send(`
       <html><body style="font-family:sans-serif;padding:40px;text-align:center;background:#f0efe9">
         <h2 style="color:#0A7A7A">✅ Cinderella is now connected to Microsoft 365</h2>
