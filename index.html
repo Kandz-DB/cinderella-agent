@@ -849,10 +849,7 @@ function renderLiveCalendar() {
       return endDate > nowLocal;
     } catch(ex) { return true; }
   });
-  // Safety: if filter removes everything but we have events, show all of them
-  if (upcoming.length === 0 && M365.events.length > 0) {
-    upcoming = M365.events; // fallback - show all rather than showing nothing
-  }
+  // If all meetings are in the past, show "No more meetings today" - no fallback
 
   if (upcoming.length === 0) {
     el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No more meetings today.</div>';
