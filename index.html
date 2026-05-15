@@ -779,8 +779,8 @@ async function loadM365Data() {
     if (cr.ok) {
       const cd = await cr.json();
       M365.events = cd.events || [];
+      M365.brisbaneNow = cd.brisbaneNow || null; // server-provided Brisbane time
     } else {
-      // Show reconnect message if auth failed
       var sc = document.getElementById('staticCalendar');
       if (sc) sc.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">Calendar unavailable — <a href="/auth/login" style="color:var(--b)">reconnect M365</a></div>';
     }
@@ -837,7 +837,8 @@ function renderLiveCalendar() {
 
   // Graph returns Brisbane local times (no Z) due to Prefer header
   // Browser is in Brisbane, so new Date() is also Brisbane — direct comparison works
-  var nowLocal = new Date();
+  // Use server-provided Brisbane time for accurate timezone comparison
+  var nowLocal = M365.brisbaneNow ? new Date(M365.brisbaneNow) : new Date();
   var upcoming = M365.events.filter(function(e) {
     if (!e.end) return true;
     try {
