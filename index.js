@@ -102,7 +102,7 @@ const TENANT_ID     = process.env.AZURE_TENANT_ID;
 const CLIENT_ID     = process.env.AZURE_CLIENT_ID;
 const CLIENT_SECRET = process.env.AZURE_CLIENT_SECRET;
 const REDIRECT_URI  = process.env.REDIRECT_URI || 'https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/auth/callback';
-const SCOPES        = 'offline_access Mail.Read Mail.ReadShared Calendars.ReadWrite Chat.Read ChannelMessage.Read.All';
+const SCOPES        = 'offline_access Mail.Read Calendars.ReadWrite Chat.Read ChannelMessage.Read.All';
 
 // ── TOKEN STORE: Persistent file-based storage for Azure ──
 const TOKEN_PATH = process.env.TOKEN_STORE_PATH || '/home/tokens.json';
