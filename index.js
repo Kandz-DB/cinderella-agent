@@ -1,5 +1,6 @@
 import express from "express";
 import crypto from "crypto";
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 const app = express();
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -104,7 +105,6 @@ const REDIRECT_URI  = process.env.REDIRECT_URI || 'https://cinderella-agent-abba
 const SCOPES        = 'offline_access Mail.Read Mail.ReadShared Calendars.ReadWrite Chat.Read ChannelMessage.Read.All';
 
 // ── TOKEN STORE: Persistent file-based storage for Azure ──
-import { readFileSync, writeFileSync, existsSync } from 'fs';
 const TOKEN_PATH = process.env.TOKEN_STORE_PATH || '/home/tokens.json';
 
 function loadSavedToken() {
