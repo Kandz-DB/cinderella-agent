@@ -488,6 +488,20 @@ app.post('/proxy', async (req, res) => {
   }
 });
 
+
+// ── DEBUG: Check config (remove after fixing auth) ──
+app.get('/debug-auth', requireAuth, (req, res) => {
+  res.json({
+    clientId: process.env.AZURE_CLIENT_ID || 'NOT SET',
+    tenantId: process.env.AZURE_TENANT_ID || 'NOT SET',
+    secretLength: (process.env.AZURE_CLIENT_SECRET || '').length,
+    secretFirst4: (process.env.AZURE_CLIENT_SECRET || '').substring(0, 4),
+    secretLast4: (process.env.AZURE_CLIENT_SECRET || '').slice(-4),
+    redirectUri: process.env.REDIRECT_URI || 'NOT SET',
+    scopes: SCOPES
+  });
+});
+
 // ── SERVE DASHBOARD ──
 app.use(express.static('.'));
 
