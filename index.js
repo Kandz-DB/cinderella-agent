@@ -276,6 +276,55 @@ app.get('/graph/emails', async (req, res) => {
 });
 
 
+
+// ── EMAILS: Read info@risk2solution.com shared mailbox ──
+app.get('/graph/info-emails', async (req, res) => {
+  try {
+    const fourteenDaysAgo = new Date(Date.now() - 14*24*60*60*1000).toISOString();
+    const data = await graphGet(
+      `/users/info@risk2solution.com/mailFolders/inbox/messages?$filter=receivedDateTime ge ${fourteenDaysAgo}&$orderby=receivedDateTime desc&$top=30&$select=subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,conversationId`
+    );
+    // Fetch sent items to filter out replied conversations
+    const sentData = await graphGet(
+      `/users/info@risk2solution.com/mailFolders/sentitems/messages?$filter=createdDateTime ge ${fourteenDaysAgo}&$select=conversationId&$top=100`
+    ).catch(() => ({ value: [] }));
+    const infoReplied = new Set((sentData.value || []).map(m => m.conversationId).filter(Boolean));
+
+    const noReply = ['noreply','no-reply','donotreply','mailer-daemon','notifications@','automated@','newsletter','@bounce'];
+    const skipKeywords = ['unsubscribe','capcoal','luxury escapes','island printing','out of office','auto-reply','automated'];
+
+    const emails = (data.value || [])
+      .filter(m => {
+        const addr = (m.from?.emailAddress?.address || '').toLowerCase();
+        const subj = (m.subject || '').toLowerCase();
+        if (noReply.some(p => addr.includes(p))) return false;
+        if (skipKeywords.some(p => subj.includes(p) || addr.includes(p))) return false;
+        if (m.conversationId && infoReplied.has(m.conversationId)) return false;
+        return true;
+      })
+      .slice(0, 15)
+      .map(m => ({
+        id: m.id,
+        subject: m.subject,
+        from: m.from?.emailAddress?.name || m.from?.emailAddress?.address,
+        fromEmail: m.from?.emailAddress?.address,
+        received: m.receivedDateTime,
+        preview: m.bodyPreview?.substring(0, 200),
+        hasAttachments: m.hasAttachments || false,
+        isRead: m.isRead || false,
+        mailbox: 'info@risk2solution.com',
+        hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000)
+      }));
+    res.json({ emails });
+  } catch (err) {
+    if (err.message.includes('ErrorAccessDenied') || err.message.includes('AuthenticationError') || err.message.includes('401')) {
+      res.status(403).json({ error: 'info@ mailbox access denied. Kandia needs delegate access to info@risk2solution.com' });
+    } else {
+      res.status(500).json({ error: err.message });
+    }
+  }
+});
+
 // ── EMAILS: Search emails by topic (for meeting prep) ──
 app.get('/graph/emails/search', async (req, res) => {
   try {
