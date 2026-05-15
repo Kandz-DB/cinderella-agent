@@ -838,7 +838,8 @@ function renderLiveCalendar() {
   // Graph returns Brisbane local times (no Z) due to Prefer header
   // Browser is in Brisbane, so new Date() is also Brisbane — direct comparison works
   // Use server-provided Brisbane time for accurate timezone comparison
-  var nowLocal = M365.brisbaneNow ? new Date(M365.brisbaneNow) : new Date();
+  // Strip Z so both times are treated as Brisbane local (not UTC)
+  var nowLocal = M365.brisbaneNow ? new Date(M365.brisbaneNow.replace('Z','')) : new Date();
   var upcoming = M365.events.filter(function(e) {
     if (!e.end) return true;
     try {
