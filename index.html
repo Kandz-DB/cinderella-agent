@@ -425,9 +425,9 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
             </div>
           </div>
           <div class="card">
-            <div class="ct">Today's priorities <span class="ct-action" onclick="refreshTodayPriorities()">Refresh</span></div>
+            <div class="ct">Today's priorities <span class="ct-action" onclick="refreshTodayPriorities()">Generate</span></div>
             <div id="todayPriorities">
-              <div style="font-size:11px;color:var(--t3);padding:8px 0">Loading priorities from your emails and calendar...</div>
+              <div style="font-size:12px;color:var(--t3);padding:8px 0">Click <strong>Generate</strong> above to get AI-powered priorities from your emails and calendar.</div>
             </div>
           </div>
         </div>
@@ -684,7 +684,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
       </div>
       <div id="chatQuickActions" style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 12px 0;border-top:0.5px solid var(--bl)">
         <button onclick="qa('Load the full staff check-in history for all weeks and give me a complete skills and capacity analysis for each staff member.')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">📊 Load full check-in history</button>
-        <button onclick="qa('Give me my morning briefing based on today\'s emails and calendar.')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">☀ Morning briefing</button>
+        <button onclick="window._briefingRequested=true;autoBriefing();" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">☀ Morning briefing</button>
         <button onclick="qa('What are my top priorities for today and this week based on my emails and calendar?')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">🎯 Today\'s priorities</button>
         <button onclick="qa('Which emails in my inbox are most urgently needing a reply? Draft replies for the top 3.')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">✉ Draft urgent replies</button>
         <button onclick="qa('Give me a staff health check based on all available check-in data. Who is overloaded, who has blockers, and what are the skill gaps?')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">👥 Staff health check</button>
@@ -805,15 +805,7 @@ async function loadM365Data() {
   // Load info@ mailbox
   try { await loadInfoEmails(); } catch(e) { console.warn('info@ failed:', e.message); }
 
-  // Show opening notification popup - only once per day
-  try {
-    var today = new Date().toLocaleDateString('en-AU');
-    var lastNotify = sessionStorage.getItem('cinderella_notify_date');
-    if (lastNotify !== today) {
-      sessionStorage.setItem('cinderella_notify_date', today);
-      await generateOpeningNotification();
-    }
-  } catch(e) { console.warn('Notification failed:', e.message); }
+  // Notification disabled to save API credits - use morning briefing button instead
 }
 
 
@@ -948,10 +940,11 @@ async function loadTodayData() {
     if (emailSubEl) emailSubEl.textContent = overdue > 0 ? overdue + ' overdue >24h' : 'from last 14 days';
   }
 
-  // Generate real priorities from AI
-  await refreshTodayPriorities();
+  // Update metrics only - priorities generated on demand to save API credits
+  var countEl = document.getElementById('todayPriCount');
+  if (countEl) { countEl.textContent = M365.emails.length; }
 
-  // Generate today briefing card
+  // Show static briefing from real data (no AI call)
   await refreshTodayBriefing();
 }
 
@@ -2471,7 +2464,7 @@ function show(id,btn){
   if(el){el.classList.add('active');requestAnimationFrame(()=>el.scrollTop=0);}
   if(btn)btn.classList.add('active');
   setTimeout(()=>{if(id==='email'&&!charts.email)buildCharts();if(id==='staff')buildCharts();},50);
-  if(id==='chat'&&!briefingDone){briefingDone=true;autoBriefing();}
+  if(id==='chat'&&!briefingDone){briefingDone=true;} // briefing now on-demand only
 }
 async function autoBriefing(){
   const now=new Date();
@@ -2492,8 +2485,8 @@ async function autoBriefing(){
       M365.emails=ed.emails||[];
       renderLiveEmails();
       if(M365.emails.length>0){
-        emailCtx='UNREAD EMAILS NEEDING REPLY ('+M365.emails.length+' total):\n'+
-          M365.emails.slice(0,15).map(function(e){
+        emailCtx='UNREAD EMAILS NEEDING REPLY ('+M365.emails.length+' total, showing top 8):\n'+
+          M365.emails.slice(0,8).map(function(e){
             return '- FROM: '+e.from+' <'+( e.fromEmail||'')+'>'+
               ' | '+e.hoursOld+'h ago'+
               (e.hoursOld>=24?' [CRITICALLY OVERDUE]':e.hoursOld>=12?' [OVERDUE]':'')+
@@ -2613,7 +2606,7 @@ async function send(){
   }
   liveCtx += 'IMPORTANT: Always use the exact date from the reference above — never guess the date from the day name alone.\n\n';
   if(M365.emails.length>0){
-    liveCtx+='\n\nLIVE EMAILS (unread, real data from Outlook):\n'+M365.emails.slice(0,15).map(function(e){
+    liveCtx+='\n\nLIVE EMAILS (unread, top 5 most recent):\n'+M365.emails.slice(0,5).map(function(e){
       return '- FROM: '+e.from+(e.fromEmail?' <'+e.fromEmail+'>':'')+' | '+e.hoursOld+'h ago'+(e.hasAttachments?' [HAS ATTACHMENT]':'')+' | SUBJECT: '+e.subject+(e.preview?' | PREVIEW: '+e.preview:'');
     }).join('\n');
   }
@@ -2646,7 +2639,7 @@ async function send(){
         var byWk = groupByWeek(allCI);
         var wkKeys = sortWeeks(byWk).reverse();
         liveCtx += '\n\nFULL CHECK-IN HISTORY ('+allCI.length+' submissions across '+wkKeys.length+' weeks):';
-        wkKeys.forEach(function(wk) {
+        wkKeys.slice(0, 4).forEach(function(wk) { // limit to last 4 weeks to save tokens
           liveCtx += '\nWeek ending '+wk+':\n';
           byWk[wk].forEach(function(s){
             liveCtx += '  - '+s.name+(s.role?' ('+s.role+')':'')+': capacity '+( s.capacity||0)+'%'+(s.capacityNext?' next week '+(s.capacityNext||0)+'%':'')+' trend:'+(s.trend||'?')+' projects:'+(s.projects||'none')+(s.blockers?' BLOCKER:'+s.blockers:'')+' skills:'+(s.skills||'unknown')+'\n';
