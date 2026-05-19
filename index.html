@@ -2074,7 +2074,7 @@ function loadCfg(){
   if(C.api)document.getElementById('s-api').value='(baked in — working)';
   if(C.bin)document.getElementById('s-bin').value=C.bin;
   if(C.key)document.getElementById('s-key').value=C.key;
-  if(C.bin&&C.key){syncNow();setInterval(syncNow,5*60*1000);}
+  if(C.bin&&C.key){syncNow();setInterval(syncNow,60*60*1000);}
 }
 function saveSetup(){
   C.api=document.getElementById('s-api').value.trim();
