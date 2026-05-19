@@ -2082,7 +2082,7 @@ function saveSetup(){
   C.key=document.getElementById('s-key').value.trim();
   try{localStorage.setItem('cin_cfg_v3',JSON.stringify(C));}catch(e){}
   document.getElementById('setupMo').style.display='none';
-  if(C.bin&&C.key){syncNow();setInterval(syncNow,5*60*1000);}
+  if(C.bin&&C.key){syncNow();setInterval(syncNow,60*60*1000);}
 }
 function skipSetup(){document.getElementById('setupMo').style.display='none';}
 
@@ -2796,7 +2796,7 @@ function tick(){document.getElementById('clk').textContent=new Date().toLocaleTi
 tick();setInterval(tick,1000);
 loadCfg();
 checkM365Connection();
-setInterval(loadM365Data,5*60*1000);
+setInterval(loadM365Data,45*60*1000);
 try{renderStaff();}catch(e){console.warn('renderStaff:',e.message);}
 try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
 try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
