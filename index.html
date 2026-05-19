@@ -2166,7 +2166,7 @@ function loadCfg(){
   const s=document.getElementById('setupModal');
   if(!s)return;
   if(!C.bin||!C.key){s.style.display='flex';}
-  else{s.style.display='none';if(C.bin&&C.key){syncNow();setInterval(syncNow,60*60*1000); // every 60 mins}};
+  else{s.style.display='none';if(C.bin&&C.key){syncNow();setInterval(syncNow,60*60*1000);}}; // every 60 mins
 }
 
 function skipSetup(){document.getElementById('setupMo').style.display='none';}
