@@ -2050,193 +2050,52 @@ function downloadAsWord(title, content) {
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url;
-  a.download = title.replace(/[^a-z0-9]/gi,'_').substring(0,50) + '_' + new Date().toLocaleDateString('en-AU').replace(/\//g,'-') + '.doc';
+  a.download = (title||'Report').replace(/[^a-z0-9]/gi,'_').substring(0,50) + '_' + new Date().toLocaleDateString('en-AU').replace(/\//g,'-') + '.doc';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
-function addDownloadButton(content, title) {
-  // Add a download button after any AI response that looks like a report
-  var btn = document.createElement('div');
-  btn.style.cssText = 'margin-top:8px';
-  var dlIdx = Object.keys(window._dlDocs||{}).length;
-  window._dlDocs = window._dlDocs || {};
-  window._dlDocs[dlIdx] = {title: title||'Report', content: content};
-  btn.innerHTML = '<button onclick="downloadStoredDoc('+dlIdx+')" style="font-size:11px;padding:5px 12px;border-radius:6px;background:#2B579A;color:#fff;border:none;cursor:pointer;font-family:var(--f)">📄 Download as Word document</button>';
-  return btn;
+function downloadStoredDoc(idx) {
+  var doc = window._dlDocs && window._dlDocs[idx];
+  if (!doc) return;
+  downloadAsWord(doc.title, doc.content);
 }
 
-function loadCfg(){
-  try{const s=localStorage.getItem('cin_cfg_v3');if(s){const p=JSON.parse(s);if(p.api)C.api=p.api;if(p.bin)C.bin=p.bin;if(p.key)C.key=p.key;}}catch(e){}
-  document.getElementById('setupMo').style.display='none';
-  if(C.api)document.getElementById('s-api').value='(baked in — working)';
-  if(C.bin)document.getElementById('s-bin').value=C.bin;
-  if(C.key)document.getElementById('s-key').value=C.key;
-  if(C.bin&&C.key){syncNow();setInterval(syncNow,5*60*1000);}
-}
-function saveSetup(){
-  C.api=document.getElementById('s-api').value.trim();
-  C.bin=document.getElementById('s-bin').value.trim();
-  C.key=document.getElementById('s-key').value.trim();
-  try{localStorage.setItem('cin_cfg_v3',JSON.stringify(C));}catch(e){}
-  document.getElementById('setupMo').style.display='none';
-  if(C.bin&&C.key){syncNow();setInterval(syncNow,5*60*1000);}
-}
-function skipSetup(){document.getElementById('setupMo').style.display='none';}
-
-function getCurrentWeekEnding() {
-  var d = new Date();
-  var day = d.getDay();
-  var daysToFri = day === 5 ? 0 : day === 6 ? 6 : 5 - day;
-  var fri = new Date(d);
-  fri.setDate(d.getDate() + daysToFri);
-  return fri.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+function staffAction(type) {
+  var st = window._currentStaff;
+  if (!st) return;
+  if (type === 0) openDraftModal(st.name, 'Checking in on workload', 'Checking in — how can I support you?', 'email');
+  else if (type === 1) openDraftModal(st.name, '1:1 check-in', '1:1 — workload check-in', 'meeting');
+  else if (type === 2) { closeModal(); actionBlocker(st.name, st.blockers || ''); }
+  else if (type === 3) { show('skills',null); closeModal(); }
+  else if (type === 4) { deleteCheckIn(st.name, st.weekEnding||''); }
 }
 
-async function syncNow(){
-  if(!C.bin||!C.key){setSyncUI('off','JSONBin not configured');return;}
-  const btn=document.getElementById('syncBtn');
-  btn.textContent='Syncing...';btn.className='sync-btn warn';
-  setSyncUI('warn','Syncing...');
-  try{
-    const r=await fetch(`https://api.jsonbin.io/v3/b/${C.bin}/latest`,{headers:{'X-Master-Key':C.key}});
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
-    const d=await r.json();
-    const allRaw=(Array.isArray(d.record)?d.record:[]).filter(e=>e&&e.name);
-    window._allCheckIns = allRaw; // store all for history/monthly views
-    // Show check-ins submitted since last Monday (current calendar week)
-    var lastMonday = new Date();
-    lastMonday.setHours(0,0,0,0);
-    var dow = lastMonday.getDay();
-    lastMonday.setDate(lastMonday.getDate() - (dow === 0 ? 6 : dow - 1));
-    var thisWeek = allRaw.filter(function(e){
-      if (!e.submitted) return false;
-      return new Date(e.submitted) >= lastMonday;
-    });
-    // If no check-ins this week, also include most recent prior week so dashboard isn't empty
-    if (thisWeek.length === 0) {
-      var prevMonday = new Date(lastMonday);
-      prevMonday.setDate(prevMonday.getDate() - 7);
-      thisWeek = allRaw.filter(function(e){ return e.submitted && new Date(e.submitted) >= prevMonday && new Date(e.submitted) < lastMonday; });
-    }
-    const byP={};
-    thisWeek.forEach(e=>{const k=e.name.toLowerCase();if(!byP[k]||new Date(e.submitted)>new Date(byP[k].submitted))byP[k]=e;});
-    SD=Object.values(byP);
-    const t=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
-    btn.textContent=`Synced ${t}`;btn.className='sync-btn ok';
-    setSyncUI('on',`Last synced ${t} · ${SD.length} check-in${SD.length!==1?'s':''}`);
-    try{updateAll();}catch(e){console.warn('updateAll error:',e.message);}
-  }catch(e){
-    btn.textContent='Sync failed';btn.className='sync-btn';
-    setSyncUI('warn',`Sync failed: ${e.message}`);
-  }
+function sendCheckinReminder(idx) {
+  var s = window._missingStaff && window._missingStaff[idx];
+  if (!s) return;
+  openDraftModal(s.name, 'Weekly check-in reminder', 'Action required: weekly check-in this week', 'email', s.email);
 }
 
-function setSyncUI(state,msg){
-  const bar=document.getElementById('syncBar');
-  const dot=document.getElementById('syncDot');
-  const txt=document.getElementById('syncTxt');
-  if(!bar||!dot||!txt){console.warn('Sync UI elements missing');return;}
-  bar.style.display='flex';
-  dot.className='sdot2 '+(state==='on'?'on':state==='warn'?'warn':'off');
-  txt.textContent=msg;
-}
-
-function updateAll(){
-  const n=SD.length;
-  const tc=document.getElementById('todayCount');
-  if(tc){tc.textContent=n;tc.style.color=n>=8?'var(--g)':n>=4?'var(--a)':'var(--r)';}
-  const badge=document.getElementById('staffBadge');
-  if(badge){badge.textContent=n;badge.style.display=n>0?'inline-block':'none';}
-  const bc=document.getElementById('briefingCheckin');
-  if(bc){bc.textContent=n>0?`${n} of 12 check-ins this week. ${SD.filter(s=>s.capacity>=85).length} overloaded. ${SD.filter(s=>hasBlocker(s.blockers)).length} blockers.`:'No check-ins yet. Send the form to staff.';}
-  try{renderStaff();
-    // Update check-in count metric
-    var countEl = document.getElementById('todayCount');
-    var subEl = document.getElementById('checkinSub');
-    if (countEl) { countEl.textContent = SD.length; countEl.style.color = SD.length < ALL_STAFF.length ? 'var(--a)' : 'var(--g)'; }
-    if (subEl) subEl.textContent = 'of ' + ALL_STAFF.length + ' this week — click to see who is missing';}catch(e){console.warn('renderStaff:',e.message);}
-  try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
-  try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
-  if(n>0){
-    const avg=Math.round(SD.reduce((a,s)=>a+s.capacity,0)/n);
-    const els={'sm-avg':avg+'%','sm-n':n,'sm-ov':SD.filter(s=>s.capacity>=85).length,'sm-fr':SD.filter(s=>s.capacity<65).length,'sk-ov':SD.filter(s=>s.capacity>=85).length,'sk-fr':SD.filter(s=>s.capacity<70).length};
-    var snSub=document.getElementById('sm-n-sub');
-    if(snSub) snSub.textContent='of '+ALL_STAFF.length+' this week — click to see who is missing';
-    Object.entries(els).forEach(([id,val])=>{const el=document.getElementById(id);if(el)el.textContent=val;});
-    const smAvg=document.getElementById('sm-avg');
-    if(smAvg)smAvg.style.color=avg>=80?'var(--a)':'var(--t1)';
-  }
-  buildCharts();
-}
-
-function buildCharts(){
-  if(!charts.email){
-    const ctx=document.getElementById('emailChart');
-    if(ctx)charts.email=new Chart(ctx,{type:'bar',data:{labels:['Mon','Tue','Wed','Thu','Fri'],datasets:[{label:'Received',data:[18,24,15,21,9],backgroundColor:'#B5D4F4',borderRadius:3},{label:'Sent',data:[12,17,9,13,6],backgroundColor:'#1D9E75',borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10}}},y:{ticks:{font:{size:10}},grid:{color:'rgba(128,128,128,0.1)'}}}}});
-  }
-  if(SD.length>0){
-    const labels=SD.map(s=>s.name.split(' ')[0]);
-    const vals=SD.map(s=>s.capacity);
-    const colors=SD.map(s=>s.capacity>=85?'#E24B4A':s.capacity>=70?'#EF9F27':'#1D9E75');
-    if(charts.cap)charts.cap.destroy();
-    const ctx2=document.getElementById('capChart');
-    if(ctx2)charts.cap=new Chart(ctx2,{type:'bar',data:{labels,datasets:[{label:'Capacity %',data:vals,backgroundColor:colors,borderRadius:4}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{max:100,ticks:{callback:v=>v+'%',font:{size:10}},grid:{color:'rgba(128,128,128,0.1)'}},y:{ticks:{font:{size:10}}}}}});
-    const over=SD.filter(s=>s.capacity>=85).length;
-    const mid=SD.filter(s=>s.capacity>=65&&s.capacity<85).length;
-    const free=SD.filter(s=>s.capacity<65).length;
-    if(charts.dist)charts.dist.destroy();
-    const ctx3=document.getElementById('distChart');
-    if(ctx3)charts.dist=new Chart(ctx3,{type:'doughnut',data:{labels:['Overloaded >85%','Busy 65-85%','Available <65%'],datasets:[{data:[over,mid,free],backgroundColor:['#E24B4A','#EF9F27','#1D9E75'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:8}}}}});
-  }
-}
-
-const EMPTY_B=['none','n/a','no','nil','-','no blockers','nothing','nope','na','no blocker'];
-function hasBlocker(b){const t=(b||'').trim();return t.length>2&&!EMPTY_B.includes(t.toLowerCase());}
-function cap(name){return(name||'').split(' ').map(w=>w?w.charAt(0).toUpperCase()+w.slice(1):'').join(' ');}
-function initials(n){return cap(n||'??').split(' ').map(w=>w[0]||'').join('').substring(0,2).toUpperCase();}
-function bc(c){return c>=85?'br':c>=70?'ba':'bg';}
-
-function renderStaff(){
-  const el=document.getElementById('staffGrid');
-  if(!el)return;
-  if(SD.length===0){el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center;grid-column:1/-1">No check-ins yet. Send cinderella-checkin.html to staff — submissions appear here automatically.</div>';return;}
-  const sorted=[...SD].sort((a,b)=>b.capacity-a.capacity);
-  el.innerHTML=sorted.map((s,i)=>{
-    const av=AV_STYLES[i%AV_STYLES.length];
-    const tc=s.trend==='Heavier'?'up':s.trend==='Lighter'?'dn':'';
-    const ti=s.trend==='Heavier'?'↑ Heavier':s.trend==='Lighter'?'↓ Lighter':'→ Similar';
-    const tags=[];
-    if(s.trend)tags.push(`<span class="stag ${tc}">${ti}</span>`);
-    if(s.availability&&s.availability!=='Full week')tags.push(`<span class="stag lv">${s.availability}</span>`);
-    if(s.blockers&&s.blockers.trim())tags.push('<span class="stag bl">Blocker</span>');
-    const skills=(s.skills||'').split(',').filter(x=>x.trim()).slice(0,3).map(sk=>`<span class="stag">${sk.trim()}</span>`).join('');
-    const sub=s.submitted?new Date(s.submitted).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'';
-    const pct=s.capacity||0;
-    return `<div class="sc" onclick="openStaffModal(${i})">
-      <div class="sh"><div class="sav" style="${av}">${initials(s.name)}</div><div style="flex:1;min-width:0"><div class="sn">${cap(s.name)}</div><div class="sr">${cap(s.role)||'—'}</div></div><div class="sw">${sub}</div></div>
-      <div class="cbr"><div class="cbl">Capacity</div><div class="bw"><div class="bar ${bc(pct)}" style="width:${pct}%"></div></div><div class="bp" style="color:${pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)'}">${pct}%</div></div>
-      ${s.projects?`<div style="font-size:10px;color:var(--t2);margin-top:4px;line-height:1.4"><strong style="color:var(--t3)">Projects: </strong>${s.projects}</div>`:''}
-      <div class="stags">${tags.join('')}${skills}</div>
-      ${s.blockers?`<div class="snotes">Blocker: ${s.blockers}</div>`:''}
-    </div>`;
+function getMissingCheckIns() {
+  var checked = SD.map(function(s){ return s.name.toLowerCase(); });
+  var missing = ALL_STAFF.filter(function(s){
+    var first = s.name.split(' ')[0].toLowerCase();
+    return !checked.some(function(n){ return n.includes(first); });
+  });
+  if (missing.length === 0) return '<div class="alert-box ok"><div class="ab-title">All staff have submitted check-ins this week</div></div>';
+  window._missingStaff = {};
+  var rows = missing.map(function(s, i) {
+    window._missingStaff[i] = s;
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid rgba(162,45,45,0.2)">' +
+      '<span>' + s.name + '</span>' +
+      '<button onclick="sendCheckinReminder(' + i + ')" style="font-size:9px;padding:2px 8px;border-radius:8px;background:#A32D2D;color:#fff;border:none;cursor:pointer;font-family:var(--f)">Send reminder</button>' +
+    '</div>';
   }).join('');
-  const insEl=document.getElementById('staffInsights');
-  if(!insEl)return;
-  const overloaded=SD.filter(s=>s.capacity>=85);
-  const free=SD.filter(s=>s.capacity<65);
-  let html='';
-  if(overloaded.length>0)html+=`<div class="ins" onclick="show('skills',null)"><div class="il">Overload alert</div><div class="it">${overloaded.length===1?cap(overloaded[0].name.split(' ')[0])+' is':overloaded.map(s=>cap(s.name.split(' ')[0])).join(' and ')+' are'} above 85% capacity — check skill matches.</div></div>`;
-  const realBlockers=SD.filter(s=>hasBlocker(s.blockers));
-  if(realBlockers.length>0)html+=`<div class="ins" onclick="qa('Suggest how to resolve these staff blockers: ${realBlockers.map(s=>cap(s.name)+': '+s.blockers).join('; ')}')"><div class="il">Blockers flagged</div><div class="it">${realBlockers.map(s=>cap(s.name.split(' ')[0])).join(' and ')} ${realBlockers.length===1?'has':'have'} reported blockers needing your attention.</div></div>`;
-  if(free.length>0&&overloaded.length>0){const freeNames=free.map(s=>cap(s.name.split(' ')[0]));html+=`<div class="ins" onclick="show('skills',null)"><div class="il">Capacity available</div><div class="it">${freeNames.length===1?freeNames[0]+' has':freeNames.join(' and ')+' have'} capacity below 65% and could absorb work.</div></div>`;}
-  if(!html)html='<div style="font-size:11px;color:var(--t3);padding:4px 0">Team capacity looks healthy this week.</div>';
-  insEl.innerHTML=html;
+  return '<div class="alert-box"><div class="ab-title">' + missing.length + ' staff have not submitted their check-in</div><div class="ab-text" style="margin-top:6px">' + rows + '</div></div>';
 }
-
-
 
 function showMissingStaffModal() {
   var checked = SD.map(function(s){ return s.name.toLowerCase(); });
@@ -2285,10 +2144,8 @@ function sendReminderFromModal(idx) {
   var s = window._missingStaffModal && window._missingStaffModal[idx];
   if (!s) return;
   var firstName = s.name.split(' ')[0];
-  var emailBody = 'Hi ' + firstName + ',\n\nI hope you are having a great week so far!\n\nPlease don\'t forget to send your weekly check-in. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent.onrender.com/checkin\n\nThanks so much!\n\nKandia';
+  var emailBody = 'Hi ' + firstName + ',\n\nI hope you are having a great week so far!\n\nPlease don\'t forget to send your weekly check-in. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin\n\nThanks so much!\n\nKandia';
   closeModal();
-  // Store email body for draft modal to use
-  window._pendingEmailBody = emailBody;
   openDraftModal(s.name, emailBody, 'Reminder: weekly check-in', 'email', s.email);
 }
 
@@ -2300,899 +2157,74 @@ function sendAllReminders() {
   });
   if (missing.length === 0) { closeModal(); return; }
   var emails = missing.map(function(s){ return s.email; }).join('; ');
-  var names = missing.map(function(s){ return s.name.split(' ')[0]; }).join(', ');
-  var emailBody = 'Hi team,\n\nI hope you are all having a great week so far!\n\nThis is a reminder to please submit your weekly check-in if you haven\'t already. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent.onrender.com/checkin\n\nThanks so much!\n\nKandia';
+  var emailBody = 'Hi team,\n\nI hope you are all having a great week so far!\n\nThis is a reminder to please submit your weekly check-in if you haven\'t already.\n\nYou can complete it here:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin\n\nThanks!\n\nKandia';
   closeModal();
   openDraftModal('Team', emailBody, 'Reminder: weekly check-in', 'email', emails);
 }
 
-function staffAction(type) {
-  var st = window._currentStaff;
-  if (!st) return;
-  if (type === 0) openDraftModal(st.name, 'Checking in on workload', 'Checking in — how can I support you?', 'email');
-  else if (type === 1) openDraftModal(st.name, '1:1 check-in', '1:1 — workload check-in', 'meeting');
-  else if (type === 2) { closeModal(); actionBlocker(st.name, st.blockers || ''); }
-  else if (type === 3) { show('skills',null); closeModal(); }
-  else if (type === 4) { deleteCheckIn(st.name, st.weekEnding||''); }
+function loadCfg(){
+  const s=document.getElementById('setupModal');
+  if(!s)return;
+  if(!C.bin||!C.key){s.style.display='flex';}
+  else{s.style.display='none';if(C.bin&&C.key){syncNow();setInterval(syncNow,60*60*1000); // every 60 mins}};
 }
 
-function openStaffModal(idx){
-  try {
-  const sorted=[...SD].sort((a,b)=>b.capacity-a.capacity);
-  const st=sorted[idx];
-  if(!st){ console.warn('No staff at index', idx, 'SD length:', SD.length); return; }
-  const pct=st.capacity||0;
-  const pctNext=st.capacityNext||0;
-  const matches=findMatches().filter(m=>m.busy.name===st.name||m.free.name===st.name);
-  const matchHtml=matches.length>0?'<div class="mfl" style="margin-top:12px">Skill match alerts</div>'+
-    matches.map(m=>'<div class="alert-box ok" style="margin-bottom:6px"><div class="ab-title">'+(m.busy.name===st.name?'Support available from '+m.free.name+' ('+m.free.capacity+'%)':'Can support '+m.busy.name+' ('+m.busy.capacity+'%)')+'</div><div class="ab-text">Shared skills: '+m.shared.join(', ')+'</div></div>').join(''):'';
+function skipSetup(){document.getElementById('setupMo').style.display='none';}
 
-  var html=
-    '<div class="mfield"><div class="mfl">This week — capacity</div>'+
-    '<div style="display:flex;align-items:center;gap:10px"><div class="bw" style="flex:1;height:8px"><div class="bar '+bc(pct)+'" style="width:'+pct+'%"></div></div><strong style="color:'+(pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)')+'">'+pct+'%</strong></div></div>'+
-    (pctNext?'<div class="mfield"><div class="mfl">Next week — forecast capacity</div>'+
-    '<div style="display:flex;align-items:center;gap:10px"><div class="bw" style="flex:1;height:8px"><div class="bar '+bc(pctNext)+'" style="width:'+pctNext+'%"></div></div><strong style="color:'+(pctNext>=85?'var(--r)':pctNext>=70?'var(--a)':'var(--g)')+'">'+pctNext+'%</strong></div></div>':'')+
-    '<div class="mfield"><div class="mfl">Workload trend vs last week</div><div class="mfv">'+(st.trend||'—')+'</div></div>'+
-    '<div class="mfield"><div class="mfl">Projects this week</div><div class="mfv">'+(st.projects||'—')+'</div></div>'+
-    (st.blockers?'<div class="mfield"><div class="mfl">Blockers</div><div class="mfv" style="color:var(--r)">'+st.blockers+'</div></div>':'')+
-    '<div class="mfield"><div class="mfl">Skills</div><div class="mfv">'+((st.skills||'').split(',').filter(x=>x.trim()).map(s=>'<span class="mfv-tag" style="background:var(--gl);color:#0F6E56">'+s.trim()+'</span>').join('')||'—')+'</div></div>'+
-    '<div class="mfield"><div class="mfl">Availability next week</div><div class="mfv">'+(st.availability||'Full week')+(st.leave?' — '+st.leave:'')+'</div></div>'+
-    (st.notes?'<div class="mfield"><div class="mfl">Notes to COO</div><div class="mfv">'+st.notes+'</div></div>':'')+
-    '<div class="mfield"><div class="mfl">Submitted</div><div class="mfv" style="color:var(--t3)">'+(st.submitted?new Date(st.submitted).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'Unknown')+'</div></div>'+
-    matchHtml+
-    '<hr class="m-divider">'+
-    '<div style="display:flex;flex-wrap:wrap;gap:6px">'+
-    '<button class="m-btn" onclick="staffAction(0)">✉ Email</button>'+
-    '<button class="m-btn" style="background:#217346" onclick="staffAction(1)">📅 1:1</button>'+
-    (st.blockers?'<button class="m-btn sec" onclick="staffAction(2)">🚧 Blocker</button>':'')+
-    (matches.length>0?'<button class="m-btn sec" onclick="staffAction(3)">Skill matches</button>':'')+
-    '</div>'+
-    '<hr class="m-divider">'+
-    '<button class="m-btn sec" style="color:var(--r);border-color:var(--r);width:100%;margin-top:4px" onclick="staffAction(4)">🗑 Delete this check-in</button>';
-
-  window._currentStaff = st;
-  openModal(cap(st.name), (cap(st.role)||'Staff member')+' · Week ending '+(st.weekEnding||''), html);
-  } catch(err) { console.error('openStaffModal error:', err); alert('Error opening staff card: ' + err.message); }
+function saveCfg(){
+  C.bin=document.getElementById('cf-bin').value.trim();
+  C.key=document.getElementById('cf-key').value.trim();
+  C.api=document.getElementById('cf-api').value.trim()||'proxy';
+  localStorage.setItem('cinderella_cfg',JSON.stringify(C));
+  loadCfg();
+  closeModal();
 }
 
-
-function parseSkills(str){return(str||'').split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);}
-
-function findMatches(){
-  const overloaded=SD.filter(s=>s.capacity>=85);
-  const available=SD.filter(s=>s.capacity<70);
-  const results=[];
-  overloaded.forEach(busy=>{
-    const bs=parseSkills(busy.skills);
-    available.forEach(free=>{
-      if(free.name===busy.name)return;
-      const fs=parseSkills(free.skills);
-      const shared=bs.filter(b=>fs.some(f=>f.includes(b)||b.includes(f)||levenshtein(b,f)<3));
-      if(shared.length>0)results.push({busy,free,shared,slack:100-free.capacity});
-    });
-  });
-  return results.sort((a,b)=>b.slack-a.slack);
-}
-
-function levenshtein(a,b){
-  const m=a.length,n=b.length;
-  const dp=Array.from({length:m+1},(_,i)=>[i,...Array(n).fill(0)]);
-  for(let j=0;j<=n;j++)dp[0][j]=j;
-  for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)dp[i][j]=a[i-1]===b[j-1]?dp[i-1][j-1]:1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);
-  return dp[m][n];
-}
-
-function renderSkillMatch(){
-  const matches=findMatches();
-  const mbadge=document.getElementById('matchBadge');
-  if(mbadge){mbadge.textContent=matches.length;mbadge.style.display=matches.length>0?'inline-block':'none';}
-  const skn=document.getElementById('sk-n');if(skn)skn.textContent=matches.length;
-  const ml=document.getElementById('matchList');
-  if(!ml)return;
-  if(matches.length===0){
-    const _ov=SD.filter(s=>s.capacity>=85);
-    const _av=SD.filter(s=>s.capacity<70);
-    let _msg='';
-    if(SD.length===0){_msg='Sync check-ins to see skill matches. Cinderella auto-detects when an overloaded staff member has a skill-matched colleague with spare capacity.';}
-    else if(_ov.length>0&&_av.length===0){_msg=`${_ov.length===1?cap(_ov[0].name.split(' ')[0])+' is':_ov.map(s=>cap(s.name.split(' ')[0])).join(' and ')+' are'} overloaded but no colleagues have spare capacity.`;}
-    else if(_ov.length>0&&_av.length>0){_msg=`${_ov.length} staff overloaded but no skill matches found. Consider external support or cross-training.`;}
-    else{_msg='No skill matches needed — team capacity is well distributed this week.';}
-    ml.innerHTML=`<div style="font-size:12px;color:var(--t2);padding:8px 0;line-height:1.5">${_msg}</div>`;
-    return;
-  }
-  ml.innerHTML=matches.map((m,i)=>`
-    <div class="smatch" onclick="actionSkillMatch('${m.busy.name}','${m.free.name}',${m.busy.capacity},${m.free.capacity},'${m.shared.join(', ')}')">
-      <div class="smatch-head"><span class="smatch-flag">${m.busy.capacity}% → ${m.free.capacity}%</span><div class="smatch-names">${cap(m.busy.name)} <span style="opacity:.6">needs support from</span> ${cap(m.free.name)}</div></div>
-      <div class="smatch-skills">Shared skills: ${m.shared.map(s=>cap(s)).join(', ')}</div>
-      <div class="smatch-action">Click to email staff, schedule a handover call, or get task suggestions</div>
-    </div>`).join('');
-  const smEl=document.getElementById('skillMatrix');
-  if(!smEl)return;
-  const allSkills={};
-  SD.forEach(s=>{parseSkills(s.skills).forEach(sk=>{if(!allSkills[sk])allSkills[sk]=[];allSkills[sk].push(s.name.split(' ')[0]);});});
-  smEl.innerHTML=Object.entries(allSkills).sort((a,b)=>b[1].length-a[1].length).slice(0,8).map(([sk,names])=>
-    `<div class="cbr" style="margin-bottom:6px"><div class="cbl" style="min-width:120px;font-size:10px">${cap(sk)}</div><div class="bw"><div class="bar bg" style="width:${Math.round(names.length/SD.length*100)}%"></div></div><div class="bp" style="color:var(--t2)">${names.length}</div></div>`
-  ).join('');
-}
-
-function renderHR(){
-  const overloaded=SD.filter(s=>s.capacity>=85);
-  const avail=SD.filter(s=>s.availability&&s.availability!=='Full week');
-  const heavy=SD.filter(s=>s.trend==='Heavier');
-  const realBlockersList=SD.filter(s=>hasBlocker(s.blockers));
-  const hn=document.getElementById('hr-n');if(hn)hn.textContent=realBlockersList.length+overloaded.length+avail.length;
-  const hbl=document.getElementById('hr-bl');if(hbl)hbl.textContent=realBlockersList.length;
-  const hav=document.getElementById('hr-av');if(hav)hav.textContent=avail.length;
-  const hbadge=document.getElementById('hrBadge');
-  if(hbadge)hbadge.style.display=(realBlockersList.length>0||overloaded.length>0)?'inline-block':'none';
-  const el=document.getElementById('hrList');
-  if(!el)return;
-  let html='';
-  overloaded.forEach(s=>{html+=`<div class="hr-card" onclick="actionCapacity('${s.name}',${s.capacity},'${(s.skills||'').replace(/'/g,"\\'")}')"><div class="hr-title">⚠ Overload risk — ${s.name}</div><div class="hr-sub">${s.capacity}% capacity · Trend: ${s.trend||'—'} · ${s.role||'—'}</div><span class="hr-tag" style="background:var(--rl);color:#A32D2D">Click to email or schedule 1:1</span></div>`;});
-  realBlockersList.forEach(s=>{html+=`<div class="hr-card" onclick="actionBlocker('${s.name}','${(s.blockers||'').replace(/'/g,"\\'")}')"><div class="hr-title">🚧 Blocker — ${s.name}</div><div class="hr-sub">${s.blockers}</div><span class="hr-tag" style="background:var(--al);color:#854F0B">Click to email or schedule call</span></div>`;});
-  avail.forEach(s=>{html+=`<div class="hr-card" onclick="openDraftModal('${s.name}','Coverage planning — ${s.name} is ${s.availability} this week','Coverage planning — your availability this week','email')"><div class="hr-title">📅 Availability — ${s.name}</div><div class="hr-sub">${s.availability}${s.leave?' · '+s.leave:''}</div><span class="hr-tag" style="background:var(--al);color:#854F0B">Email re: coverage</span></div>`;});
-  heavy.forEach(s=>{if(s.capacity<85)html+=`<div class="hr-card" onclick="actionCapacity('${s.name}',${s.capacity},'${(s.skills||'').replace(/'/g,"\\'")}')"><div class="hr-title">↑ Increasing load — ${s.name}</div><div class="hr-sub">${s.capacity}% capacity · Heavier than last week</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Click to check in</span></div>`;});
-  if(!html)html='<div style="font-size:12px;color:var(--t3);padding:8px 0">'+(SD.length===0?'Sync check-ins to see HR insights.':'No HR flags this week — your team looks healthy.')+'</div>';
-  el.innerHTML=html;
-}
-
-function filterStaff(type){
-  if(SD.length===0){openModal('No check-ins yet','Send the check-in form to staff first','<div class="mfv">Once staff submit their weekly check-in, capacity data will appear here automatically.</div>');return;}
-  const filtered=type==='over'?[...SD].filter(s=>s.capacity>=85).sort((a,b)=>b.capacity-a.capacity):[...SD].filter(s=>s.capacity<65).sort((a,b)=>a.capacity-b.capacity);
-  if(filtered.length===0){openModal(type==='over'?'No overloaded staff':'No staff with bandwidth','Great news!','<div class="alert-box ok"><div class="ab-title">'+(type==='over'?'No one is above 85% capacity this week':'Everyone is at 65% or above this week')+'</div><div class="ab-text">Team workload looks well distributed.</div></div>');return;}
-  const title=type==='over'?`Overloaded staff (${filtered.length})`:`Staff with bandwidth (${filtered.length})`;
-  const sub=type==='over'?'Above 85% capacity — action recommended':'Below 65% capacity — available for additional work';
-  const cards=filtered.map(s=>{
-    const n=cap(s.name);const pct=s.capacity;
-    const barCol=pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)';
-    const matches=type==='over'?findMatches().filter(m=>m.busy.name===s.name):findMatches().filter(m=>m.free.name===s.name);
-    const matchHtml=matches.length>0?`<div style="font-size:11px;color:var(--g);margin-top:5px;font-weight:500">✓ Skill match found: ${matches.map(m=>cap(type==='over'?m.free.name:m.busy.name)).join(', ')} can help</div>`:'';
-    const solutions=type==='over'
-      ?`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button class="m-btn" style="font-size:11px;padding:6px 12px" onclick="actionCapacity('${s.name}',${pct},'${(s.skills||'').replace(/'/g,"\\'")}')">View solutions</button><button class="m-btn sec" style="font-size:11px;padding:6px 12px" onclick="openDraftModal('${n}','Wellbeing check-in — ${n} is at ${pct}% capacity','Checking in — how can I support you?','email')">Email ${n}</button><button class="m-btn sec" style="font-size:11px;padding:6px 12px;background:#217346;color:#fff;border:none" onclick="openDraftModal('${n}','1:1 to discuss capacity reduction','1:1 — workload review','meeting')">Schedule 1:1</button></div>`
-      :`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button class="m-btn" style="font-size:11px;padding:6px 12px" onclick="show('skills',null);closeModal()">See skill matches</button><button class="m-btn sec" style="font-size:11px;padding:6px 12px" onclick="openDraftModal('${n}','Assigning additional work — ${n} has available capacity this week','Additional work this week','email')">Email ${n}</button></div>`;
-    return `<div style="background:var(--bg2);border-radius:10px;padding:12px 14px;margin-bottom:10px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div style="font-size:13px;font-weight:500;color:var(--t1)">${n}</div><div style="font-size:10px;color:var(--t2)">${s.role||''}</div><div style="margin-left:auto;font-size:14px;font-weight:500;color:${barCol}">${pct}%</div></div><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;background:var(--bg);border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;border-radius:3px;background:${barCol};width:${pct}%"></div></div></div>${s.projects?`<div style="font-size:11px;color:var(--t2);margin-top:5px">Projects: ${s.projects}</div>`:''}${hasBlocker(s.blockers)?`<div style="font-size:11px;color:var(--r);margin-top:4px">Blocker: ${s.blockers}</div>`:''}${matchHtml}${solutions}</div>`;
-  }).join('');
-  const summaryType=type==='over'?'<div class="alert-box"><div class="ab-title">Action recommended</div><div class="ab-text">These staff members are at risk of burnout.</div></div>':'<div class="alert-box ok"><div class="ab-title">Capacity available</div><div class="ab-text">These staff members have bandwidth this week.</div></div>';
-  openModal(title,sub,summaryType+cards);
-}
-
-let briefingDone=false;
-function show(id,btn){
-  document.querySelectorAll('.pnl,.pnl-chat').forEach(p=>{p.classList.remove('active');p.scrollTop=0;});
-  document.querySelectorAll('.ni').forEach(b=>b.classList.remove('active'));
-  const el=document.getElementById('pnl-'+id);
-  if(el){el.classList.add('active');requestAnimationFrame(()=>el.scrollTop=0);}
-  if(btn)btn.classList.add('active');
-  setTimeout(()=>{if(id==='email'&&!charts.email)buildCharts();if(id==='staff')buildCharts();},50);
-  if(id==='chat'&&!briefingDone){briefingDone=true;} // briefing now on-demand only
-}
-async function autoBriefing(){
-  const now=new Date();
-  const h=now.getHours();
-  const greet=h<12?'morning':h<17?'afternoon':'evening';
-  setB(true);
-
-  // Fetch real emails and calendar first
-  var briefNow = new Date();
-  var briefToday = briefNow.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Australia/Brisbane'});
-  var emailCtx='No emails loaded.';
-  var calCtx='No calendar loaded.';
-
-  try{
-    const er=await fetch('/graph/emails');
-    if(er.ok){
-      const ed=await er.json();
-      M365.emails=ed.emails||[];
-      renderLiveEmails();
-      if(M365.emails.length>0){
-        emailCtx='UNREAD EMAILS NEEDING REPLY ('+M365.emails.length+' total, showing top 8):\n'+
-          M365.emails.slice(0,8).map(function(e){
-            return '- FROM: '+e.from+' <'+( e.fromEmail||'')+'>'+
-              ' | '+e.hoursOld+'h ago'+
-              (e.hoursOld>=24?' [CRITICALLY OVERDUE]':e.hoursOld>=12?' [OVERDUE]':'')+
-              (e.hasAttachments?' [HAS ATTACHMENTS]':'')+
-              '\n  SUBJECT: '+e.subject+
-              '\n  PREVIEW: '+(e.preview||'');
-          }).join('\n');
-      } else {
-        emailCtx='No unread emails requiring reply.';
-      }
-    }
-  }catch(ex){emailCtx='Email data unavailable: '+ex.message;}
-
-  try{
-    const cr=await fetch('/graph/calendar');
-    if(cr.ok){
-      const cd=await cr.json();
-      M365.events=cd.events||[];
-      renderLiveCalendar();
-      if(M365.events.length>0){
-        calCtx='CALENDAR TODAY:\n'+M365.events.map(function(e){
-          var t=new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
-          var et=new Date(e.end.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
-          return '- '+t+' to '+et+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
-        }).join('\n');
-      } else {
-        calCtx='No meetings scheduled today.';
-      }
-    }
-  }catch(ex){calCtx='Calendar data unavailable: '+ex.message;}
-
-  var staffCtx=SD.length>0?'\nSTAFF CHECK-INS:\n'+SD.map(function(s){
-    return '- '+s.name+' ('+( s.role||'staff')+'): '+(s.capacity||0)+'% capacity, trend: '+(s.trend||'unknown')+', projects: '+(s.projects||'none')+', blockers: '+(s.blockers||'none');
-  }).join('\n'):'\nNo staff check-ins received yet this week.';
-
-  const briefingPrompt='TODAY IS: ' + briefToday + ' (Brisbane AEST).\nGive me my daily briefing now using ONLY the real data below. Do not make up or assume any information not in this data.\n\n'+
-    emailCtx+'\n\n'+calCtx+staffCtx+
-    '\n\nFormat your response in exactly these 4 sections:\n\n'+
-    '**1. TOP PRIORITIES**\n'+
-    'Based on the emails and calendar above, list the top 3-5 things I must action today ranked by urgency. Be very specific — name the person, their email, the exact subject, and what needs doing. For each meeting today, flag what preparation is needed. For emails with attachments, flag them specifically.\n\n'+
-    '**2. EMAILS NEEDING A REPLY**\n'+
-    'List every email that needs my response, most overdue first. Show: sender name, how long ago, subject, and one line on what they need from me.\n\n'+
-    '**3. TEAM FLAGS**\n'+
-    'Any staff capacity issues, blockers, or burnout risks from check-in data. If no check-ins, say so in one line.\n\n'+
-    '**4. CALENDAR TODAY**\n'+
-    'List every meeting with time. For any meeting that needs preparation, tell me exactly what to prepare and flag if I have no prep time blocked before it.\n\n'+
-    'Keep each section tight. If a section has nothing to report, say so in one line. Use plain language — no jargon.';
-
-  try{
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1200,system:SYS,messages:[{role:'user',content:briefingPrompt}]})});
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    if(d.error)throw new Error(d.error.message);
-    const rep=d.content&&d.content.length>0?d.content.filter(function(b){return b.type==='text';}).map(function(b){return b.text;}).join('\n'):'';
-    setB(false);
-    if(rep)addMsg('a',rep);
-    else addMsg('a','Good '+greet+' Kandia — I loaded your emails and calendar. Type "give me my briefing" to see your priorities.');
-  }catch(e){
-    setB(false);
-    addMsg('a','Good '+greet+' Kandia. I loaded your data but had trouble generating the briefing ('+e.message+'). Type "give me my briefing" and I will try again.');
-  }
-}
-
-function openModal(title,sub,body){
-  document.getElementById('m-title').textContent=title;
-  document.getElementById('m-sub').textContent=sub||'';
-  document.getElementById('m-body').innerHTML=body||'';
-  document.getElementById('modal').classList.add('open');
-}
-function closeModal(){document.getElementById('modal').classList.remove('open');}
-
-const SYS=[
-  'You are Cinderella, the personal executive assistant to Kandia, COO of Risk 2 Solution, a risk management and compliance SaaS company in Australia.',
-  '',
-  'MICROSOFT 365 IS FULLY CONNECTED. You have live access to Kandia emails, calendar and Teams. The live data is in every message. Use it. Never say M365 is not connected.',
-  '',
-  'YOUR ROLE: Kandia right hand. Proactive, warm, direct. Surface what matters before she asks. Draft properly. Flag problems early.',
-  '',
-  'COMMUNICATION: Warm EA tone. Professional but human. Lead with the most important thing first. Plain English, no jargon. Short answers when short will do.',
-  '',
-  'SCHEDULING: When Kandia asks to schedule a meeting, ALWAYS respond with the meeting details AND include a special block at the end in this exact format (no deviations): SCHEDULE_MEETING:{"subject":"Meeting title","attendees":["email@domain.com"],"start":"2026-05-12T10:00:00","end":"2026-05-12T10:30:00","body":"Meeting notes here"}. Use ISO datetime strings in Brisbane time (UTC+10). This triggers the calendar creation button. Always include it when scheduling is requested.',
-  '',
-  'BRIEFING FORMAT: 1. TOP PRIORITIES (based on emails and calendar, ranked by urgency) 2. EMAILS NEEDING REPLY (most overdue first) 3. TEAM FLAGS (capacity, blockers, missing check-ins) 4. CALENDAR TODAY (meetings with times, flag anything needing prep).',
-  '',
-  'WHAT KEEPS KANDIA UP AT NIGHT: Cash flow and financial performance. Client delivery and project management. Staff time and effectiveness (capacity, burnout, blockers). Board reporting.',
-  '',
-  'BUSINESS CONTEXT: Risk 2 Solution, Australia. Team: Janita Zhang, Reinette Kruger, Diane Kruger (finance, diane.k@risk2solution.com), Garima Arora, Paul Johnston, Dani Stevenson, Ross Mackenzie. Dave Cohen is CEO. Clients: Titan Corp, Delta Inc, Prentice Group.',
-  'STAFF CHECK-IN DATA: When Kandia asks about staff history, check-ins, skills, capacity trends, cross-training or succession, full historical check-in data is included in the context above (FULL CHECK-IN HISTORY section). Use it to give specific, named answers about each staff member. Never say you cannot access this data — it is provided directly in the message.',
-  '',
-  'NEVER: Say M365 is not connected. Say you cannot access emails or calendar. Make decisions without checking with Kandia. Write essays when a paragraph will do. Be vague.',
-  '',
-  'DOCUMENTS: Produce in full, contextualised for risk management SaaS. Ready to use immediately.',
-  '',
-  'EMAILS: Complete, ready-to-send. Warm but professional. Sign off as Kandia or Kandia COO.'
-].join('\n')
-
-async function send(){
-  const inp=document.getElementById('cinput');
-  const text=inp.value.trim();
-  if(!text||busy)return;
-  inp.value='';resize(inp);
-
-  // Build live context from real M365 data + staff check-ins
-  var docCtx = (typeof getDocContext === 'function') ? getDocContext() : '';
-  // Build full week date reference so Cinderella picks correct dates
-  var now = new Date();
-  var brisbaneNow = new Date(now.toLocaleString('en-US', {timeZone:'Australia/Brisbane'}));
-  var todayStr = brisbaneNow.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
-  var liveCtx = 'TODAY IS: ' + todayStr + ' (Brisbane AEST)\n';
-  liveCtx += 'DATE REFERENCE — use these exact dates when scheduling:\n';
-  var dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  for (var di = 0; di < 14; di++) {
-    var futureDate = new Date(brisbaneNow);
-    futureDate.setDate(brisbaneNow.getDate() + di);
-    var dayLabel = di === 0 ? 'Today' : di === 1 ? 'Tomorrow' : futureDate.toLocaleDateString('en-AU',{weekday:'long'});
-    liveCtx += dayLabel + ' = ' + futureDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'}) + '\n';
-  }
-  liveCtx += 'IMPORTANT: Always use the exact date from the reference above — never guess the date from the day name alone.\n\n';
-  if(M365.emails.length>0){
-    liveCtx+='\n\nLIVE EMAILS (unread, top 5 most recent):\n'+M365.emails.slice(0,5).map(function(e){
-      return '- FROM: '+e.from+(e.fromEmail?' <'+e.fromEmail+'>':'')+' | '+e.hoursOld+'h ago'+(e.hasAttachments?' [HAS ATTACHMENT]':'')+' | SUBJECT: '+e.subject+(e.preview?' | PREVIEW: '+e.preview:'');
-    }).join('\n');
-  }
-  if(M365.events.length>0){
-    liveCtx+='\n\nCALENDAR TODAY (real data):\n'+M365.events.map(function(e){
-      return '- '+new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})+' to '+new Date(e.end.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
-    }).join('\n');
-  }
-  if(SD.length>0){
-    liveCtx+='\n\nCURRENT WEEK STAFF CHECK-INS:\n'+SD.map(s=>`- ${s.name} (${s.role||'?'}): this week ${s.capacity}%${s.capacityNext?' | next week forecast '+s.capacityNext+'%':''} | trend: ${s.trend||'?'} | projects: ${s.projects||'none'} | blockers: ${s.blockers||'none'} | skills: ${s.skills||'?'}${s.notes?' | notes: '+s.notes:''}`).join('\n');
-  } else {
-    liveCtx+='\n\nNo check-ins received yet this week.';
-  }
-
-  // Detect if user is asking about historical data and fetch it
-  var historyKeywords = ['history','previous week','last week','past week','all of may','whole of may','all of april','check-in history','check ins from','checkins from','previous check','staff history','all staff','whole month','may check','april check','historical','last month','previous month','all weeks','multiple weeks','cross-train','single point','succession','skill gap','capabilities'];
-  var needsHistory = historyKeywords.some(function(k){ return text.toLowerCase().includes(k); });
-
-  if (needsHistory && C.bin && C.key && (window._allCheckIns && window._allCheckIns.length > 0 || true)) {
-    try {
-      var allCI = window._allCheckIns && window._allCheckIns.length > 0 ? window._allCheckIns : null;
-      if (!allCI) {
-        var hRes = await fetch('https://api.jsonbin.io/v3/b/'+C.bin+'/latest', {headers:{'X-Master-Key':C.key}});
-        var hData = await hRes.json();
-        allCI = (Array.isArray(hData.record)?hData.record:[]).filter(function(e){return e&&e.name;});
-        window._allCheckIns = allCI;
-      }
-      if (allCI && allCI.length > 0) {
-        // Group by week for context
-        var byWk = groupByWeek(allCI);
-        var wkKeys = sortWeeks(byWk).reverse();
-        liveCtx += '\n\nFULL CHECK-IN HISTORY ('+allCI.length+' submissions across '+wkKeys.length+' weeks):';
-        wkKeys.slice(0, 4).forEach(function(wk) { // limit to last 4 weeks to save tokens
-          liveCtx += '\nWeek ending '+wk+':\n';
-          byWk[wk].forEach(function(s){
-            liveCtx += '  - '+s.name+(s.role?' ('+s.role+')':'')+': capacity '+( s.capacity||0)+'%'+(s.capacityNext?' next week '+(s.capacityNext||0)+'%':'')+' trend:'+(s.trend||'?')+' projects:'+(s.projects||'none')+(s.blockers?' BLOCKER:'+s.blockers:'')+' skills:'+(s.skills||'unknown')+'\n';
-          });
-        });
-        liveCtx += '\nSKILLS SUMMARY BY STAFF MEMBER:\n';
-        var staffSkills = {};
-        allCI.forEach(function(s){
-          if (!staffSkills[s.name]) staffSkills[s.name] = {skills:[], roles:[], capacity:[]};
-          if (s.skills) s.skills.split(',').forEach(function(sk){ if(sk.trim()&&!staffSkills[s.name].skills.includes(sk.trim())) staffSkills[s.name].skills.push(sk.trim()); });
-          if (s.role && !staffSkills[s.name].roles.includes(s.role)) staffSkills[s.name].roles.push(s.role);
-          if (s.capacity) staffSkills[s.name].capacity.push(s.capacity);
-        });
-        Object.keys(staffSkills).forEach(function(name){
-          var d = staffSkills[name];
-          var avgCap = d.capacity.length ? Math.round(d.capacity.reduce(function(a,b){return a+b;},0)/d.capacity.length) : 0;
-          liveCtx += '  - '+name+': skills=['+d.skills.join(', ')+'] avg capacity='+avgCap+'%\n';
-        });
-      }
-    } catch(ex) {
-      console.warn('History fetch failed:', ex.message);
-    }
-  }
-
-  if(!liveCtx)liveCtx='\n\nNo live M365 data yet — M365 not connected or no data loaded.';
-
-  addMsg('u',text);msgs.push({role:'user',content:text});setB(true);
-  try{
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,system:SYS+liveCtx+docCtx,messages:msgs})});
-    const d=await r.json();
-    if(d.error)throw new Error(d.error.message);
-    const rep=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('\n')||'No response.';
-    msgs.push({role:'assistant',content:rep});setB(false);addMsg('a',rep);
-  }catch(e){setB(false);addMsg('a',`Error: ${e.message}. Check your API key.`);}
-}
-
-function addMsg(role,text){
-  const el=document.getElementById('msgs');
-  const d=document.createElement('div');
-  d.className='msg '+role;
-
-  // Detect SCHEDULE_MEETING block in Cinderella's response
-  var displayText = text;
-  var scheduleData = null;
-  if (role === 'a') {
-    var schedMatch = text.match(/SCHEDULE_MEETING:({[^}]+})/);
-    if (schedMatch) {
-      try {
-        scheduleData = JSON.parse(schedMatch[1]);
-        // Remove the raw JSON from display text
-        displayText = text.replace(/SCHEDULE_MEETING:{[^}]+}/, '').trim();
-      } catch(e) { scheduleData = null; }
-    }
-  }
-
-  var formatted = displayText
-    .replace(/\n/g,'<br>')
-    .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-    .replace(/^### (.*)/gm,'<strong>$1</strong>')
-    .replace(/^## (.*)/gm,'<strong style="font-size:13px">$1</strong>');
-
-  var schedBtn = '';
-  if (scheduleData) {
-    var idx = Object.keys(window._pendingMeetings||{}).length;
-    window._pendingMeetings = window._pendingMeetings || {};
-    window._pendingMeetings[idx] = scheduleData;
-    var startDate = scheduleData.start ? new Date(scheduleData.start) : null;
-    var startStr = startDate ? startDate.toLocaleString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long',day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
-    schedBtn = '<div style="margin-top:10px;background:var(--bl2);border-radius:var(--rm);padding:10px 12px">' +
-      '<div style="font-size:11px;font-weight:500;color:#185FA5;margin-bottom:6px">📅 Ready to create in your calendar:</div>' +
-      '<div style="font-size:11px;color:var(--t1);margin-bottom:8px"><strong>' + (scheduleData.subject||'Meeting') + '</strong><br>' + startStr + '<br>With: ' + (scheduleData.attendees||[]).join(', ') + '</div>' +
-      '<button onclick="createCalendarEvent(' + idx + ')" style="background:#0078D4;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:500;cursor:pointer;font-family:var(--f)">✅ Add to Outlook Calendar</button>' +
-      '<button onclick="draftMeetingInvite(' + idx + ')" style="background:none;border:0.5px solid var(--bm);color:var(--t2);border-radius:6px;padding:7px 14px;font-size:11px;cursor:pointer;font-family:var(--f);margin-left:6px">📧 Also draft invite email</button>' +
-    '</div>';
-  }
-
-  d.innerHTML = '<div class="sndr">' + (role==='u'?'You':'Cinderella') + '</div>' +
-    '<div class="bub ' + role + '">' + formatted + schedBtn + '</div>';
-  el.appendChild(d);
-  // Download button for long reports
-  if (role === 'a' && !scheduleData && displayText.length > 500) {
-    var rw = ['report','summary','checklist','review','analysis','plan','board','register','assessment','briefing','audit','process','policy'];
-    if (rw.some(function(k){ return displayText.toLowerCase().includes(k); })) {
-      var dlDiv = document.createElement('div');
-      dlDiv.style.cssText = 'padding:4px 4px 8px 4px';
-      window._dlDocs = window._dlDocs || {};
-      var di = Object.keys(window._dlDocs).length;
-      window._dlDocs[di] = {title: displayText.split('\n')[0].replace(/[#*]/g,'').trim().substring(0,60)||'Report', content: displayText};
-      dlDiv.innerHTML = '<button onclick="downloadStoredDoc('+di+')" style="font-size:10px;padding:4px 12px;border-radius:6px;background:#2B579A;color:#fff;border:none;cursor:pointer;font-family:var(--f)">📄 Download as Word</button>';
-      var bb = d.querySelectorAll('.bub.a');
-      if (bb.length > 0) bb[0].appendChild(dlDiv);
-    }
-  }
-  el.scrollTop=el.scrollHeight;
-}
-
-
-function draftMeetingInvite(idx) {
-  var data = window._pendingMeetings && window._pendingMeetings[idx];
-  if (!data) return;
-  var attendee = (data.attendees||[''])[0];
-  var startStr = data.start ? new Date(data.start).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}) : '';
-  var context = 'Send a meeting invitation email for: ' + (data.subject||'Meeting') + ' on ' + startStr;
-  openDraftModal(attendee, context, 'Invitation: ' + (data.subject||'Meeting'), 'email', attendee);
-}
-
-async function createCalendarEvent(idx) {
-  var data = window._pendingMeetings && window._pendingMeetings[idx];
-  if (!data) { alert('Meeting data not found.'); return; }
-  var btn = event.target;
-  btn.textContent = 'Creating...';
-  btn.disabled = true;
-  try {
-    var r = await fetch('/graph/calendar/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        subject: data.subject,
-        start: data.start,
-        end: data.end,
-        attendees: data.attendees || [],
-        body: data.body || ''
-      })
-    });
-    var d = await r.json();
-    if (d.error) throw new Error(d.error);
-    btn.textContent = '✅ Created in Outlook!';
-    btn.style.background = 'var(--g)';
-    // Refresh calendar data
-    try { await loadM365Data(); } catch(e) {}
-    addMsg('a', 'Done Kandia — the meeting has been added to your Outlook calendar. Diane will receive the invite.');
-  } catch(e) {
-    btn.textContent = 'Failed — try again';
-    btn.disabled = false;
-    btn.style.background = 'var(--r)';
-    addMsg('a', 'I could not create the calendar event: ' + e.message + '. You can create it manually in Outlook.');
-  }
-}
-
-function setB(on){
-  busy=on;document.getElementById('csend').disabled=on;
-  const ex=document.getElementById('thinkEl');if(ex)ex.remove();
-  if(on){const el=document.getElementById('msgs');const d=document.createElement('div');d.id='thinkEl';d.className='msg a';d.innerHTML='<div class="sndr">Cinderella</div><div class="bub a"><div class="think"><span></span><span></span><span></span></div></div>';el.appendChild(d);el.scrollTop=el.scrollHeight;}
-}
-
-function qa(text){
-  const chatBtn=document.querySelector('[onclick*="chat"]');
-  show('chat',chatBtn);
-  setTimeout(()=>{const inp=document.getElementById('cinput');if(inp){inp.value=text;send();}},300);
-}
-function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
-function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,90)+'px';}
-function tick(){document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',weekday:'short',day:'numeric',month:'short'});}
-tick();setInterval(tick,1000);
+// Startup
+tick();
+setInterval(tick,1000);
 loadCfg();
 checkM365Connection();
-setInterval(loadM365Data,5*60*1000);
-try{renderStaff();}catch(e){console.warn('renderStaff:',e.message);}
-try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
-try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
-
-let DM={name:'',email:'',subject:'',context:'',mode:'email'};
-
-function openDraftModal(name,context,subject,defaultTab,emailAddress){
-  DM={name,email:emailAddress||'',subject:subject||`Following up — ${name}`,context,mode:defaultTab||'email'};
-  document.getElementById('draftModal').classList.add('open');
-  document.getElementById('dm-title').textContent=defaultTab==='meeting'?`Schedule a call with ${name}`:`Draft email to ${name}`;
-  document.getElementById('dm-sub').textContent=context;
-  document.getElementById('dm-icon').textContent=defaultTab==='meeting'?'📅':'✉️';
-  switchTab(defaultTab||'email');
-  if(!defaultTab||defaultTab==='email'){
-    // If context is a pre-written email body (starts with Hi/Dear), show it directly
-    if(context && (context.startsWith('Hi ') || context.startsWith('Dear '))) {
-      showDraftResult(context);
-    } else {
-      generateEmailDraft(name,context,subject);
-    }
-  } else {
-    setupMeetingPane(name,subject);
-  }
-}
-
-function closeDraft(){document.getElementById('draftModal').classList.remove('open');}
-
-function switchTab(tab){
-  DM.mode=tab;
-  document.querySelectorAll('.dm-tab').forEach((t,i)=>t.classList.toggle('active',(tab==='email'&&i===0)||(tab==='meeting'&&i===1)));
-  document.getElementById('dm-email-pane').style.display=tab==='email'?'block':'none';
-  document.getElementById('dm-meeting-pane').style.display=tab==='meeting'?'block':'none';
-  if(tab==='meeting'&&!document.getElementById('ics-subject').textContent.includes(DM.name)){setupMeetingPane(DM.name,DM.subject);}
-}
-
-async function generateEmailDraft(name,context,subject){
-  document.getElementById('dm-loading').style.display='block';
-  document.getElementById('dm-draft-content').style.display='none';
-  document.getElementById('dm-email-actions').style.display='none';
-  document.getElementById('dm-email-note').style.display='none';
-  if(!C.api){showDraftResult('',subject,'Please add your API key in Setup & settings to generate email drafts.');return;}
-  const staffMember=SD.find(s=>s.name===name);
-  const staffCtx=staffMember?`Staff member context: ${staffMember.name}, ${staffMember.role||'staff'}, ${staffMember.capacity}% capacity, projects: ${staffMember.projects||'none'}, blockers: ${staffMember.blockers||'none'}`:'';
-  const prompt=`Draft a professional, warm and direct email from the COO of Risk 2 Solution to ${name}.\n\nPurpose: ${context}\n${staffCtx}\n\nFormat:\nSUBJECT: [subject line]\n\n[email body]\n\nKeep it concise (3-5 short paragraphs), professional but human. Sign off as "Kandia" or "Kandia, COO".`;
-  try{
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,messages:[{role:'user',content:prompt}]})});
-    const d=await r.json();
-    if(d.error)throw new Error(d.error.message);
-    const text=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('')||'';
-    const subMatch=text.match(/SUBJECT:\s*(.+)/);
-    const subj=subMatch?subMatch[1].trim():(subject||`Following up — ${name}`);
-    const body=text.replace(/SUBJECT:\s*.+\n?/,'').trim();
-    showDraftResult(name,subj,body);
-  }catch(e){showDraftResult(name,subject,`Could not generate draft: ${e.message}.`);}
-}
-
-function showDraftResult(name,subject,body){
-  document.getElementById('dm-loading').style.display='none';
-  document.getElementById('dm-draft-content').style.display='block';
-  document.getElementById('dm-email-actions').style.display='flex';
-  document.getElementById('dm-email-note').style.display='block';
-  document.getElementById('dm-to').value=DM.email?(name+' <'+DM.email+'>'):(name||'');
-  document.getElementById('dm-subject').value=subject||'';
-  document.getElementById('dm-body').value=body||'';
-  const ta=document.getElementById('dm-body');
-  ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,300)+'px';
-}
-
-function openInOutlook(){
-  const to=encodeURIComponent(document.getElementById('dm-to').value);
-  const subject=encodeURIComponent(document.getElementById('dm-subject').value);
-  const body=encodeURIComponent(document.getElementById('dm-body').value);
-  // Open compose in Outlook Web instead of desktop app
-  var outlookComposeUrl = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(to) + '&subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-  window.open(outlookComposeUrl, '_blank');
-}
-
-function copyEmail(){
-  const subj=document.getElementById('dm-subject').value;
-  const body=document.getElementById('dm-body').value;
-  navigator.clipboard.writeText(`Subject: ${subj}\n\n${body}`).then(()=>{
-    const btn=document.getElementById('copyEmailBtn');
-    btn.textContent='Copied!';setTimeout(()=>btn.textContent='Copy email',2000);
-  });
-}
-
-async function refineEmail(){
-  const currentBody=document.getElementById('dm-body').value;
-  const instruction=prompt('How would you like Cinderella to refine this email?','Make it shorter and more direct');
-  if(!instruction)return;
-  document.getElementById('dm-loading').style.display='block';
-  document.getElementById('dm-draft-content').style.display='none';
-  document.getElementById('dm-email-actions').style.display='none';
-  document.getElementById('dm-email-note').style.display='none';
-  const prompt2=`Rewrite this email based on: "${instruction}"\n\nCurrent draft:\n${currentBody}\n\nReturn only the revised email body.`;
-  try{
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:500,messages:[{role:'user',content:prompt2}]})});
-    const d=await r.json();
-    const body=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('')||currentBody;
-    showDraftResult(DM.name,document.getElementById('dm-subject').value,body.trim());
-  }catch(e){showDraftResult(DM.name,document.getElementById('dm-subject').value,currentBody);}
-}
-
-function setupMeetingPane(name,reason){
-  document.getElementById('ics-with').textContent=name;
-  document.getElementById('ics-subject').textContent=reason||`Meeting with ${name}`;
-  const d=new Date();d.setDate(d.getDate()+1);
-  if(d.getDay()===0)d.setDate(d.getDate()+1);
-  if(d.getDay()===6)d.setDate(d.getDate()+2);
-  d.setHours(10,0,0,0);
-  document.getElementById('ics-when').value=d.toISOString().slice(0,16);
-  document.getElementById('ics-notes').value=`Re: ${reason||'discussion'}\n\nAgenda to be shared before the meeting.`;
-}
-
-function downloadICS(){
-  const subject=document.getElementById('ics-subject').textContent;
-  const when=document.getElementById('ics-when').value;
-  const duration=parseInt(document.getElementById('ics-duration').value)||30;
-  const notes=document.getElementById('ics-notes').value;
-  const name=DM.name;
-  if(!when){alert('Please select a date and time.');return;}
-  const start=new Date(when);
-  const end=new Date(start.getTime()+duration*60000);
-  const pad=n=>String(n).padStart(2,'0');
-  const fmt=d=>`${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
-  const uid=`cin-${Date.now()}@risk2solution`;
-  const ics=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Cinderella//R2S//EN','CALSCALE:GREGORIAN','METHOD:REQUEST','BEGIN:VEVENT',`UID:${uid}`,`DTSTAMP:${fmt(new Date())}`,`DTSTART:${fmt(start)}`,`DTEND:${fmt(end)}`,`SUMMARY:${subject}`,`DESCRIPTION:${notes.replace(/\n/g,'\\n')}`,'ORGANIZER:COO',`ATTENDEE;CN=${name}:mailto:staff@risk2solution.com.au`,'BEGIN:VALARM','TRIGGER:-PT15M','ACTION:DISPLAY',`DESCRIPTION:Reminder: ${subject}`,'END:VALARM','END:VEVENT','END:VCALENDAR'].join('\r\n');
-  const blob=new Blob([ics],{type:'text/calendar;charset=utf-8'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url;a.download=`meeting-${name.replace(/\s+/g,'-').toLowerCase()}.ics`;
-  a.click();URL.revokeObjectURL(url);
-}
-
-function actionBlocker(staffName,blockerText){
-  openModal(`Resolve blocker — ${staffName}`,blockerText,
-    `<div class="alert-box warn"><div class="ab-title">Blocker reported by ${staffName}</div><div class="ab-text">${blockerText}</div></div>
-    <div class="mfield"><div class="mfl">Suggested actions</div><div class="mfv">1. Reach out to ${staffName} directly.<br>2. Identify who can unblock this.<br>3. Resolve and update ${staffName} by end of day.</div></div>
-    <hr class="m-divider">
-    <button class="m-btn" onclick="openDraftModal('${staffName}','I want to help resolve your blocker: ${blockerText.replace(/'/g,"\\'")}','Re: Removing your blocker','email')">✉ Email ${staffName}</button>
-    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${staffName}','Resolve blocker','Quick call to resolve your blocker','meeting')">📅 Schedule a call</button>
-    <button class="m-btn sec" onclick="qa('Help me resolve this blocker for ${staffName}: ${blockerText.replace(/'/g,"\\'")}')">Ask Cinderella</button>`
-  );
-}
-
-function actionCapacity(staffName,capacity,skills){
-  openModal(`Capacity support — ${staffName}`,`${capacity}% capacity — needs workload assistance`,
-    `<div class="alert-box"><div class="ab-title">${staffName} is at ${capacity}% — at risk of burnout</div><div class="ab-text">Immediate action recommended.</div></div>
-    <div class="mfield"><div class="mfl">Skills they need support with</div><div class="mfv">${skills||'See skill matching panel'}</div></div>
-    <hr class="m-divider">
-    <button class="m-btn" onclick="openDraftModal('${staffName}','Check in on their wellbeing — they are at ${capacity}% capacity','Checking in — how can I support you?','email')">✉ Wellbeing check-in</button>
-    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${staffName}','Workload review — at ${capacity}% capacity','1:1 — workload check-in','meeting')">📅 Schedule 1:1</button>
-    <button class="m-btn sec" onclick="show('skills',null);closeModal()">View skill matches</button>`
-  );
-}
-
-function actionSkillMatch(busyName,freeName,busyCap,freeCap,sharedSkills){
-  openModal(`Reallocation — ${busyName} → ${freeName}`,`Skill match · ${busyName} at ${busyCap}% · ${freeName} at ${freeCap}%`,
-    `<div class="alert-box ok"><div class="ab-title">Cinderella recommends: ask ${freeName} to support ${busyName}</div><div class="ab-text">Shared skills: ${sharedSkills}. ${freeName} has ${100-freeCap}% spare capacity.</div></div>
-    <hr class="m-divider">
-    <button class="m-btn" onclick="openDraftModal('${freeName}','Ask them to support ${busyName} who is at ${busyCap}% capacity. Shared skills: ${sharedSkills}','Support request — ${busyName} needs your help','email')">✉ Email ${freeName}</button>
-    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${freeName}','Handover briefing with ${busyName}','Handover call','meeting')">📅 Schedule handover</button>
-    <button class="m-btn sec" onclick="openDraftModal('${busyName}','Let them know ${freeName} will be supporting them','Good news — support coming your way','email')">✉ Email ${busyName}</button>
-    <button class="m-btn sec" onclick="qa('What tasks from ${busyName} could ${freeName} take on given shared skills: ${sharedSkills}?')">Ask Cinderella for task suggestions</button>`
-  );
-}
-
-function actionEfficiency(title,detail,staffInvolved){
-  const staff=(staffInvolved||'').split(',').map(s=>s.trim()).filter(Boolean);
-  const emailBtns=staff.map(s=>`<button class="m-btn sec" onclick="openDraftModal('${s}','${detail.replace(/'/g,"\\'")}','Action required: ${title}','email')" style="margin-bottom:6px">✉ Email ${s}</button>`).join('');
-  openModal(title,detail,
-    `<div class="mfield"><div class="mfl">Opportunity detail</div><div class="mfv">${detail}</div></div>
-    <hr class="m-divider">
-    <button class="m-btn" onclick="qa('Create an implementation plan for: ${title}. Context: ${detail.replace(/'/g,"\\'")}')">Generate implementation plan</button>
-    ${emailBtns}`
-  );
-}
-
-
-
-function getMissingCheckIns() {
-  var checked = SD.map(function(s){ return s.name.toLowerCase(); });
-  var missing = ALL_STAFF.filter(function(s){
-    var first = s.name.split(' ')[0].toLowerCase();
-    return !checked.some(function(n){ return n.includes(first); });
-  });
-  if (missing.length === 0) {
-    return '<div class="alert-box ok"><div class="ab-title">All staff have submitted check-ins this week</div></div>';
-  }
-  window._missingStaff = {};
-  var rows = missing.map(function(s, i) {
-    window._missingStaff[i] = s;
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid rgba(162,45,45,0.2)">' +
-      '<span>' + s.name + '</span>' +
-      '<button onclick="sendCheckinReminder(' + i + ')" style="font-size:9px;padding:2px 8px;border-radius:8px;background:#A32D2D;color:#fff;border:none;cursor:pointer;font-family:var(--f)">Send reminder</button>' +
-    '</div>';
-  }).join('');
-  return '<div class="alert-box"><div class="ab-title">' + missing.length + ' staff have not submitted their check-in this week</div><div class="ab-text" style="margin-top:6px">' + rows + '</div></div>';
-}
-
-function sendCheckinReminder(idx) {
-  var s = window._missingStaff && window._missingStaff[idx];
-  if (!s) return;
-  openDraftModal(s.name, 'Weekly check-in reminder', 'Action required: weekly check-in this week', 'email', s.email);
-}
-
-
-// ── DELETE CHECK-IN ──
-async function deleteCheckIn(name, weekEnding) {
-  if (!confirm('Delete check-in for ' + name + ' (week ending ' + weekEnding + ')? This cannot be undone.')) return;
-  if (!C.bin || !C.key) { alert('JSONBin not configured'); return; }
-  try {
-    const r = await fetch('https://api.jsonbin.io/v3/b/' + C.bin + '/latest', { headers: { 'X-Master-Key': C.key } });
-    const d = await r.json();
-    const existing = (Array.isArray(d.record) ? d.record : []).filter(function(e) {
-      return !(e.name && e.name.toLowerCase() === name.toLowerCase() && e.weekEnding === weekEnding);
-    });
-    const put = await fetch('https://api.jsonbin.io/v3/b/' + C.bin, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Master-Key': C.key },
-      body: JSON.stringify(existing)
-    });
-    if (!put.ok) throw new Error('Save failed');
-    closeModal();
-    await syncNow();
-    alert('Check-in deleted successfully.');
-  } catch(e) {
-    alert('Could not delete: ' + e.message);
-  }
-}
-
-// ── MONTH METRICS CLICK — show who is in each category ──
-function showMonthMetricDetail(type) {
-  var monthKey = window._currentMonthKey || '';
-  var data = window._allMonthData || {};
-  var subs = data[monthKey] || [];
-  var byWeek = groupByWeek(subs);
-  var weeks = Object.keys(byWeek).sort().reverse();
-
-  if (type === 'overloaded') {
-    var overWeeks = weeks.filter(function(w) { return calcWeekStats(byWeek[w]).overloaded > 0; });
-    var html = overWeeks.map(function(w) {
-      var over = byWeek[w].filter(function(s) { return s.capacity >= 85; });
-      return '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:500;color:var(--t3);margin-bottom:4px">Week ending ' + new Date(w).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) + '</div>' +
-        over.map(function(s) {
-          return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:0.5px solid var(--bl)"><span style="flex:1">' + cap(s.name) + ' (' + (s.role||'staff') + ')</span><span style="font-weight:500;color:var(--r)">' + s.capacity + '%</span></div>';
-        }).join('') + '</div>';
-    }).join('');
-    openModal('Overloaded staff — ' + getMonthLabel(monthKey), 'Weeks where capacity was above 85%', html || '<div style="color:var(--t3);padding:8px 0">No overloaded staff this month.</div>');
-
-  } else if (type === 'blockers') {
-    var html2 = weeks.map(function(w) {
-      var bl = byWeek[w].filter(function(s) { return hasBlocker(s.blockers); });
-      if (!bl.length) return '';
-      return '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:500;color:var(--t3);margin-bottom:4px">Week ending ' + new Date(w).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) + '</div>' +
-        bl.map(function(s) {
-          return '<div style="padding:6px 0;border-bottom:0.5px solid var(--bl)"><strong>' + cap(s.name) + '</strong><div style="font-size:11px;color:var(--a);margin-top:2px">' + s.blockers + '</div></div>';
-        }).join('') + '</div>';
-    }).join('');
-    openModal('Blockers — ' + getMonthLabel(monthKey), 'All blockers reported this month', html2 || '<div style="color:var(--t3);padding:8px 0">No blockers reported this month.</div>');
-  }
-}
-
-// ── FIXED: showMonth with clickable metrics and working week rows ──
-function renderMonthContent(monthKey) {
-  window._currentMonthKey = monthKey;
-  var data = window._allMonthData || {};
-  var submissions = data[monthKey] || [];
-  var byWeek = groupByWeek(submissions);
-  var weeks = Object.keys(byWeek).sort().reverse();
-  var el = document.getElementById('monthContent');
-  if (!el) return;
-  if (weeks.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No data for this month.</div>'; return; }
-
-  var allStats = calcWeekStats(submissions);
-  var overloadedWeeks = weeks.filter(function(w) { return calcWeekStats(byWeek[w]).overloaded > 0; }).length;
-  var html = '<div class="mrow" style="margin-bottom:16px">' +
-    '<div class="met" onclick="showMonthMetricDetail(&quot;overloaded&quot;)"><div class="ml">Month avg capacity</div><div class="mv" style="color:'+(allStats.avg>=80?'var(--a)':'var(--g)')+'">'+allStats.avg+'%</div><div class="ms">'+allStats.count+' submissions</div></div>'+
-    '<div class="met" onclick="showMonthMetricDetail(&quot;overloaded&quot;)"><div class="ml">Overloaded weeks</div><div class="mv" style="color:var(--r)">'+overloadedWeeks+'</div><div class="ms">click to see who</div></div>'+
-    '<div class="met" onclick="showMonthMetricDetail(&quot;blockers&quot;)"><div class="ml">Blockers raised</div><div class="mv" style="color:var(--a)">'+allStats.blockers+'</div><div class="ms">click to see details</div></div>'+
-    '<div class="met" onclick="generateMonthReport(window._currentMonthKey)"><div class="ml">AI analysis</div><div class="mv" style="font-size:14px;color:var(--b)">Ask</div><div class="ms">Cinderella</div></div>'+
-    '</div>';
-
-  // Week by week
-  html += '<div class="card"><div class="ct">Week by week — ' + getMonthLabel(monthKey) + '</div>';
-  weeks.forEach(function(wk) {
-    var ws = calcWeekStats(byWeek[wk]);
-    var wkLabel = 'Week ending ' + new Date(wk).toLocaleDateString('en-AU',{day:'numeric',month:'short'});
-    html += '<div style="padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer" data-wk="'+wk+'" onclick="showWeekDetailFromEl(this)">'+
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'+
-        '<span style="font-size:12px;font-weight:500;color:var(--t1)">'+wkLabel+'</span>'+
-        '<span style="font-size:11px;color:'+(ws.avg>=80?'var(--a)':'var(--g)')+'">'+ws.avg+'% avg · '+ws.count+' check-ins</span>'+
-      '</div>'+
-      '<div style="display:flex;gap:12px;font-size:10px;color:var(--t2)">'+
-        (ws.overloaded>0?'<span style="color:var(--r)">⚠ '+ws.overloaded+' overloaded — click to see who</span>':'')+
-        (ws.available>0?'<span style="color:var(--g)">✓ '+ws.available+' available</span>':'')+
-        (ws.blockers>0?'<span style="color:var(--a)">🚧 '+ws.blockers+' blockers</span>':'')+
-        (ws.overloaded===0&&ws.available===0&&ws.blockers===0?'<span>Team looking healthy</span>':'')+
-      '</div>'+
-    '</div>';
-  });
-  html += '</div>';
-
-  // Trends chart container + table
-  html += '<div class="card"><div class="ct">Staff capacity trends</div>'+
-    '<div style="position:relative;height:200px;margin-bottom:12px"><canvas id="trendChart"></canvas></div>'+
-    renderStaffTrends(byWeek, weeks)+'</div>';
-
-  el.innerHTML = html;
-
-  // Build trends chart after DOM renders
-  setTimeout(function(){ buildTrendChart(byWeek, weeks); }, 50);
-}
-
+setInterval(loadM365Data,30*60*1000); // every 30 mins
+try{renderStaff();}catch(e){}
 function buildTrendChart(byWeek, weeks) {
   var ctx = document.getElementById('trendChart');
-  if (!ctx) { console.warn('trendChart canvas not found'); return; }
+  if (!ctx) return;
   if (window._trendChart) { try { window._trendChart.destroy(); } catch(e){} }
-
-  // Get unique staff names across all weeks
   var staffNames = [];
-  weeks.forEach(function(w) {
+  sortWeeks(byWeek).forEach(function(w) {
     (byWeek[w] || []).forEach(function(s) {
       if (s.name && !staffNames.includes(s.name)) staffNames.push(s.name);
     });
   });
-
   var colors = ['#1D9E75','#378ADD','#EF9F27','#E24B4A','#9B59B6','#E67E22','#16A085','#D35400'];
-  var sortedWeeks = sortWeeks(byWeek); // chronological order using proper date sort
-
+  var sortedWeeks = sortWeeks(byWeek);
   var datasets = staffNames.map(function(name, i) {
     var data = sortedWeeks.map(function(w) {
       var entry = (byWeek[w] || []).find(function(s) { return s.name === name; });
       return entry ? entry.capacity : null;
     });
     var col = colors[i % colors.length];
-    return {
-      label: cap(name).split(' ')[0],
-      data: data,
-      borderColor: col,
-      backgroundColor: col + '22',
-      borderWidth: 2,
-      tension: 0.3,
-      spanGaps: true,
-      pointRadius: 5,
-      pointHoverRadius: 7,
-      pointBackgroundColor: col
-    };
+    return { label: cap(name).split(' ')[0], data: data, borderColor: col, backgroundColor: col+'22',
+      borderWidth: 2, tension: 0.3, spanGaps: true, pointRadius: 4, pointBackgroundColor: col };
   });
-
+  datasets.push({ label: '85% threshold', data: sortedWeeks.map(function(){ return 85; }),
+    borderColor: '#E24B4A', borderWidth: 1, borderDash: [4,4], pointRadius: 0, fill: false });
   var labels = sortedWeeks.map(function(w) {
     return new Date(w).toLocaleDateString('en-AU', { day:'numeric', month:'short' });
   });
-
-  // Add 85% danger line
-  datasets.push({
-    label: '85% threshold',
-    data: sortedWeeks.map(function() { return 85; }),
-    borderColor: '#E24B4A',
-    borderWidth: 1,
-    borderDash: [4,4],
-    pointRadius: 0,
-    fill: false
-  });
-
   window._trendChart = new Chart(ctx, {
-    type: 'line',
-    data: { labels: labels, datasets: datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
+    type: 'line', data: { labels: labels, datasets: datasets },
+    options: { responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: {
-          position: 'bottom',
-          labels: { boxWidth: 12, padding: 10, font: { size: 11 } }
-        },
-        tooltip: {
-          callbacks: {
-            label: function(ctx) {
-              return ctx.dataset.label + ': ' + (ctx.raw !== null ? ctx.raw + '%' : 'No data');
-            }
-          }
-        }
-      },
-      scales: {
-        y: {
-          min: 0, max: 100,
-          ticks: { callback: function(v) { return v + '%'; }, font: { size: 10 }, stepSize: 20 },
-          grid: { color: 'rgba(128,128,128,0.1)' }
-        },
-        x: { ticks: { font: { size: 10 } }, grid: { color: 'rgba(128,128,128,0.05)' } }
-      }
-    }
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 10, font: { size: 11 } } } },
+      scales: { y: { min: 0, max: 100, ticks: { callback: function(v){ return v+'%'; }, font: { size: 10 }, stepSize: 20 },
+          grid: { color: 'rgba(128,128,128,0.1)' } },
+        x: { ticks: { font: { size: 10 } }, grid: { color: 'rgba(128,128,128,0.05)' } } } }
   });
 }
+
+
 </script>
 </body>
 </html>
