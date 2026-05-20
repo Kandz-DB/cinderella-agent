@@ -520,6 +520,11 @@ app.get('/monday/feedback', async (req, res) => {
 // ── PROXY (forwards chat requests to Claude) ──
 app.options('/proxy', (req, res) => res.sendStatus(200));
 app.post('/proxy', async (req, res) => {
+  // Log every AI call with timestamp to identify what's auto-firing
+  const callTime = new Date().toLocaleString('en-AU', {timeZone: 'Australia/Brisbane'});
+  const msgs = req.body?.messages || [];
+  const lastMsg = msgs[msgs.length-1]?.content?.substring(0, 120) || 'unknown';
+  console.log(`[AI CALL] ${callTime} | msg_count:${msgs.length} | content:"${lastMsg}"`);
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
