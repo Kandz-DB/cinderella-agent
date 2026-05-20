@@ -1,6 +1,10 @@
 import express from "express";
 import crypto from "crypto";
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, appendFileSync } from 'fs';
+
+// In-memory log of AI calls
+const aiCallLog = [];
+const LOG_PATH = '/home/ai-calls.log';
 const app = express();
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -523,8 +527,12 @@ app.post('/proxy', async (req, res) => {
   // Log every AI call with timestamp to identify what's auto-firing
   const callTime = new Date().toLocaleString('en-AU', {timeZone: 'Australia/Brisbane'});
   const msgs = req.body?.messages || [];
-  const lastMsg = msgs[msgs.length-1]?.content?.substring(0, 120) || 'unknown';
-  console.log(`[AI CALL] ${callTime} | msg_count:${msgs.length} | content:"${lastMsg}"`);
+  const lastMsg = msgs[msgs.length-1]?.content?.substring(0, 150) || 'unknown';
+  const logEntry = `${callTime} | msgs:${msgs.length} | "${lastMsg}"`;
+  aiCallLog.push(logEntry);
+  if (aiCallLog.length > 100) aiCallLog.shift(); // keep last 100
+  try { appendFileSync(LOG_PATH, logEntry + '\n'); } catch(e) {}
+  console.log('[AI CALL]', logEntry);
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -554,6 +562,27 @@ app.get('/debug-auth', requireAuth, (req, res) => {
     redirectUri: process.env.REDIRECT_URI || 'NOT SET',
     scopes: SCOPES
   });
+});
+
+
+// ── VIEW AI CALL LOGS ──
+app.get('/view-logs', requireAuth, (req, res) => {
+  let fileLogs = '';
+  try { fileLogs = readFileSync(LOG_PATH, 'utf8'); } catch(e) { fileLogs = 'No log file yet.'; }
+  res.send('<pre style="font-family:monospace;font-size:12px;padding:20px;white-space:pre-wrap">' +
+    '<h2>AI Call Log (last 100)</h2>' +
+    '<p>Total in memory: ' + aiCallLog.length + '</p>' +
+    '<hr>' +
+    (aiCallLog.length > 0 ? aiCallLog.join('\n') : 'No AI calls recorded yet since server started.') +
+    '<hr><h3>From file:</h3>' + fileLogs +
+    '</pre>');
+});
+
+// ── CLEAR LOGS ──
+app.get('/clear-logs', requireAuth, (req, res) => {
+  aiCallLog.length = 0;
+  try { writeFileSync(LOG_PATH, ''); } catch(e) {}
+  res.send('Logs cleared.');
 });
 
 // ── SERVE DASHBOARD ──
