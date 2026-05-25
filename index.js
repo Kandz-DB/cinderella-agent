@@ -522,18 +522,42 @@ app.get('/monday/feedback', async (req, res) => {
 });
 
 // ── PROXY (forwards chat requests to Claude) ──
+const MAX_CONVERSATION_MESSAGES = 20; // keep last 20 messages (~10 back-and-forth)
+const MAX_OUTPUT_TOKENS = 1000;       // cap responses — increase if she gets cut off
+
 app.options('/proxy', (req, res) => res.sendStatus(200));
 app.post('/proxy', async (req, res) => {
-  // Log every AI call with timestamp to identify what's auto-firing
+
+  // Log every AI call
   const callTime = new Date().toLocaleString('en-AU', {timeZone: 'Australia/Brisbane'});
   const msgs = req.body?.messages || [];
   const lastMsg = msgs[msgs.length-1]?.content?.substring(0, 150) || 'unknown';
   const logEntry = `${callTime} | msgs:${msgs.length} | "${lastMsg}"`;
   aiCallLog.push(logEntry);
-  if (aiCallLog.length > 100) aiCallLog.shift(); // keep last 100
+  if (aiCallLog.length > 100) aiCallLog.shift();
   try { appendFileSync(LOG_PATH, logEntry + '\n'); } catch(e) {}
   console.log('[AI CALL]', logEntry);
+
   try {
+    const body = { ...req.body };
+
+    // ── Trim conversation history ──
+    if (body.messages && body.messages.length > MAX_CONVERSATION_MESSAGES) {
+      const trimmed = body.messages.slice(-MAX_CONVERSATION_MESSAGES);
+      // Always preserve the first message if it's a system-style user message
+      const first = body.messages[0];
+      if (first && !trimmed.includes(first)) {
+        trimmed.unshift(first);
+      }
+      body.messages = trimmed;
+      console.log(`[TRIMMED] History cut from ${msgs.length} → ${body.messages.length} messages`);
+    }
+
+    // ── Cap output tokens as safety net ──
+    if (!body.max_tokens || body.max_tokens > MAX_OUTPUT_TOKENS) {
+      body.max_tokens = MAX_OUTPUT_TOKENS;
+    }
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -541,7 +565,7 @@ app.post('/proxy', async (req, res) => {
         'x-api-key': process.env.ANTHROPIC_KEY,
         'anthropic-version': '2023-06-01'
       },
-      body: JSON.stringify(req.body)
+      body: JSON.stringify(body)
     });
     const data = await response.json();
     res.json(data);
