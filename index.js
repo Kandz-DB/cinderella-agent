@@ -635,7 +635,7 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
         "anthropic-version": "2023-06-01",
         "content-type": "application/json"
       },
-      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 1024, messages: [{ role: "user", content: prompt }] })
+      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 350, messages: [{ role: "user", content: prompt }] })
     });
     if (!res.ok) return;
     const data = await res.json();
