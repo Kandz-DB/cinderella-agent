@@ -589,69 +589,31 @@ app.get('/clear-logs', requireAuth, (req, res) => {
 app.use(express.static('.'));
 
 // ── THINK LOOP ──
-async function think() {
-  if (isRunning) return;
-  isRunning = true;
-  try {
-    let emails = [];
-    let calendarSummary = "No calendar data yet";
-
-    if (tokenStore.access_token) {
-      try {
-        const emailData = await graphGet(
-          `/me/messages?$filter=isRead eq false&$top=10&$select=subject,from,receivedDateTime`
-        );
-        emails = emailData.value.map(m => ({
-          sender: m.from?.emailAddress?.name,
-          hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000),
-          subject: m.subject
-        }));
-        const BRISBANE_MS = 10 * 60 * 60 * 1000;
-        const nowT = new Date();
-        const brisNow = new Date(nowT.getTime() + BRISBANE_MS);
-        const ty = brisNow.getUTCFullYear(), tm = brisNow.getUTCMonth(), td = brisNow.getUTCDate();
-        const start = new Date(Date.UTC(ty, tm, td, 0, 0, 0) - BRISBANE_MS).toISOString();
-        const end   = new Date(Date.UTC(ty, tm, td, 23, 59, 59) - BRISBANE_MS).toISOString();
-        const calData = await graphGet(`/me/calendarView?startDateTime=${start}&endDateTime=${end}&$select=subject,start,end`);
-        calendarSummary = calData.value.map(e =>
-          `${new Date(e.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})} — ${e.subject}`
-        ).join(', ') || 'No meetings today';
-      } catch(e) {
-        console.log('Graph fetch in think loop:', e.message);
-      }
-    }
-
-    const staff = []; // Staff data comes from JSONBin check-ins
-    const prompt = `You are Cinderella, an elite COO executive assistant. Analyse and return ONLY raw JSON with no markdown.
-Emails: ${JSON.stringify(emails)}
-Calendar today: ${calendarSummary}
-Staff: ${JSON.stringify(staff)}
-Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high","reason":""}],"risks":[{"risk":"","impact":"","severity":"low|medium|high"}],"actions":[{"action":"","priority":"low|medium|high","owner":"","rationale":""}]}`;
-
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": process.env.ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 350, messages: [{ role: "user", content: prompt }] })
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data?.content?.[0]?.text) {
-      const clean = data.content[0].text.replace(/```json/g,'').replace(/```/g,'').trim();
-      try { latestOutput = JSON.parse(clean); } catch(e) {}
-    }
-  } catch (err) {
-    console.error("❌ Error:", err.message);
-  } finally {
-    isRunning = false;
-  }
+// Only runs during Brisbane business hours (7am–6pm), every 30 minutes
+function isBrisbaneBusinessHours() {
+  const hour = parseInt(
+    new Date().toLocaleString('en-AU', {
+      timeZone: 'Australia/Brisbane',
+      hour: 'numeric',
+      hour12: false
+    })
+  );
+  return hour >= 7 && hour <= 18;
 }
 
-think();
-setInterval(think, 300000);
+// Run once on startup (if within business hours)
+if (isBrisbaneBusinessHours()) {
+  think();
+}
+
+// Then check every 30 minutes
+setInterval(() => {
+  if (isBrisbaneBusinessHours()) {
+    think();
+  } else {
+    console.log('💤 Outside business hours — Cinderella is resting');
+  }
+}, 1800000);
 
 app.get("/status", (req, res) => {
   res.json(Object.keys(latestOutput).length === 0 ? { status: "initialising" } : latestOutput);
