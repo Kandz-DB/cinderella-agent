@@ -2398,8 +2398,7 @@ function renderSkillMatch(){
     else if(_ov.length>0&&_av.length>0){_msg=`${_ov.length} staff overloaded but no skill matches found. Consider external support or cross-training.`;}
     else{_msg='No skill matches needed — team capacity is well distributed this week.';}
     ml.innerHTML=`<div style="font-size:12px;color:var(--t2);padding:8px 0;line-height:1.5">${_msg}</div>`;
-    return;
-  }
+  } else {
   ml.innerHTML=matches.map((m,i)=>`
     <div class="smatch" onclick="actionSkillMatch('${m.busy.name}','${m.free.name}',${m.busy.capacity},${m.free.capacity},'${m.shared.join(', ')}')">
       <div class="smatch-head"><span class="smatch-flag">${m.busy.capacity}% → ${m.free.capacity}%</span><div class="smatch-names">${cap(m.busy.name)} <span style="opacity:.6">needs support from</span> ${cap(m.free.name)}</div></div>
@@ -2413,6 +2412,8 @@ function renderSkillMatch(){
   smEl.innerHTML=Object.entries(allSkills).sort((a,b)=>b[1].length-a[1].length).slice(0,8).map(([sk,names])=>
     `<div class="cbr" style="margin-bottom:6px"><div class="cbl" style="min-width:120px;font-size:10px">${cap(sk)}</div><div class="bw"><div class="bar bg" style="width:${Math.round(names.length/SD.length*100)}%"></div></div><div class="bp" style="color:var(--t2)">${names.length}</div></div>`
   ).join('');
+  }
+  renderSkillsMatrix();
 }
 
 function renderHR(){
@@ -2799,6 +2800,7 @@ checkM365Connection();
 setInterval(loadM365Data,45*60*1000);
 try{renderStaff();}catch(e){console.warn('renderStaff:',e.message);}
 try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
+try{renderSkillsMatrix();}catch(e){console.warn('renderSkillsMatrix:',e.message);}
 try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
 
 let DM={name:'',email:'',subject:'',context:'',mode:'email'};
@@ -3193,133 +3195,49 @@ function buildTrendChart(byWeek, weeks) {
     }
   });
 }
-// ═══════════════════════════════════════════════════════════════
-// CINDERELLA SKILLS MATRIX PATCH v2
-// Paste this entire block right before the closing </script> tag
-// ═══════════════════════════════════════════════════════════════
-
-// ── Build a deduplicated skills registry from check-in data ──
-function buildSkillsRegistry(checkIns) {
-  var registry = {};
-  try {
-    var saved = localStorage.getItem('cin_skills_v2');
-    if (saved) registry = JSON.parse(saved);
-  } catch(e) {}
-
-  (checkIns || []).forEach(function(s) {
-    if (!s || !s.name || !s.skills) return;
-    var name = s.name.split(' ').map(function(w){ return w ? w.charAt(0).toUpperCase()+w.slice(1) : ''; }).join(' ');
-    if (!registry[name]) registry[name] = [];
-    s.skills.split(',').forEach(function(sk) {
-      var t = sk.trim();
-      if (!t || t.length < 2) return;
-      var exists = registry[name].some(function(e){ return e.toLowerCase() === t.toLowerCase(); });
-      if (!exists) registry[name].push(t);
-    });
-  });
-
-  try { localStorage.setItem('cin_skills_v2', JSON.stringify(registry)); } catch(e) {}
-  return registry;
-}
-
-// ── Render the skills matrix from the registry ──
-function renderSkillMatrixGrid(registry) {
+async function renderSkillsMatrix() {
   var el = document.getElementById('skillMatrix');
   if (!el) return;
-  var names = Object.keys(registry);
-  if (names.length === 0) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No skills recorded in any check-in yet — staff need to fill in the skills field.</div>';
-    return;
-  }
-
-  var avStyles = ['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
-  var staffOrder = (typeof ALL_STAFF !== 'undefined' ? ALL_STAFF : []).map(function(s){
-    return s.name.split(' ').map(function(w){ return w ? w.charAt(0).toUpperCase()+w.slice(1) : ''; }).join(' ');
-  });
-  var ordered = staffOrder.filter(function(n){ return registry[n]; });
-  names.forEach(function(n){ if (ordered.indexOf(n) === -1) ordered.push(n); });
-
-  var lastUpdate = new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
-  var html = '<div style="font-size:9px;color:var(--t3);margin-bottom:8px;letter-spacing:.04em">ALL CHECK-IN HISTORY · updated ' + lastUpdate + ' · skills accumulate and never disappear</div>';
-
-  ordered.forEach(function(name, i) {
-    var skills = registry[name] || [];
-    var av = avStyles[i % avStyles.length];
-    var initials = name.split(' ').map(function(w){ return w[0]||''; }).join('').substring(0,2).toUpperCase();
-    var firstName = name.split(' ')[0];
-    var tags = skills.length > 0
-      ? skills.map(function(sk){
-          var label = sk.charAt(0).toUpperCase() + sk.slice(1);
-          return '<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--gl);color:#0F6E56;display:inline-block;margin:2px 2px 2px 0">' + label + '</span>';
-        }).join('')
-      : '<span style="font-size:10px;color:var(--t3);font-style:italic">No skills recorded yet</span>';
-
-    html += '<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--bl)">' +
-      '<div style="display:flex;align-items:center;gap:6px;min-width:120px;flex-shrink:0;padding-top:2px">' +
-        '<div style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;flex-shrink:0;' + av + '">' + initials + '</div>' +
-        '<span style="font-size:11px;font-weight:500;color:var(--t1)">' + firstName + '</span>' +
-      '</div>' +
-      '<div style="flex:1;display:flex;flex-wrap:wrap">' + tags + '</div>' +
-    '</div>';
-  });
-
-  el.innerHTML = html;
-}
-
-// ── Main function: fetch history from JSONBin and render ──
-async function loadAndRenderSkillMatrix() {
-  var el = document.getElementById('skillMatrix');
-  if (!el) return;
-
-  // First: render whatever is in localStorage immediately
-  var existing = {};
-  try { var s = localStorage.getItem('cin_skills_v2'); if (s) existing = JSON.parse(s); } catch(e) {}
-  if (Object.keys(existing).length > 0) {
-    renderSkillMatrixGrid(existing);
-  } else {
-    el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">Loading skills from check-in history...</div>';
-  }
-
-  // Then: fetch ALL historical check-ins from JSONBin and rebuild
-  var bin = (typeof C !== 'undefined' && C.bin) ? C.bin : null;
-  var key = (typeof C !== 'undefined' && C.key) ? C.key : null;
-  if (!bin || !key) return;
-
+  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">Loading skills history...</div>';
   try {
-    var r = await fetch('https://api.jsonbin.io/v3/b/' + bin + '/latest', { headers: { 'X-Master-Key': key } });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var r = await fetch('https://api.jsonbin.io/v3/b/'+C.bin+'/latest',{headers:{'X-Master-Key':C.key}});
     var d = await r.json();
-    var all = (Array.isArray(d.record) ? d.record : []).filter(function(e){ return e && e.name; });
-    if (all.length > 0) {
-      window._allCheckIns = all;
-      var registry = buildSkillsRegistry(all);
-      renderSkillMatrixGrid(registry);
-    }
-  } catch(e) {
-    console.warn('Skills matrix fetch failed:', e.message);
-    // Fall back to localStorage render if fetch fails
-    renderSkillMatrixGrid(existing);
+    var all = (Array.isArray(d.record)?d.record:[]).filter(function(e){return e&&e.name;});
+    // Build cumulative deduplicated skills per person from ALL history
+    var registry = {};
+    all.forEach(function(s){
+      if(!s.name||!s.skills)return;
+      var nm = s.name.split(' ').map(function(w){return w?w[0].toUpperCase()+w.slice(1):'';}).join(' ');
+      if(!registry[nm])registry[nm]=[];
+      s.skills.split(',').forEach(function(sk){
+        var t=sk.trim();
+        if(!t||t.length<2)return;
+        if(!registry[nm].some(function(e){return e.toLowerCase()===t.toLowerCase();}))registry[nm].push(t);
+      });
+    });
+    var avStyles=['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
+    var ordered=ALL_STAFF.map(function(s){return s.name.split(' ').map(function(w){return w?w[0].toUpperCase()+w.slice(1):'';}).join(' ');});
+    Object.keys(registry).forEach(function(n){if(ordered.indexOf(n)===-1)ordered.push(n);});
+    var html='<div style="font-size:9px;color:var(--t3);margin-bottom:8px;letter-spacing:.04em">ALL HISTORICAL CHECK-INS · skills accumulate and never disappear</div>';
+    ordered.forEach(function(name,i){
+      if(!registry[name]&&!ALL_STAFF.some(function(s){return s.name.toLowerCase().includes(name.split(' ')[0].toLowerCase());}))return;
+      var skills=registry[name]||[];
+      var av=avStyles[i%avStyles.length];
+      var ini=name.split(' ').map(function(w){return w[0]||'';}).join('').substring(0,2).toUpperCase();
+      var tags=skills.length>0?skills.map(function(sk){return '<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--gl);color:#0F6E56;display:inline-block;margin:2px 2px 2px 0">'+sk.charAt(0).toUpperCase()+sk.slice(1)+'</span>';}).join(''):'<span style="font-size:10px;color:var(--t3);font-style:italic">No skills recorded yet</span>';
+      html+='<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--bl)">'+
+        '<div style="display:flex;align-items:center;gap:6px;min-width:120px;flex-shrink:0;padding-top:2px">'+
+          '<div style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;'+av+'">'+ini+'</div>'+
+          '<span style="font-size:11px;font-weight:500;color:var(--t1)">'+name.split(' ')[0]+'</span>'+
+        '</div>'+
+        '<div style="flex:1;display:flex;flex-wrap:wrap">'+tags+'</div>'+
+      '</div>';
+    });
+    el.innerHTML=html;
+  } catch(e){
+    el.innerHTML='<div style="font-size:11px;color:var(--r)">Could not load skills: '+e.message+'</div>';
   }
 }
-
-// ── Override renderSkillMatch to always call skills matrix ──
-var _origRenderSkillMatch = renderSkillMatch;
-renderSkillMatch = function() {
-  _origRenderSkillMatch.apply(this, arguments);
-  loadAndRenderSkillMatrix();
-};
-
-// ── Run on page load (wait 1s for C config to be ready) ──
-setTimeout(loadAndRenderSkillMatrix, 1000);
-
-// ── Also refresh every time sync runs ──
-var _origSyncNow = syncNow;
-syncNow = async function() {
-  var result = await _origSyncNow.apply(this, arguments);
-  loadAndRenderSkillMatrix();
-  return result;
-};
-
 </script>
 </body>
 </html>
