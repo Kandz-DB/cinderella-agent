@@ -3193,6 +3193,156 @@ function buildTrendChart(byWeek, weeks) {
     }
   });
 }
+// ═══════════════════════════════════════════════════════════════
+// CINDERELLA SKILLS MATRIX PATCH
+// Paste this entire block right before the closing </script> tag
+// in your Cinderella dashboard HTML file.
+// It overrides the broken renderSkillMatch() with fixed versions.
+// ═══════════════════════════════════════════════════════════════
+
+// ── PERSISTENT SKILLS REGISTRY ──────────────────────────────────
+// Builds a cumulative, deduplicated skills map from all historical
+// check-ins and persists it in localStorage so it never disappears.
+
+function buildSkillsRegistry(allCheckIns) {
+  // Load whatever is already saved
+  var registry = {};
+  try {
+    var saved = localStorage.getItem('cin_skills_registry');
+    if (saved) registry = JSON.parse(saved);
+  } catch(e) {}
+
+  // Merge in new submissions (from historical OR current week)
+  var sources = allCheckIns || window._allCheckIns || SD || [];
+  sources.forEach(function(s) {
+    if (!s || !s.name) return;
+    var name = cap(s.name); // normalise capitalisation
+    if (!registry[name]) registry[name] = [];
+    if (!s.skills) return;
+    s.skills.split(',').forEach(function(sk) {
+      var trimmed = sk.trim();
+      if (!trimmed || trimmed.length < 2) return;
+      // Case-insensitive duplicate check
+      var duplicate = registry[name].some(function(existing) {
+        return existing.toLowerCase() === trimmed.toLowerCase();
+      });
+      if (!duplicate) registry[name].push(trimmed);
+    });
+  });
+
+  // Persist
+  try { localStorage.setItem('cin_skills_registry', JSON.stringify(registry)); } catch(e) {}
+  return registry;
+}
+
+// ── RENDER SKILLS MATRIX ─────────────────────────────────────────
+// Always shows every staff member with all skills they have ever
+// reported. Pulls from localStorage so data survives page refresh.
+
+function renderSkillMatrix() {
+  var smEl = document.getElementById('skillMatrix');
+  if (!smEl) return;
+
+  var registry = buildSkillsRegistry(); // load + merge latest
+  var names = Object.keys(registry);
+
+  if (names.length === 0) {
+    smEl.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:6px 0">Skills will appear here as staff submit check-ins — data is saved permanently.</div>';
+    return;
+  }
+
+  // Order by ALL_STAFF list, then any extras alphabetically
+  var ordered = ALL_STAFF.map(function(s) { return cap(s.name); }).filter(function(n) { return registry[n]; });
+  names.forEach(function(n) { if (ordered.indexOf(n) === -1) ordered.push(n); });
+
+  var rows = ordered.map(function(name, i) {
+    var skills = registry[name] || [];
+    var avStyle = AV_STYLES[i % AV_STYLES.length];
+    var firstName = name.split(' ')[0];
+    var skillTags = skills.length > 0
+      ? skills.map(function(sk) {
+          return '<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--gl);color:#0F6E56;display:inline-block;margin:2px 2px 2px 0">' + cap(sk) + '</span>';
+        }).join('')
+      : '<span style="font-size:10px;color:var(--t3);font-style:italic">No skills recorded yet</span>';
+
+    return '<div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:0.5px solid var(--bl)">' +
+      '<div style="display:flex;align-items:center;gap:6px;min-width:130px;flex-shrink:0;padding-top:2px">' +
+        '<div style="width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;flex-shrink:0;' + avStyle + '">' + initials(name) + '</div>' +
+        '<span style="font-size:11px;font-weight:500;color:var(--t1);white-space:nowrap">' + firstName + '</span>' +
+      '</div>' +
+      '<div style="flex:1;display:flex;flex-wrap:wrap;align-content:flex-start">' + skillTags + '</div>' +
+    '</div>';
+  }).join('');
+
+  var lastUpdated = new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
+  smEl.innerHTML =
+    '<div style="font-size:9px;color:var(--t3);margin-bottom:8px;letter-spacing:.04em">CUMULATIVE — all historical check-ins · last updated ' + lastUpdated + '</div>' +
+    rows;
+}
+
+// ── FIXED renderSkillMatch ───────────────────────────────────────
+// Overrides the original. Key fix: skill matrix now ALWAYS renders,
+// regardless of whether there are reallocation matches.
+
+renderSkillMatch = function() {
+  var matches = findMatches();
+  var mbadge = document.getElementById('matchBadge');
+  if (mbadge) { mbadge.textContent = matches.length; mbadge.style.display = matches.length > 0 ? 'inline-block' : 'none'; }
+  var skn = document.getElementById('sk-n'); if (skn) skn.textContent = matches.length;
+  var ml = document.getElementById('matchList');
+  if (!ml) { renderSkillMatrix(); return; }
+
+  if (matches.length === 0) {
+    var _ov = SD.filter(function(s) { return s.capacity >= 85; });
+    var _av = SD.filter(function(s) { return s.capacity < 70; });
+    var _msg = '';
+    if (SD.length === 0) {
+      _msg = 'Sync check-ins to see skill matches. Cinderella auto-detects when an overloaded staff member has a skill-matched colleague with spare capacity.';
+    } else if (_ov.length > 0 && _av.length === 0) {
+      _msg = _ov.map(function(s) { return cap(s.name.split(' ')[0]); }).join(' and ') + (_ov.length === 1 ? ' is' : ' are') + ' overloaded but no colleagues have spare capacity.';
+    } else if (_ov.length > 0 && _av.length > 0) {
+      _msg = _ov.length + ' staff overloaded but no skill matches found. Consider external support or cross-training.';
+    } else {
+      _msg = 'No skill matches needed — team capacity is well distributed this week.';
+    }
+    ml.innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0;line-height:1.5">' + _msg + '</div>';
+  } else {
+    ml.innerHTML = matches.map(function(m) {
+      return '<div class="smatch" onclick="actionSkillMatch(\'' + m.busy.name + '\',\'' + m.free.name + '\',' + m.busy.capacity + ',' + m.free.capacity + ',\'' + m.shared.join(', ') + '\')">' +
+        '<div class="smatch-head"><span class="smatch-flag">' + m.busy.capacity + '% → ' + m.free.capacity + '%</span>' +
+        '<div class="smatch-names">' + cap(m.busy.name) + ' <span style="opacity:.6">needs support from</span> ' + cap(m.free.name) + '</div></div>' +
+        '<div class="smatch-skills">Shared skills: ' + m.shared.map(function(s) { return cap(s); }).join(', ') + '</div>' +
+        '<div class="smatch-action">Click to email staff, schedule a handover call, or get task suggestions</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  // ── Always render skills matrix ──────────────────────────────
+  renderSkillMatrix();
+};
+
+// ── HOOK INTO SYNC ───────────────────────────────────────────────
+// Wrap syncNow so skills registry is rebuilt every time data arrives.
+(function() {
+  var _originalSyncNow = syncNow;
+  syncNow = async function() {
+    await _originalSyncNow.apply(this, arguments);
+    // After sync, rebuild registry from full history
+    if (window._allCheckIns && window._allCheckIns.length > 0) {
+      buildSkillsRegistry(window._allCheckIns);
+    }
+    renderSkillMatrix();
+  };
+})();
+
+// ── INIT: render from localStorage immediately on page load ──────
+(function() {
+  // Small delay to let the rest of the page initialise first
+  setTimeout(function() {
+    try { renderSkillMatrix(); } catch(e) { console.warn('Skills matrix init:', e.message); }
+  }, 500);
+})();
+
 </script>
 </body>
 </html>
