@@ -574,7 +574,6 @@ app.post('/proxy', async (req, res) => {
   }
 });
 
-
 // ── DEBUG: Check config (remove after fixing auth) ──
 app.get('/debug-auth', requireAuth, (req, res) => {
   res.json({
