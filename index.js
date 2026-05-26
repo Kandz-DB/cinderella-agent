@@ -84,13 +84,14 @@ app.get('/logout', (req, res) => {
 
 // Auth middleware — protect everything except /login
 function requireAuth(req, res, next) {
-  // Allow login, logout and checkin through without password
   if (req.path === '/login' || req.path === '/logout' || req.path === '/checkin') return next();
-  // Check session cookie
   const cookie = req.headers.cookie || '';
   const match = cookie.match(/cin_session=([^;]+)/);
   if (match && activeSessions.has(match[1])) return next();
-  // Not authenticated - redirect to login
+  // API routes get JSON 401 (not HTML redirect) so the dashboard handles it gracefully
+  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status')) {
+    return res.status(401).json({ error: { message: 'Session expired — please refresh the page and log in again.' } });
+  }
   res.redirect('/login');
 }
 
