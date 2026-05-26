@@ -639,6 +639,50 @@ app.put('/jsonbin/update', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// ── CHECK-IN DATA STORAGE (replaces JSONBin) ──
+const CHECKINS_PATH = '/home/checkins.json';
+
+function loadCheckIns() {
+  try {
+    if (existsSync(CHECKINS_PATH)) {
+      return JSON.parse(readFileSync(CHECKINS_PATH, 'utf8'));
+    }
+  } catch(e) { console.warn('CheckIns load error:', e.message); }
+  return [];
+}
+
+function saveCheckIns(data) {
+  writeFileSync(CHECKINS_PATH, JSON.stringify(data, null, 2));
+}
+
+app.get('/checkins/latest', (req, res) => {
+  const data = loadCheckIns();
+  res.json({ record: data });
+});
+
+app.put('/checkins/update', (req, res) => {
+  try {
+    const data = Array.isArray(req.body) ? req.body : [];
+    saveCheckIns(data);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/checkins/submit', (req, res) => {
+  try {
+    const existing = loadCheckIns();
+    existing.push(req.body);
+    saveCheckIns(existing);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── SERVE DASHBOARD ──
+app.use(express.static('.'));
 // ── SERVE DASHBOARD ──
 app.use(express.static('.'));
 
