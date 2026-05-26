@@ -89,7 +89,7 @@ function requireAuth(req, res, next) {
   const match = cookie.match(/cin_session=([^;]+)/);
   if (match && activeSessions.has(match[1])) return next();
   // API routes get JSON 401 (not HTML redirect) so the dashboard handles it gracefully
-  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status')) {
+  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status') || req.path.startsWith('/checkins')) {
     return res.status(401).json({ error: { message: 'Session expired — please refresh the page and log in again.' } });
   }
   res.redirect('/login');
@@ -657,8 +657,6 @@ app.post('/checkins/submit', (req, res) => {
   }
 });
 
-// ── SERVE DASHBOARD ──
-app.use(express.static('.'));
 // ── SERVE DASHBOARD ──
 app.use(express.static('.'));
 
