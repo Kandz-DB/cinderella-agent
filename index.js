@@ -642,8 +642,14 @@ app.put('/checkins/update', (req, res) => {
 
 app.post('/checkins/submit', (req, res) => {
   try {
+    const entry = req.body;
     const existing = loadCheckIns();
-    existing.push(req.body);
+    const idx = existing.findIndex(e =>
+      e.name && e.name.toLowerCase() === (entry.name||'').toLowerCase() &&
+      e.weekEnding === entry.weekEnding
+    );
+    if (idx >= 0) existing[idx] = entry;
+    else existing.push(entry);
     saveCheckIns(existing);
     res.json({ success: true });
   } catch(e) {
