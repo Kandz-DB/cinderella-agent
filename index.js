@@ -19,8 +19,29 @@ let isRunning = false;
 
 // ── SIMPLE PASSWORD PROTECTION ──
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'changeme';
-const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
-const activeSessions = new Set();
+const SESSION_PATH = '/home/sessions.json';
+
+function loadSessions() {
+  try {
+    if (existsSync(SESSION_PATH)) {
+      const data = JSON.parse(readFileSync(SESSION_PATH, 'utf8'));
+      // Filter out expired sessions (older than 7 days)
+      const cutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
+      const valid = (data.sessions || []).filter(s => s.created > cutoff).map(s => s.token);
+      return { set: new Set(valid), full: (data.sessions || []).filter(s => s.created > cutoff) };
+    }
+  } catch(e) { console.warn('Session load error:', e.message); }
+  return { set: new Set(), full: [] };
+}
+
+function saveSessions(sessionFull) {
+  try { writeFileSync(SESSION_PATH, JSON.stringify({ sessions: sessionFull }, null, 2)); } catch(e) {}
+}
+
+const _sessions = loadSessions();
+const activeSessions = _sessions.set;
+let sessionFull = _sessions.full;
+console.log('✅ Loaded', activeSessions.size, 'active sessions from disk');
 
 // Login page
 app.get('/login', (req, res) => {
@@ -66,7 +87,9 @@ app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
   if (req.body.password === DASHBOARD_PASSWORD) {
     const token = crypto.randomBytes(16).toString('hex');
     activeSessions.add(token);
-    res.setHeader('Set-Cookie', `cin_session=${token}; Path=/; HttpOnly; Max-Age=86400`);
+    sessionFull.push({ token, created: Date.now() });
+    saveSessions(sessionFull);
+    res.setHeader('Set-Cookie', `cin_session=${token}; Path=/; HttpOnly; Max-Age=604800`);
     res.redirect('/');
   } else {
     res.redirect('/login?error=1');
