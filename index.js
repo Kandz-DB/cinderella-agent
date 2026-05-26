@@ -609,13 +609,19 @@ app.get('/clear-logs', requireAuth, (req, res) => {
   res.send('Logs cleared.');
 });
 // ── JSONBIN PROXY ──
+const JSONBIN_ID  = '69eac07b36566621a8e6511a';
+const JSONBIN_KEY = '$2a$10$6AnrWdAfkw1SbaKZOuSTz.XXjK/mQVzlPX4rhyOOT6378sp855ouO';
+
 app.get('/jsonbin/latest', async (req, res) => {
   try {
-    const r = await fetch(`https://api.jsonbin.io/v3/b/${req.query.bin}/latest`, {
-      headers: { 'X-Master-Key': req.query.key }
+    const r = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`, {
+      headers: { 'X-Master-Key': JSONBIN_KEY }
     });
-    const d = await r.json();
-    res.json(d);
+    if (!r.ok) {
+      const text = await r.text();
+      return res.status(r.status).json({ error: `JSONBin ${r.status}: ${text.substring(0,200)}` });
+    }
+    res.json(await r.json());
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
@@ -623,13 +629,12 @@ app.get('/jsonbin/latest', async (req, res) => {
 
 app.put('/jsonbin/update', async (req, res) => {
   try {
-    const r = await fetch(`https://api.jsonbin.io/v3/b/${req.query.bin}`, {
+    const r = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Master-Key': req.query.key },
+      headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY },
       body: JSON.stringify(req.body)
     });
-    const d = await r.json();
-    res.json(d);
+    res.json(await r.json());
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
