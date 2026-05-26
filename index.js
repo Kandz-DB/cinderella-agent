@@ -785,7 +785,19 @@ app.get('/clockify/summary', async (req, res) => {
 
     // Fetch time entries for each user
     const summary = [];
-    for (const user of (Array.isArray(users) ? users : [])) {
+    const { start, end } = getWeekBounds();
+
+// Fetch time entries for each user — exclude inactive and Kandia
+const activeUsers = (Array.isArray(users) ? users : []).filter(function(u) {
+  if (u.status && u.status !== 'ACTIVE') return false;
+  const name = (u.name || '').toLowerCase();
+  const email = (u.email || '').toLowerCase();
+  if (name.includes('kandia') || email.includes('kandia')) return false;
+  return true;
+});
+
+const summary = [];
+for (const user of activeUsers) {
       const entriesRes = await fetch(
         `https://api.clockify.me/api/v1/workspaces/${wsId}/user/${user.id}/time-entries?start=${start}&end=${end}&page-size=200`,
         { headers: { 'X-Api-Key': apiKey } }
