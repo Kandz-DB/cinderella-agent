@@ -1,6 +1,6 @@
 import express from "express";
 import crypto from "crypto";
-import { readFileSync, writeFileSync, existsSync, appendFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, unlinkSync } from 'fs';
 
 // In-memory log of AI calls
 const aiCallLog = [];
@@ -674,6 +674,65 @@ app.post('/checkins/submit', (req, res) => {
     if (idx >= 0) existing[idx] = entry;
     else existing.push(entry);
     saveCheckIns(existing);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── DOCUMENT LIBRARY STORAGE ──
+const DOCS_DIR = '/home/documents';
+const DOCS_META_PATH = '/home/documents-meta.json';
+
+try { mkdirSync(DOCS_DIR, { recursive: true }); } catch(e) {}
+
+function loadDocsMeta() {
+  try {
+    if (existsSync(DOCS_META_PATH)) return JSON.parse(readFileSync(DOCS_META_PATH, 'utf8'));
+  } catch(e) { console.warn('DocsMeta load error:', e.message); }
+  return [];
+}
+
+function saveDocsMeta(meta) {
+  try { writeFileSync(DOCS_META_PATH, JSON.stringify(meta, null, 2)); } catch(e) { console.warn('DocsMeta save error:', e.message); }
+}
+
+app.get('/docs', (req, res) => {
+  res.json(loadDocsMeta());
+});
+
+app.get('/docs/content/:filename', (req, res) => {
+  try {
+    const filePath = `${DOCS_DIR}/${req.params.filename}`;
+    if (!existsSync(filePath)) return res.status(404).send('');
+    const content = readFileSync(filePath, 'utf8');
+    res.send(content);
+  } catch(e) {
+    res.status(500).send('');
+  }
+});
+
+app.post('/docs/upload', (req, res) => {
+  try {
+    const { name, type, size, content, uploaded } = req.body;
+    const safe = name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const unique = Date.now() + '_' + safe;
+    writeFileSync(`${DOCS_DIR}/${unique}`, content, 'utf8');
+    const meta = loadDocsMeta();
+    meta.push({ name, type, size, uploaded, filename: unique });
+    saveDocsMeta(meta);
+    console.log(`📄 Document saved: ${name} (${Math.round(size/1024)}KB)`);
+    res.json({ success: true, filename: unique });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/docs/:filename', (req, res) => {
+  try {
+    const meta = loadDocsMeta().filter(d => d.filename !== req.params.filename);
+    saveDocsMeta(meta);
+    try { unlinkSync(`${DOCS_DIR}/${req.params.filename}`); } catch(e) {}
     res.json({ success: true });
   } catch(e) {
     res.status(500).json({ error: e.message });
