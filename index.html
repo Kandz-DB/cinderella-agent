@@ -2604,13 +2604,6 @@ function renderMonthSummary() {
 
   // Get all data from JSONBin to build history
 
-  if (!C.bin || !C.key) {
-
-    document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">JSONBin not configured.</div>';
-
-    return;
-
-  }
 
   document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading monthly data...</div>';
 
@@ -2622,7 +2615,7 @@ function renderMonthSummary() {
 
     ? Promise.resolve(window._allCheckIns)
 
-    : fetch('/jsonbin/latest')
+    : fetch('/checkins/latest')
 
         .then(function(r){ return r.json(); })
 
@@ -2908,15 +2901,13 @@ function renderHistory() {
 
   if (!el) return;
 
-  if (!C.bin || !C.key) { el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">JSONBin not configured.</div>'; return; }
-
   el.innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading historical data...</div>';
 
   var fetchFn = (window._allCheckIns && window._allCheckIns.length > 0)
 
     ? Promise.resolve(window._allCheckIns)
 
-    : fetch('/jsonbin/latest')
+    : fetch('/checkins/latest')
 
         .then(function(r){ return r.json(); })
 
@@ -3882,7 +3873,7 @@ async function syncNow(){
 
   try{
 
-    const r=await fetch(`/jsonbin/latest`);
+    const r=await fetch(`/checkins/latest`);
 
     if(!r.ok)throw new Error(`HTTP ${r.status}`);
 
@@ -4842,7 +4833,7 @@ async function send(){
 
   var needsHistory = historyKeywords.some(function(k){ return text.toLowerCase().includes(k); });
 
-  if (needsHistory && C.bin && C.key && (window._allCheckIns && window._allCheckIns.length > 0 || true)) {
+  if (needsHistory && (window._allCheckIns && window._allCheckIns.length > 0 || true)) {
 
     try {
 
@@ -4850,7 +4841,7 @@ async function send(){
 
       if (!allCI) {
 
-        var hRes = await fetch('/jsonbin/latest');
+        var hRes = await fetch('/checkins/latest');
 
         var hData = await hRes.json();
 
@@ -5540,11 +5531,9 @@ async function deleteCheckIn(name, weekEnding) {
 
   if (!confirm('Delete check-in for ' + name + ' (week ending ' + weekEnding + ')? This cannot be undone.')) return;
 
-  if (!C.bin || !C.key) { alert('JSONBin not configured'); return; }
-
   try {
 
-    const r = await fetch('/jsonbin/latest');
+    const r = await fetch('/checkins/latest');
 
     const d = await r.json();
 
@@ -5554,7 +5543,7 @@ async function deleteCheckIn(name, weekEnding) {
 
     });
 
-    const put = await fetch('/jsonbin/update', {
+    const put = await fetch('/checkins/update', {
 
       method: 'PUT',
 
