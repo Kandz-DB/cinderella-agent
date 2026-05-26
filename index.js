@@ -608,7 +608,32 @@ app.get('/clear-logs', requireAuth, (req, res) => {
   try { writeFileSync(LOG_PATH, ''); } catch(e) {}
   res.send('Logs cleared.');
 });
+// ── JSONBIN PROXY ──
+app.get('/jsonbin/latest', async (req, res) => {
+  try {
+    const r = await fetch(`https://api.jsonbin.io/v3/b/${req.query.bin}/latest`, {
+      headers: { 'X-Master-Key': req.query.key }
+    });
+    const d = await r.json();
+    res.json(d);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
+app.put('/jsonbin/update', async (req, res) => {
+  try {
+    const r = await fetch(`https://api.jsonbin.io/v3/b/${req.query.bin}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Master-Key': req.query.key },
+      body: JSON.stringify(req.body)
+    });
+    const d = await r.json();
+    res.json(d);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 // ── SERVE DASHBOARD ──
 app.use(express.static('.'));
 
