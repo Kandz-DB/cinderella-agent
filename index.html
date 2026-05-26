@@ -3607,7 +3607,37 @@ async function handleDocUpload(event) {
 
     var content = await readFileContent(file);
 
-    docLibrary.push({ name: file.name, type: file.type, content: content, size: file.size, uploaded: new Date().toLocaleTimeString('en-AU') });
+    var uploaded = new Date().toLocaleTimeString('en-AU');
+
+    try {
+
+      var r = await fetch('/docs/upload', {
+
+        method: 'POST',
+
+        headers: { 'Content-Type': 'application/json' },
+
+        body: JSON.stringify({ name: file.name, type: file.type, size: file.size, content: content, uploaded: uploaded })
+
+      });
+
+      var d = await r.json();
+
+      if (d.filename) {
+
+        docLibrary.push({ name: file.name, type: file.type, content: content, size: file.size, uploaded: uploaded, filename: d.filename });
+
+      }
+
+    } catch(e) {
+
+      console.warn('Doc upload failed:', e.message);
+
+      // Fall back to in-memory only if server fails
+
+      docLibrary.push({ name: file.name, type: file.type, content: content, size: file.size, uploaded: uploaded });
+
+    }
 
   }
 
@@ -3687,7 +3717,15 @@ function renderDocLibrary() {
 
 }
 
-function removeDoc(idx) {
+async function removeDoc(idx) {
+
+  var doc = docLibrary[idx];
+
+  if (doc && doc.filename) {
+
+    try { await fetch('/docs/' + doc.filename, { method: 'DELETE' }); } catch(e) { console.warn('Doc delete failed:', e.message); }
+
+  }
 
   docLibrary.splice(idx, 1);
 
@@ -3724,6 +3762,46 @@ function getDocContext() {
   });
 
   return ctx;
+
+}
+
+async function loadDocLibrary() {
+
+  try {
+
+    var r = await fetch('/docs');
+
+    if (!r.ok) return;
+
+    var meta = await r.json();
+
+    if (!Array.isArray(meta) || meta.length === 0) return;
+
+    // Read content back from server for each doc so Cinderella can reference it
+
+    docLibrary = await Promise.all(meta.map(async function(d) {
+
+      try {
+
+        var cr = await fetch('/docs/content/' + d.filename);
+
+        var content = cr.ok ? await cr.text() : '';
+
+        return { name: d.name, type: d.type, size: d.size, uploaded: d.uploaded, filename: d.filename, content: content };
+
+      } catch(e) {
+
+        return { name: d.name, type: d.type, size: d.size, uploaded: d.uploaded, filename: d.filename, content: '' };
+
+      }
+
+    }));
+
+    renderDocLibrary();
+
+    console.log('📄 Loaded ' + docLibrary.length + ' document(s) from server');
+
+  } catch(e) { console.warn('Doc library load failed:', e.message); }
 
 }
 
@@ -5152,6 +5230,8 @@ loadCfg();
 checkM365Connection();
 
 setInterval(loadM365Data,45*60*1000);
+
+loadDocLibrary();
 
 try{renderStaff();}catch(e){console.warn('renderStaff:',e.message);}
 
