@@ -3192,15 +3192,9 @@ async function renderSkillsMatrix(){
   if(!el)return;
   // Use already-fetched data — avoids double JSONBin call
   let all=window._allCheckIns||[];
-  if(all.length===0){
-    if(!C.bin||!C.key){el.innerHTML='<div style="font-size:11px;color:var(--t3);padding:4px 0">JSONBin not configured.</div>';return;}
-    el.innerHTML='<div style="font-size:11px;color:var(--t2);padding:4px 0">Loading skills history...</div>';
-    try{
-      const r=await fetch('https://api.jsonbin.io/v3/b/'+C.bin+'/latest',{headers:{'X-Master-Key':C.key}});
-      const d=await r.json();
-      all=(Array.isArray(d.record)?d.record:[]).filter(e=>e&&e.name);
-      window._allCheckIns=all;
-    }catch(e){el.innerHTML='<div style="font-size:11px;color:var(--r)">Could not load skills: '+e.message+'</div>';return;}
+ if(all.length===0){
+    el.innerHTML='<div style="font-size:11px;color:var(--t3);padding:4px 0">Sync check-ins to see skills data.</div>';
+    return;
   }
   const reg={};
   all.forEach(s=>{
