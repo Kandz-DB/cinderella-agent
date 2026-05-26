@@ -468,7 +468,7 @@ app.get('/monday/projects', async (req, res) => {
   if (!apiKey) return res.status(400).json({ error: 'MONDAY_API_KEY not configured in Render environment variables' });
   try {
     const query = `{
-      boards(ids: [2031906973, 2005758439]) {
+      boards(ids: [2031906973, 2005758439, 2005747804]) {
         id
         name
         state
@@ -480,7 +480,9 @@ app.get('/monday/projects', async (req, res) => {
             state
             column_values {
               id
+              title
               text
+              value
             }
           }
         }
@@ -783,21 +785,17 @@ app.get('/clockify/summary', async (req, res) => {
 
     const { start, end } = getWeekBounds();
 
-    // Fetch time entries for each user
+    // Fetch time entries for each user — exclude inactive and Kandia
+    const activeUsers = (Array.isArray(users) ? users : []).filter(function(u) {
+      if (u.status && u.status !== 'ACTIVE') return false;
+      const name = (u.name || '').toLowerCase();
+      const email = (u.email || '').toLowerCase();
+      if (name.includes('kandia') || email.includes('kandia')) return false;
+      return true;
+    });
+
     const summary = [];
-    const { start, end } = getWeekBounds();
-
-// Fetch time entries for each user — exclude inactive and Kandia
-const activeUsers = (Array.isArray(users) ? users : []).filter(function(u) {
-  if (u.status && u.status !== 'ACTIVE') return false;
-  const name = (u.name || '').toLowerCase();
-  const email = (u.email || '').toLowerCase();
-  if (name.includes('kandia') || email.includes('kandia')) return false;
-  return true;
-});
-
-const summary = [];
-for (const user of activeUsers) {
+    for (const user of activeUsers) {
       const entriesRes = await fetch(
         `https://api.clockify.me/api/v1/workspaces/${wsId}/user/${user.id}/time-entries?start=${start}&end=${end}&page-size=200`,
         { headers: { 'X-Api-Key': apiKey } }
