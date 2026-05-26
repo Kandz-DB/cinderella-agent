@@ -2388,30 +2388,23 @@ function renderSkillMatch(){
   if(mbadge){mbadge.textContent=matches.length;mbadge.style.display=matches.length>0?'inline-block':'none';}
   const skn=document.getElementById('sk-n');if(skn)skn.textContent=matches.length;
   const ml=document.getElementById('matchList');
-  if(!ml)return;
+  if(!ml){renderSkillsMatrix();return;}
   if(matches.length===0){
     const _ov=SD.filter(s=>s.capacity>=85);
     const _av=SD.filter(s=>s.capacity<70);
     let _msg='';
     if(SD.length===0){_msg='Sync check-ins to see skill matches. Cinderella auto-detects when an overloaded staff member has a skill-matched colleague with spare capacity.';}
-    else if(_ov.length>0&&_av.length===0){_msg=`${_ov.length===1?cap(_ov[0].name.split(' ')[0])+' is':_ov.map(s=>cap(s.name.split(' ')[0])).join(' and ')+' are'} overloaded but no colleagues have spare capacity.`;}
-    else if(_ov.length>0&&_av.length>0){_msg=`${_ov.length} staff overloaded but no skill matches found. Consider external support or cross-training.`;}
+    else if(_ov.length>0&&_av.length===0){_msg=_ov.map(s=>cap(s.name.split(' ')[0])).join(' and ')+(_ov.length===1?' is':' are')+' overloaded but no colleagues have spare capacity.';}
+    else if(_ov.length>0&&_av.length>0){_msg=_ov.length+' staff overloaded but no skill matches found. Consider external support or cross-training.';}
     else{_msg='No skill matches needed — team capacity is well distributed this week.';}
     ml.innerHTML=`<div style="font-size:12px;color:var(--t2);padding:8px 0;line-height:1.5">${_msg}</div>`;
   } else {
-  ml.innerHTML=matches.map((m,i)=>`
-    <div class="smatch" onclick="actionSkillMatch('${m.busy.name}','${m.free.name}',${m.busy.capacity},${m.free.capacity},'${m.shared.join(', ')}')">
-      <div class="smatch-head"><span class="smatch-flag">${m.busy.capacity}% → ${m.free.capacity}%</span><div class="smatch-names">${cap(m.busy.name)} <span style="opacity:.6">needs support from</span> ${cap(m.free.name)}</div></div>
-      <div class="smatch-skills">Shared skills: ${m.shared.map(s=>cap(s)).join(', ')}</div>
-      <div class="smatch-action">Click to email staff, schedule a handover call, or get task suggestions</div>
-    </div>`).join('');
-  const smEl=document.getElementById('skillMatrix');
-  if(!smEl)return;
-  const allSkills={};
-  SD.forEach(s=>{parseSkills(s.skills).forEach(sk=>{if(!allSkills[sk])allSkills[sk]=[];allSkills[sk].push(s.name.split(' ')[0]);});});
-  smEl.innerHTML=Object.entries(allSkills).sort((a,b)=>b[1].length-a[1].length).slice(0,8).map(([sk,names])=>
-    `<div class="cbr" style="margin-bottom:6px"><div class="cbl" style="min-width:120px;font-size:10px">${cap(sk)}</div><div class="bw"><div class="bar bg" style="width:${Math.round(names.length/SD.length*100)}%"></div></div><div class="bp" style="color:var(--t2)">${names.length}</div></div>`
-  ).join('');
+    ml.innerHTML=matches.map((m,i)=>`
+      <div class="smatch" onclick="actionSkillMatch('${m.busy.name}','${m.free.name}',${m.busy.capacity},${m.free.capacity},'${m.shared.join(', ')}')">
+        <div class="smatch-head"><span class="smatch-flag">${m.busy.capacity}% → ${m.free.capacity}%</span><div class="smatch-names">${cap(m.busy.name)} <span style="opacity:.6">needs support from</span> ${cap(m.free.name)}</div></div>
+        <div class="smatch-skills">Shared skills: ${m.shared.map(s=>cap(s)).join(', ')}</div>
+        <div class="smatch-action">Click to email staff, schedule a handover call, or get task suggestions</div>
+      </div>`).join('');
   }
   renderSkillsMatrix();
 }
@@ -3194,57 +3187,42 @@ function buildTrendChart(byWeek, weeks) {
     }
   });
 }
-async function renderSkillsMatrix() {
-  var el = document.getElementById('skillMatrix');
-  if (!el) return;
-
-  // Use already-fetched data if available — avoids double JSONBin call
-  var all = window._allCheckIns || [];
-
-  // Only fetch from JSONBin if cache is empty
-  if (all.length === 0) {
-    if (!C.bin || !C.key) {
-      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">JSONBin not configured.</div>';
-      return;
-    }
-    el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">Loading skills history...</div>';
-    try {
-      var r = await fetch('https://api.jsonbin.io/v3/b/'+C.bin+'/latest', {headers:{'X-Master-Key':C.key}});
-      var d = await r.json();
-      all = (Array.isArray(d.record)?d.record:[]).filter(function(e){return e&&e.name;});
-      window._allCheckIns = all;
-    } catch(e) {
-      el.innerHTML = '<div style="font-size:11px;color:var(--r)">Could not load skills: '+e.message+'</div>';
-      return;
-    }
+async function renderSkillsMatrix(){
+  const el=document.getElementById('skillMatrix');
+  if(!el)return;
+  // Use already-fetched data — avoids double JSONBin call
+  let all=window._allCheckIns||[];
+  if(all.length===0){
+    if(!C.bin||!C.key){el.innerHTML='<div style="font-size:11px;color:var(--t3);padding:4px 0">JSONBin not configured.</div>';return;}
+    el.innerHTML='<div style="font-size:11px;color:var(--t2);padding:4px 0">Loading skills history...</div>';
+    try{
+      const r=await fetch('https://api.jsonbin.io/v3/b/'+C.bin+'/latest',{headers:{'X-Master-Key':C.key}});
+      const d=await r.json();
+      all=(Array.isArray(d.record)?d.record:[]).filter(e=>e&&e.name);
+      window._allCheckIns=all;
+    }catch(e){el.innerHTML='<div style="font-size:11px;color:var(--r)">Could not load skills: '+e.message+'</div>';return;}
   }
-
-  // Build cumulative deduplicated skills per person from ALL history
-  var registry = {};
-  all.forEach(function(s){
+  const reg={};
+  all.forEach(s=>{
     if(!s.name||!s.skills)return;
-    var nm = s.name.split(' ').map(function(w){return w?w[0].toUpperCase()+w.slice(1):'';}).join(' ');
-    if(!registry[nm])registry[nm]=[];
-    s.skills.split(',').forEach(function(sk){
-      var t=sk.trim();
+    const nm=s.name.split(' ').map(w=>w?w[0].toUpperCase()+w.slice(1):'').join(' ');
+    if(!reg[nm])reg[nm]=[];
+    s.skills.split(',').forEach(sk=>{
+      const t=sk.trim();
       if(!t||t.length<2)return;
-      if(!registry[nm].some(function(e){return e.toLowerCase()===t.toLowerCase();}))registry[nm].push(t);
+      if(!reg[nm].some(e=>e.toLowerCase()===t.toLowerCase()))reg[nm].push(t);
     });
   });
-
-  var avStyles=['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
-  var ordered=ALL_STAFF.map(function(s){return s.name.split(' ').map(function(w){return w?w[0].toUpperCase()+w.slice(1):'';}).join(' ');});
-  Object.keys(registry).forEach(function(n){if(ordered.indexOf(n)===-1)ordered.push(n);});
-
-  var html='<div style="font-size:9px;color:var(--t3);margin-bottom:8px;letter-spacing:.04em">ALL HISTORICAL CHECK-INS · skills accumulate and never disappear</div>';
-  ordered.forEach(function(name,i){
-    if(!registry[name]&&!ALL_STAFF.some(function(s){return s.name.toLowerCase().includes(name.split(' ')[0].toLowerCase());}))return;
-    var skills=registry[name]||[];
-    var av=avStyles[i%avStyles.length];
-    var ini=name.split(' ').map(function(w){return w[0]||'';}).join('').substring(0,2).toUpperCase();
-    var tags=skills.length>0
-      ?skills.map(function(sk){return '<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--gl);color:#0F6E56;display:inline-block;margin:2px 2px 2px 0">'+sk.charAt(0).toUpperCase()+sk.slice(1)+'</span>';}).join('')
-      :'<span style="font-size:10px;color:var(--t3);font-style:italic">No skills recorded yet</span>';
+  const avStyles=['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
+  const ordered=ALL_STAFF.map(s=>s.name.split(' ').map(w=>w?w[0].toUpperCase()+w.slice(1):'').join(' '));
+  Object.keys(reg).forEach(n=>{if(!ordered.includes(n))ordered.push(n);});
+  let html='<div style="font-size:9px;color:var(--t3);margin-bottom:8px;letter-spacing:.04em">ALL HISTORICAL CHECK-INS · skills accumulate and never disappear</div>';
+  ordered.forEach((name,i)=>{
+    if(!reg[name]&&!ALL_STAFF.some(s=>s.name.toLowerCase().includes(name.split(' ')[0].toLowerCase())))return;
+    const skills=reg[name]||[];
+    const av=avStyles[i%avStyles.length];
+    const ini=name.split(' ').map(w=>w[0]||'').join('').substring(0,2).toUpperCase();
+    const tags=skills.length>0?skills.map(sk=>'<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--gl);color:#0F6E56;display:inline-block;margin:2px 2px 2px 0">'+sk[0].toUpperCase()+sk.slice(1)+'</span>').join(''):'<span style="font-size:10px;color:var(--t3);font-style:italic">No skills recorded yet</span>';
     html+='<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--bl)">'+
       '<div style="display:flex;align-items:center;gap:6px;min-width:120px;flex-shrink:0;padding-top:2px">'+
         '<div style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;'+av+'">'+ini+'</div>'+
@@ -3253,7 +3231,7 @@ async function renderSkillsMatrix() {
       '<div style="flex:1;display:flex;flex-wrap:wrap">'+tags+'</div>'+
     '</div>';
   });
-  el.innerHTML = html;
+  el.innerHTML=html;
 }
 }
 </script>
