@@ -461,7 +461,7 @@ app.get('/graph/teams', async (req, res) => {
 
 
 // ── MONDAY.COM: Get approved boards only ──
-const MONDAY_BOARD_IDS = [2031906973, 2005758439]; // Project/Client Feedback + Client Projects ONLY
+const MONDAY_BOARD_IDS = [2031906973, 2005758439, 2005747804]; // Project/Client Feedback + Client Projects ONLY
 
 app.get('/monday/projects', async (req, res) => {
   const apiKey = process.env.MONDAY_API_KEY;
