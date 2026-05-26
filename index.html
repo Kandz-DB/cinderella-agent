@@ -5386,9 +5386,17 @@ async function loadR2SMetrics() {
       // Helper: find column value by title keywords
       function getCol(cols, ...keywords) {
         var col = cols.find(function(cv) {
-          var t = (cv.title || '').toLowerCase();
-          return keywords.some(function(k) { return t.includes(k); });
+          var id = (cv.id || '').toLowerCase();
+          return keywords.some(function(k) { return id.includes(k); });
         });
+        // Also try matching keywords against the text value itself as fallback
+        if (!col) {
+          col = cols.find(function(cv) {
+            if (!cv.text) return false;
+            var id = (cv.id || '').toLowerCase();
+            return keywords.some(function(k) { return id.includes(k.substring(0,4)); });
+          });
+        }
         return col ? (col.text || '') : '';
       }
 
