@@ -5370,8 +5370,7 @@ async function loadR2SMetrics() {
 
   var html = '';
 
-  // Client pipeline from Monday.com
-
+  // ── CLIENT PIPELINE from Monday.com ──
   try {
 
     var r = await fetch('/monday/projects');
@@ -5380,39 +5379,148 @@ async function loadR2SMetrics() {
 
     if (!d.error && d.boards && d.boards.length > 0) {
 
-      var allItems = [];
+      var now = new Date();
+      var thisMonth = now.getMonth();
+      var thisYear = now.getFullYear();
 
-      d.boards.forEach(function(b) {
-
-        (b.items || []).forEach(function(item) {
-
-          var status = (item.column_values || []).find(function(cv) { return cv.title && cv.title.toLowerCase().includes('status'); });
-
-          allItems.push({ name: item.name, board: b.name, status: status ? status.text : item.state || '' });
-
+      // Helper: find column value by title keywords
+      function getCol(cols, ...keywords) {
+        var col = cols.find(function(cv) {
+          var t = (cv.title || '').toLowerCase();
+          return keywords.some(function(k) { return t.includes(k); });
         });
+        return col ? (col.text || '') : '';
+      }
 
+      // Helper: parse a date string and return { label, isDueThisMonth, isOverdue }
+      function parseDate(str) {
+        if (!str) return null;
+        var d = new Date(str);
+        if (isNaN(d)) return null;
+        var overdue = d < now;
+        var thisM = d.getMonth() === thisMonth && d.getFullYear() === thisYear;
+        return {
+          label: d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }),
+          isDueThisMonth: thisM,
+          isOverdue: overdue && !thisM
+        };
+      }
+
+      // Helper: map status text to a progress %
+      function statusToProgress(status) {
+        var s = (status || '').toLowerCase();
+        if (s.includes('done') || s.includes('complete') || s.includes('delivered')) return 100;
+        if (s.includes('review') || s.includes('final') || s.includes('sign')) return 80;
+        if (s.includes('progress') || s.includes('active') || s.includes('ongoing') || s.includes('started')) return 50;
+        if (s.includes('plan') || s.includes('brief') || s.includes('scoping') || s.includes('kick')) return 20;
+        if (s.includes('pending') || s.includes('wait') || s.includes('hold')) return 10;
+        return 35; // unknown but in progress
+      }
+
+      function statusColour(pct) {
+        if (pct >= 80) return 'var(--g)';
+        if (pct >= 40) return 'var(--b)';
+        return 'var(--a)';
+      }
+
+      var allItems = [];
+      d.boards.forEach(function(b) {
+        (b.items || []).forEach(function(item) {
+          var cols = item.column_values || [];
+
+          var company  = getCol(cols, 'company', 'client', 'account', 'organisation', 'organization');
+          var project  = getCol(cols, 'project', 'service', 'engagement', 'deliverable', 'training', 'work');
+          var status   = getCol(cols, 'status', 'stage', 'progress', 'phase');
+          var dueRaw   = getCol(cols, 'due', 'end date', 'completion', 'deadline', 'finish');
+          var invRaw   = getCol(cols, 'invoice', 'billing', 'payment', 'invoice due');
+          var owner    = getCol(cols, 'owner', 'assigned', 'responsible', 'consultant');
+
+          // Fallback: if company empty, item name is the company; project from board name
+          var displayCompany = company || item.name;
+          var displayProject = project || (company ? item.name : b.name);
+
+          var due = parseDate(dueRaw);
+          var inv = parseDate(invRaw);
+
+          // Skip done/complete items unless due this month
+          var isDone = (status || '').toLowerCase().match(/done|complete|delivered|closed/);
+          if (isDone && !due?.isDueThisMonth && !inv?.isDueThisMonth) return;
+
+          allItems.push({
+            company: displayCompany,
+            project: displayProject,
+            status: status,
+            progress: statusToProgress(status),
+            due: due,
+            inv: inv,
+            owner: owner,
+            board: b.name,
+            prompt: 'Tell me about the ' + displayCompany + ' ' + displayProject + ' project — current status, any risks, and what actions I need to take'
+          });
+        });
       });
 
-      var active = allItems.filter(function(i) { return !i.status.toLowerCase().includes('done') && !i.status.toLowerCase().includes('complete'); });
+      if (allItems.length === 0) {
+        html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">No active projects found in Monday.com boards.</div>';
+      } else {
+        // Sort: overdue first, then due this month, then rest
+        allItems.sort(function(a, b) {
+          var aUrgent = (a.due?.isOverdue || a.inv?.isOverdue) ? 0 : (a.due?.isDueThisMonth || a.inv?.isDueThisMonth) ? 1 : 2;
+          var bUrgent = (b.due?.isOverdue || b.inv?.isOverdue) ? 0 : (b.due?.isDueThisMonth || b.inv?.isDueThisMonth) ? 1 : 2;
+          return aUrgent - bUrgent;
+        });
 
-      var pipeline = active.slice(0, 5).map(function(i) { return i.name + (i.status ? ' (' + i.status + ')' : ''); }).join(' · ') || 'No active projects';
+        html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Client pipeline · ' + allItems.length + ' active · Monday.com live</div>';
 
-      html += '<div class="ins" onclick="qa(\'Summarise the status of all active client projects from Monday.com and flag any risks or items needing my attention\')"><div class="il">Client pipeline · Monday.com live</div><div class="it">' + pipeline + (active.length > 5 ? ' +' + (active.length - 5) + ' more' : '') + '</div></div>';
+        html += allItems.map(function(item) {
+          var pct = item.progress;
+          var col = statusColour(pct);
+
+          var dueTag = '';
+          if (item.due) {
+            var dc = item.due.isOverdue ? 'var(--r)' : item.due.isDueThisMonth ? 'var(--a)' : 'var(--t3)';
+            var dl = item.due.isOverdue ? '⚠ Overdue ' : item.due.isDueThisMonth ? '⚡ Due ' : 'Due ';
+            dueTag = '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:' + (item.due.isOverdue ? 'var(--rl)' : item.due.isDueThisMonth ? 'var(--al)' : 'var(--bg3)') + ';color:' + dc + ';margin-right:3px">' + dl + item.due.label + '</span>';
+          }
+
+          var invTag = '';
+          if (item.inv) {
+            var ic = item.inv.isOverdue ? 'var(--r)' : item.inv.isDueThisMonth ? '#0F6E56' : 'var(--t3)';
+            var ib = item.inv.isOverdue ? 'var(--rl)' : item.inv.isDueThisMonth ? 'var(--gl)' : 'var(--bg3)';
+            var il = item.inv.isOverdue ? '⚠ Invoice overdue ' : item.inv.isDueThisMonth ? '💰 Invoice due ' : 'Invoice ';
+            invTag = '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:' + ib + ';color:' + ic + ';margin-right:3px">' + il + item.inv.label + '</span>';
+          }
+
+          var ownerTag = item.owner ? '<span style="font-size:9px;color:var(--t3)">· ' + item.owner + '</span>' : '';
+
+          return '<div style="padding:8px 0;border-bottom:0.5px solid var(--bl);cursor:pointer" onclick="qa(\'' + item.prompt.replace(/'/g, '&#39;') + '\')">' +
+            '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px">' +
+              '<div>' +
+                '<div style="font-size:12px;font-weight:600;color:var(--t1)">' + item.company + '</div>' +
+                '<div style="font-size:10px;color:var(--t2);margin-top:1px">' + item.project + ' ' + ownerTag + '</div>' +
+              '</div>' +
+              '<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--bg3);color:var(--t2);white-space:nowrap;flex-shrink:0">' + (item.status || 'In progress') + '</span>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:4px;margin-bottom:5px">' +
+              '<div style="flex:1;background:var(--bg3);border-radius:3px;height:5px">' +
+                '<div style="width:' + pct + '%;height:100%;border-radius:3px;background:' + col + ';transition:width .3s"></div>' +
+              '</div>' +
+              '<span style="font-size:9px;color:var(--t3);min-width:28px;text-align:right">' + pct + '%</span>' +
+            '</div>' +
+            (dueTag || invTag ? '<div style="margin-top:2px">' + dueTag + invTag + '</div>' : '') +
+          '</div>';
+        }).join('');
+      }
 
     } else {
-
-      html += '<div class="ins" onclick="qa(\'What is the current client project status at Risk 2 Solution?\')"><div class="il">Client pipeline</div><div class="it" style="color:var(--t3)">Monday.com not connected — click to ask Cinderella</div></div>';
-
+      html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">Monday.com not connected — <span style="color:var(--b);cursor:pointer" onclick="qa(\'What is the current client project status at Risk 2 Solution?\')">ask Cinderella</span></div>';
     }
 
   } catch(e) {
-
-    html += '<div class="ins"><div class="il">Client pipeline</div><div class="it" style="color:var(--t3)">Monday.com unavailable</div></div>';
-
+    html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">Monday.com unavailable</div>';
   }
 
-  // Compliance from emails — scan for renewal/audit/insurance keywords
+  // ── COMPLIANCE from emails + docs ──
 
   var complianceItems = [];
 
@@ -5444,19 +5552,25 @@ async function loadR2SMetrics() {
 
   if (complianceItems.length > 0) {
 
-    html += '<div class="ins" onclick="qa(\'Review my compliance and insurance items and tell me what actions I need to take: ' + complianceItems.slice(0,3).join(', ').replace(/'/g,'') + '\')"><div class="il">Compliance · ' + complianceItems.length + ' item' + (complianceItems.length > 1 ? 's' : '') + ' detected</div><div class="it">' + complianceItems.slice(0, 3).join(' · ') + '</div></div>';
+    html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 4px">Compliance</div>';
+
+    html += '<div class="ins" onclick="qa(\'Review my compliance and insurance items and tell me what actions I need to take: ' + complianceItems.slice(0,3).join(', ').replace(/'/g,'') + '\')"><div class="il">' + complianceItems.length + ' item' + (complianceItems.length > 1 ? 's' : '') + ' detected in emails &amp; documents</div><div class="it">' + complianceItems.slice(0, 3).join(' · ') + '</div></div>';
 
   } else {
+
+    html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 4px">Compliance</div>';
 
     html += '<div class="ins" onclick="qa(\'What compliance and insurance items should I be tracking as COO of Risk 2 Solution?\')"><div class="il">Compliance</div><div class="it" style="color:var(--t3)">No compliance emails or documents detected — upload relevant docs</div></div>';
 
   }
 
-  // Staff capacity from check-in data
+  // ── STAFF CAPACITY from check-ins ──
 
   var overloaded = SD.filter(function(s) { return s.capacity >= 85; });
 
   var blockers = SD.filter(function(s) { return s.blockers && s.blockers.trim(); });
+
+  html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin:10px 0 4px">Staff capacity</div>';
 
   if (SD.length > 0) {
 
@@ -5466,7 +5580,7 @@ async function loadR2SMetrics() {
 
     if (blockers.length > 0) capText += ' · ' + blockers.length + ' blocker' + (blockers.length > 1 ? 's' : '');
 
-    html += '<div class="ins" onclick="qa(\'Give me a staff capacity analysis and recommend workload adjustments based on current check-in data\')"><div class="il">Staff capacity · from check-ins</div><div class="it">' + capText + '</div></div>';
+    html += '<div class="ins" onclick="qa(\'Give me a staff capacity analysis and recommend workload adjustments based on current check-in data\')"><div class="il">From check-ins</div><div class="it">' + capText + '</div></div>';
 
   } else {
 
