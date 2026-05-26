@@ -683,7 +683,6 @@ app.post('/checkins/submit', (req, res) => {
 // ── DOCUMENT LIBRARY STORAGE ──
 const DOCS_DIR = '/home/documents';
 const DOCS_META_PATH = '/home/documents-meta.json';
-
 try { mkdirSync(DOCS_DIR, { recursive: true }); } catch(e) {}
 
 function loadDocsMeta() {
@@ -692,9 +691,8 @@ function loadDocsMeta() {
   } catch(e) { console.warn('DocsMeta load error:', e.message); }
   return [];
 }
-
 function saveDocsMeta(meta) {
-  try { writeFileSync(DOCS_META_PATH, JSON.stringify(meta, null, 2)); } catch(e) { console.warn('DocsMeta save error:', e.message); }
+  try { writeFileSync(DOCS_META_PATH, JSON.stringify(meta, null, 2)); } catch(e) {}
 }
 
 app.get('/docs', (req, res) => {
@@ -705,11 +703,8 @@ app.get('/docs/content/:filename', (req, res) => {
   try {
     const filePath = `${DOCS_DIR}/${req.params.filename}`;
     if (!existsSync(filePath)) return res.status(404).send('');
-    const content = readFileSync(filePath, 'utf8');
-    res.send(content);
-  } catch(e) {
-    res.status(500).send('');
-  }
+    res.send(readFileSync(filePath, 'utf8'));
+  } catch(e) { res.status(500).send(''); }
 });
 
 app.post('/docs/upload', (req, res) => {
@@ -723,9 +718,7 @@ app.post('/docs/upload', (req, res) => {
     saveDocsMeta(meta);
     console.log(`📄 Document saved: ${name} (${Math.round(size/1024)}KB)`);
     res.json({ success: true, filename: unique });
-  } catch(e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete('/docs/:filename', (req, res) => {
@@ -734,7 +727,173 @@ app.delete('/docs/:filename', (req, res) => {
     saveDocsMeta(meta);
     try { unlinkSync(`${DOCS_DIR}/${req.params.filename}`); } catch(e) {}
     res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── CLOCKIFY INTEGRATION ──
+function parseCfDuration(iso) {
+  if (!iso) return 0;
+  const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!m) return 0;
+  return (parseInt(m[1]||0) * 3600 + parseInt(m[2]||0) * 60 + parseInt(m[3]||0)) / 3600;
+}
+
+function getWeekBounds() {
+  const now = new Date();
+  const day = now.getDay();
+  const diffToMon = (day === 0) ? -6 : 1 - day;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + diffToMon);
+  monday.setHours(0, 0, 0, 0);
+  return { start: monday.toISOString(), end: now.toISOString() };
+}
+
+app.get('/clockify/status', async (req, res) => {
+  const apiKey = process.env.CLOCKIFY_API_KEY;
+  if (!apiKey) return res.json({ connected: false, error: 'CLOCKIFY_API_KEY not set in environment variables' });
+  try {
+    const r = await fetch('https://api.clockify.me/api/v1/workspaces', { headers: { 'X-Api-Key': apiKey } });
+    if (!r.ok) return res.json({ connected: false, error: 'Invalid API key' });
+    const ws = await r.json();
+    res.json({ connected: true, workspace: ws[0]?.name || 'Unknown' });
+  } catch(e) { res.json({ connected: false, error: e.message }); }
+});
+
+app.get('/clockify/summary', async (req, res) => {
+  const apiKey = process.env.CLOCKIFY_API_KEY;
+  if (!apiKey) return res.status(400).json({ error: 'CLOCKIFY_API_KEY not set' });
+  try {
+    // Get workspace
+    const wsRes = await fetch('https://api.clockify.me/api/v1/workspaces', { headers: { 'X-Api-Key': apiKey } });
+    const workspaces = await wsRes.json();
+    const wsId = workspaces[0]?.id;
+    if (!wsId) throw new Error('No Clockify workspace found');
+
+    // Get users and projects in parallel
+    const [usersRes, projectsRes] = await Promise.all([
+      fetch(`https://api.clockify.me/api/v1/workspaces/${wsId}/users?page-size=50`, { headers: { 'X-Api-Key': apiKey } }),
+      fetch(`https://api.clockify.me/api/v1/workspaces/${wsId}/projects?page-size=100&archived=false`, { headers: { 'X-Api-Key': apiKey } })
+    ]);
+    const users = await usersRes.json();
+    const projects = await projectsRes.json();
+
+    // Build project name lookup
+    const projectMap = {};
+    (Array.isArray(projects) ? projects : []).forEach(p => { projectMap[p.id] = p.name; });
+
+    const { start, end } = getWeekBounds();
+
+    // Fetch time entries for each user
+    const summary = [];
+    for (const user of (Array.isArray(users) ? users : [])) {
+      const entriesRes = await fetch(
+        `https://api.clockify.me/api/v1/workspaces/${wsId}/user/${user.id}/time-entries?start=${start}&end=${end}&page-size=200`,
+        { headers: { 'X-Api-Key': apiKey } }
+      );
+      const entries = await entriesRes.json();
+
+      const byProject = {};
+      let totalHours = 0;
+
+      for (const entry of (Array.isArray(entries) ? entries : [])) {
+        const pName = projectMap[entry.projectId] || 'General';
+        const desc = (entry.description || '').trim();
+        const hrs = parseCfDuration(entry.timeInterval?.duration);
+        totalHours += hrs;
+        if (!byProject[pName]) byProject[pName] = { hours: 0, tasks: [] };
+        byProject[pName].hours += hrs;
+        if (desc && !byProject[pName].tasks.includes(desc)) byProject[pName].tasks.push(desc);
+      }
+
+      // Round project hours
+      Object.keys(byProject).forEach(k => {
+        byProject[k].hours = Math.round(byProject[k].hours * 10) / 10;
+      });
+
+      summary.push({
+        name: user.name,
+        email: (user.email || '').toLowerCase(),
+        totalHours: Math.round(totalHours * 10) / 10,
+        projects: byProject
+      });
+    }
+
+    // Cross-reference with check-ins
+    const checkIns = loadCheckIns();
+    const weekEnd = getWeekBounds().start.split('T')[0];
+    // Find most recent check-in for each person
+    const recentCI = {};
+    checkIns.forEach(ci => {
+      const key = (ci.name || '').toLowerCase();
+      if (!recentCI[key] || new Date(ci.submitted) > new Date(recentCI[key].submitted)) {
+        recentCI[key] = ci;
+      }
+    });
+
+    // Attach check-in data and flag inconsistencies
+    const FULL_WEEK_HOURS = 37.5;
+    summary.forEach(person => {
+      const firstName = person.name.split(' ')[0].toLowerCase();
+      const ciKey = Object.keys(recentCI).find(k => k.includes(firstName) || firstName.includes(k.split(' ')[0]));
+      const ci = ciKey ? recentCI[ciKey] : null;
+
+      person.checkIn = ci ? {
+        capacity: ci.capacity,
+        projects: ci.projects,
+        blockers: ci.blockers,
+        weekEnding: ci.weekEnding
+      } : null;
+
+      // Flag inconsistencies
+      person.flags = [];
+      if (ci && person.totalHours > 0) {
+        const impliedCapacity = Math.round((person.totalHours / FULL_WEEK_HOURS) * 100);
+        const reportedCapacity = ci.capacity || 0;
+        const gap = Math.abs(impliedCapacity - reportedCapacity);
+
+        if (gap >= 25) {
+          person.flags.push({
+            type: 'capacity_mismatch',
+            severity: gap >= 40 ? 'high' : 'medium',
+            message: `Logged ${person.totalHours}h this week (implies ~${impliedCapacity}% capacity) but reported ${reportedCapacity}% in check-in — ${gap}% gap`
+          });
+        }
+        if (person.totalHours < 5 && reportedCapacity > 50) {
+          person.flags.push({
+            type: 'low_hours',
+            severity: 'medium',
+            message: `Only ${person.totalHours}h logged this week but reported ${reportedCapacity}% capacity — may not be tracking time`
+          });
+        }
+
+        // Check project alignment
+        const ciProjects = (ci.projects || '').toLowerCase();
+        const clockifyProjects = Object.keys(person.projects).map(p => p.toLowerCase());
+        if (ciProjects && clockifyProjects.length > 0) {
+          const ciProjectList = ciProjects.split(/[,;\/]/).map(p => p.trim()).filter(Boolean);
+          const noMatch = ciProjectList.filter(cp =>
+            !clockifyProjects.some(cfp => cfp.includes(cp.substring(0,5)) || cp.substring(0,5).includes(cfp.substring(0,3)))
+          );
+          if (noMatch.length > 0 && noMatch.length >= ciProjectList.length * 0.5) {
+            person.flags.push({
+              type: 'project_mismatch',
+              severity: 'low',
+              message: `Check-in mentions "${noMatch.join(', ')}" but no matching Clockify projects found this week`
+            });
+          }
+        }
+      } else if (ci && person.totalHours === 0) {
+        person.flags.push({
+          type: 'no_time_logged',
+          severity: 'medium',
+          message: `No time logged in Clockify this week but submitted check-in at ${ci.capacity}% capacity`
+        });
+      }
+    });
+
+    res.json({ summary, weekStart: start, workspaceId: wsId });
   } catch(e) {
+    console.error('Clockify error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
