@@ -480,7 +480,6 @@ app.get('/monday/projects', async (req, res) => {
             state
             column_values {
               id
-              title
               text
               value
             }
