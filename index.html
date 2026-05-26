@@ -2800,7 +2800,6 @@ checkM365Connection();
 setInterval(loadM365Data,45*60*1000);
 try{renderStaff();}catch(e){console.warn('renderStaff:',e.message);}
 try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
-try{renderSkillsMatrix();}catch(e){console.warn('renderSkillsMatrix:',e.message);}
 try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
 
 let DM={name:'',email:'',subject:'',context:'',mode:'email'};
