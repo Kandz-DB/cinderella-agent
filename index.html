@@ -2622,7 +2622,7 @@ function renderMonthSummary() {
 
     ? Promise.resolve(window._allCheckIns)
 
-    : fetch('/jsonbin/latest)
+    : fetch('/jsonbin/latest')
 
         .then(function(r){ return r.json(); })
 
@@ -2916,7 +2916,7 @@ function renderHistory() {
 
     ? Promise.resolve(window._allCheckIns)
 
-    : fetch('/jsonbin/latest)
+    : fetch('/jsonbin/latest')
 
         .then(function(r){ return r.json(); })
 
@@ -4850,7 +4850,7 @@ async function send(){
 
       if (!allCI) {
 
-        var hRes = await fetch('/jsonbin/latest);
+        var hRes = await fetch('/jsonbin/latest');
 
         var hData = await hRes.json();
 
@@ -5544,7 +5544,7 @@ async function deleteCheckIn(name, weekEnding) {
 
   try {
 
-    const r = await fetch('/jsonbin/latest);
+    const r = await fetch('/jsonbin/latest');
 
     const d = await r.json();
 
@@ -5554,7 +5554,7 @@ async function deleteCheckIn(name, weekEnding) {
 
     });
 
-    const put = await fetch('/jsonbin/update, {
+    const put = await fetch('/jsonbin/update', {
 
       method: 'PUT',
 
