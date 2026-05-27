@@ -518,12 +518,14 @@ app.get('/monday/feedback', async (req, res) => {
     const query = `{
       boards(ids: [2031906973]) {
         name
-        items_page(limit: 50) {
+        items_page(limit: 100) {
           items {
             id
             name
             column_values {
+              id
               text
+              value
             }
           }
         }
