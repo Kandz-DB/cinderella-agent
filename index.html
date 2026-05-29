@@ -4352,7 +4352,7 @@ function sendAllReminders() {
 
   var names = missing.map(function(s){ return s.name.split(' ')[0]; }).join(', ');
 
-  var emailBody = 'Hi team,\n\nI hope you are all having a great week so far!\n\nThis is a reminder to please submit your weekly check-in if you haven\'t already. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent.onrender.com/checkin\n\nThanks so much!\n\nKandia';
+  var emailBody = 'Hi team,\n\nI hope you are all having a great week so far!\n\nThis is a reminder to please submit your weekly check-in if you haven\'t already. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin\n\nThanks so much!\n\nKandia';
 
   closeModal();
 
@@ -5954,7 +5954,7 @@ function openDraftModal(name,context,subject,defaultTab,emailAddress){
 
     if(context && (context.startsWith('Hi ') || context.startsWith('Dear '))) {
 
-      showDraftResult(context);
+      showDraftResult(DM.name, DM.subject, context);
 
     } else {
 
