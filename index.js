@@ -107,7 +107,7 @@ app.get('/logout', (req, res) => {
 
 // Auth middleware — protect everything except /login
 function requireAuth(req, res, next) {
-  if (req.path === '/login' || req.path === '/logout' || req.path === '/checkin') return next();
+  if (req.path === '/login' || req.path === '/logout' || req.path === '/checkin' || req.path === '/checkins/submit') return next();
   const cookie = req.headers.cookie || '';
   const match = cookie.match(/cin_session=([^;]+)/);
   if (match && activeSessions.has(match[1])) return next();
