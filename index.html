@@ -6002,12 +6002,42 @@ async function loadOpenActions(force) {
   var el = document.getElementById('openActionsList');
   if (!el) return;
   if (_openActionsCache && !force) { renderOpenActions(_openActionsCache); return; }
+
+  // Don't call AI if no data to scan — saves API credits
+  var hasEmails = M365.emails.length > 0 || (infoEmails||[]).length > 0 || (M365.teams||[]).length > 0;
+  var hasDocs = docLibrary.length > 0;
+  if (!hasEmails && !hasDocs) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Open Actions scans your live M365 emails and uploaded documents. ' +
+      'M365 emails may still be loading — click Refresh in a moment, or ' +
+      '<button onclick="loadM365Data().then(function(){loadOpenActions(true);})" style="background:none;border:none;color:var(--b);cursor:pointer;font-family:var(--f);font-size:11px;padding:0;text-decoration:underline">reload emails and scan</button>.</div>';
+    return;
+  }
+
   el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Cinderella is scanning emails and documents...</div>';
   try {
     var emailSummary = M365.emails.slice(0,20).map(function(e){ return e.from+' ('+e.hoursOld+'h ago): '+e.subject; }).join('\n') || 'No emails loaded';
     var infoSummary = (infoEmails||[]).slice(0,10).map(function(e){ return '[info@] '+e.from+': '+e.subject; }).join('\n');
+    var _teamNames = ['janita','reinette','diane','ross','dave','cherry','garima'];
+    var _twoDaysAgo = Date.now() - (2 * 24 * 60 * 60 * 1000);
+    var _actionKeywords = ['action','follow up','follow-up','can you','could you','please','need','deadline','urgent','asap','send','review','approve','sign','confirm','update','let me know','waiting','overdue','by when','when can','schedule','book','organise','organize','meeting','call','report','complete','finish','check','invoice','payment','contract','document','policy','iso','audit'];
+    var teamsSummary = (M365.teams||[]).filter(function(t){
+      // Only chats with the specified team members
+      var topic = (t.topic||'').toLowerCase();
+      var from = (t.from||'').toLowerCase();
+      var nameMatch = _teamNames.some(function(n){ return topic.includes(n) || from.includes(n); });
+      if (!nameMatch) return false;
+      // Only messages from last 2 days
+      if (t.time && new Date(t.time).getTime() < _twoDaysAgo) return false;
+      // Only messages that look action-relevant
+      var msg = (t.lastMessage||'').toLowerCase();
+      return _actionKeywords.some(function(k){ return msg.includes(k); });
+    }).slice(0,10).map(function(t){
+      var hoursAgo = t.time ? Math.round((Date.now()-new Date(t.time).getTime())/3600000) : '?';
+      return '[Teams '+hoursAgo+'h ago] '+t.from+' in "'+t.topic+'": '+(t.lastMessage||'').substring(0,150);
+    }).join('\n');
     var docSummary = docLibrary.map(function(d){ return d.name; }).join(', ') || 'No documents uploaded';
-    var prompt = 'You are Cinderella, COO assistant for Risk 2 Solution. Based on the emails and documents below, identify the real open action items Kandia needs to address. Focus on: insurance renewals, contract deadlines, compliance tasks, approvals pending, outstanding responses, invoices, HR items, audit prep, client onboarding actions. Assign urgency: Urgent (overdue or due this week), This week, Next week. Return ONLY a JSON array, no markdown:\n[{"urgency":"Urgent","task":"one-line description","source":"email or doc name","prompt":"a question Kandia can ask Cinderella for help with this"}]\n\nReturn 5-8 actions maximum.\n\nEMAILS:\n'+emailSummary+'\n\n'+infoSummary+'\n\nDOCUMENTS:\n'+docSummary;
+    var hasTeams = teamsSummary.trim().length > 0;
+    var prompt = 'You are Cinderella, COO assistant for Risk 2 Solution. Based on the emails, Teams messages and documents below, identify the real open action items Kandia needs to address. Focus on: tasks mentioned in Teams, requests awaiting response, insurance renewals, contract deadlines, compliance tasks, approvals pending, outstanding responses, invoices, HR items, audit prep, client onboarding actions. Assign urgency: Urgent (overdue or due this week), This week, Next week. Return ONLY a JSON array, no markdown:\n[{"urgency":"Urgent","task":"one-line description","source":"email, Teams, or doc name","prompt":"a question Kandia can ask Cinderella for help with this"}]\n\nReturn 5-8 actions maximum.\n\nEMAILS:\n'+emailSummary+'\n\n'+infoSummary+(hasTeams?'\n\nTEAMS CHATS:\n'+teamsSummary:'')+'\n\nDOCUMENTS:\n'+docSummary;
     var r = await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,system:'You are a COO executive assistant. Return only valid JSON arrays, no markdown, no commentary.',messages:[{role:'user',content:prompt}]})});
     var d = await r.json();
     var text = d.content&&d.content[0]?d.content[0].text:'[]';
