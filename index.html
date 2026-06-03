@@ -4545,6 +4545,14 @@ function show(id,btn){
 
   if(id==='chat'&&!briefingDone){briefingDone=true;} // briefing now on-demand only
 
+  // Load live data when COO tab opens
+  if(id==='coo'){
+    loadOpenActions(false);
+    loadR2SMetrics();
+  }
+
+  if(id==='clockify') loadClockify();
+
 }
 
 async function autoBriefing(){
@@ -5987,6 +5995,220 @@ async function renderSkillsMatrix(){
   el.innerHTML=html;
 
 }
+
+// ── OPEN ACTIONS ──
+var _openActionsCache = null;
+async function loadOpenActions(force) {
+  var el = document.getElementById('openActionsList');
+  if (!el) return;
+  if (_openActionsCache && !force) { renderOpenActions(_openActionsCache); return; }
+  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Cinderella is scanning emails and documents...</div>';
+  try {
+    var emailSummary = M365.emails.slice(0,20).map(function(e){ return e.from+' ('+e.hoursOld+'h ago): '+e.subject; }).join('\n') || 'No emails loaded';
+    var infoSummary = (infoEmails||[]).slice(0,10).map(function(e){ return '[info@] '+e.from+': '+e.subject; }).join('\n');
+    var docSummary = docLibrary.map(function(d){ return d.name; }).join(', ') || 'No documents uploaded';
+    var prompt = 'You are Cinderella, COO assistant for Risk 2 Solution. Based on the emails and documents below, identify the real open action items Kandia needs to address. Focus on: insurance renewals, contract deadlines, compliance tasks, approvals pending, outstanding responses, invoices, HR items, audit prep, client onboarding actions. Assign urgency: Urgent (overdue or due this week), This week, Next week. Return ONLY a JSON array, no markdown:\n[{"urgency":"Urgent","task":"one-line description","source":"email or doc name","prompt":"a question Kandia can ask Cinderella for help with this"}]\n\nReturn 5-8 actions maximum.\n\nEMAILS:\n'+emailSummary+'\n\n'+infoSummary+'\n\nDOCUMENTS:\n'+docSummary;
+    var r = await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,system:'You are a COO executive assistant. Return only valid JSON arrays, no markdown, no commentary.',messages:[{role:'user',content:prompt}]})});
+    var d = await r.json();
+    var text = d.content&&d.content[0]?d.content[0].text:'[]';
+    var actions = JSON.parse(text.replace(/```json|```/g,'').trim());
+    _openActionsCache = actions;
+    renderOpenActions(actions);
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Could not load actions: '+e.message+'. <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
+  }
+}
+
+function renderOpenActions(actions) {
+  var el = document.getElementById('openActionsList');
+  if (!el) return;
+  if (!actions||actions.length===0) { el.innerHTML='<div style="font-size:11px;color:var(--t3);padding:8px 0">No open actions identified. Connect M365 or upload documents for live scanning.</div>'; return; }
+  el.innerHTML = actions.map(function(a) {
+    var cls = a.urgency==='Urgent'?'ph':a.urgency==='This week'?'pm':'pl';
+    var src = a.source?'<span style="font-size:9px;color:var(--t3);margin-left:4px">· '+a.source+'</span>':'';
+    var prompt = (a.prompt||'Help me with: '+a.task).replace(/'/g,"&#39;");
+    return '<div class="pri" onclick="qa(\''+prompt+'\')"><span class="pp '+cls+'">'+a.urgency+'</span><span class="pt">'+a.task+src+'</span></div>';
+  }).join('');
+}
+
+// ── R2S METRICS ──
+async function loadR2SMetrics() {
+  var el = document.getElementById('r2sMetricsList');
+  if (!el) return;
+  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Loading live data...</div>';
+  var html = '';
+  try {
+    var now = new Date();
+    var thisMonth = now.getMonth();
+    var thisYear = now.getFullYear();
+
+    function col(cols,id){ var c=cols.find(function(cv){return cv.id===id;}); return c?(c.text||''):''; }
+    function parseDate(str){
+      if(!str||str.trim()==='') return null;
+      var d=new Date(str); if(isNaN(d)) return null;
+      return {label:d.toLocaleDateString('en-AU',{day:'numeric',month:'short'}),isDueThisMonth:d.getMonth()===thisMonth&&d.getFullYear()===thisYear,isOverdue:d<now&&!(d.getMonth()===thisMonth&&d.getFullYear()===thisYear)};
+    }
+    function statusPct(s){ s=(s||'').toLowerCase(); if(s.match(/done|complet|deliver/)) return 100; if(s.match(/review|final|sign off/)) return 80; if(s.match(/progress|active|ongoing/)) return 55; if(s.includes('hold')) return 30; if(s.match(/plan|brief|scop|kick/)) return 15; return 40; }
+    function pctColour(p){ return p>=80?'var(--g)':p>=40?'var(--b)':p>=20?'var(--a)':'var(--r)'; }
+    function dateTag(d,label){
+      if(!d) return '';
+      if(d.isOverdue) return '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--rl);color:#A32D2D;margin-right:3px">⚠ '+label+' overdue '+d.label+'</span>';
+      if(d.isDueThisMonth) return '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--al);color:#854F0B;margin-right:3px">⚡ '+label+' '+d.label+'</span>';
+      return '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--bg3);color:var(--t3);margin-right:3px">'+label+' '+d.label+'</span>';
+    }
+
+    // Monday.com projects
+    var r = await fetch('/monday/projects');
+    var d = await r.json();
+    if (!d.error && d.boards && d.boards.length > 0) {
+      var projectBoard = d.boards.find(function(b){ return b.name.toLowerCase().includes('client project'); });
+      if (projectBoard && projectBoard.items.length > 0) {
+        var projects = projectBoard.items.map(function(item){
+          var cols=item.column_values||[];
+          var status=col(cols,'color_mks0pnz5'), projDesc=col(cols,'text__1'), contact=col(cols,'text8__1');
+          var email=col(cols,'client_contact_email__1'), due=parseDate(col(cols,'date4'));
+          var value=col(cols,'numbers9__1'), blockers=col(cols,'long_text8__1');
+          var domain=(email.split('@')[1]||'').split('.')[0];
+          var company=domain?(domain.length<=5?domain.toUpperCase():domain.charAt(0).toUpperCase()+domain.slice(1)):item.name;
+          var pct=statusPct(status);
+          if((status||'').toLowerCase().match(/done|complet|deliver|closed/)) return null;
+          return {company:company,project:projDesc||item.name,contact:contact,status:status,pct:pct,due:due,value:value,blockers:blockers};
+        }).filter(Boolean);
+        html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Client projects · '+projects.length+' active</div>';
+        html += projects.map(function(p){
+          var dueT=dateTag(p.due,'Due');
+          var valTag=p.value?'<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--gl);color:#0F6E56;margin-right:3px">$'+Number(p.value).toLocaleString()+'</span>':'';
+          var blockTag=p.blockers?'<div style="font-size:9px;color:var(--r);margin-top:3px">⚠ '+p.blockers.substring(0,80)+'</div>':'';
+          var prompt='Tell me about the '+p.company+' project — current status, blockers, and what actions I need to take';
+          return '<div style="padding:8px 0;border-bottom:0.5px solid var(--bl);cursor:pointer" onclick="qa(\''+prompt.replace(/'/g,"&#39;")+'\')">'+
+            '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px">'+
+              '<div><div style="font-size:12px;font-weight:600;color:var(--t1)">'+p.company+'</div>'+
+              '<div style="font-size:10px;color:var(--t2);margin-top:1px">'+p.project+(p.contact?' · '+p.contact:'')+'</div></div>'+
+              '<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--bg3);color:var(--t2);white-space:nowrap;flex-shrink:0">'+(p.status||'Active')+'</span>'+
+            '</div>'+
+            '<div style="display:flex;align-items:center;gap:4px;margin-bottom:4px">'+
+              '<div style="flex:1;background:var(--bg3);border-radius:3px;height:5px"><div style="width:'+p.pct+'%;height:100%;border-radius:3px;background:'+pctColour(p.pct)+'"></div></div>'+
+              '<span style="font-size:9px;color:var(--t3);min-width:28px;text-align:right">'+p.pct+'%</span>'+
+            '</div>'+
+            (dueT||valTag?'<div style="margin-top:2px">'+dueT+valTag+'</div>':'')+blockTag+
+          '</div>';
+        }).join('');
+      } else {
+        html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">No active client projects found on Monday.com.</div>';
+      }
+    } else {
+      html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">Monday.com not connected — <span style="color:var(--b);cursor:pointer" onclick="qa(\'What is the current client project status at Risk 2 Solution?\')">ask Cinderella</span></div>';
+    }
+
+    // Compliance from emails
+    var complianceKeywords = ['insurance','renewal','audit','compliance','iso','expir','certificate','licence','license','policy','indemnity'];
+    var complianceItems = [];
+    M365.emails.concat(infoEmails||[]).forEach(function(e){ var t=((e.subject||'')+' '+(e.from||'')).toLowerCase(); if(complianceKeywords.some(function(k){return t.includes(k);})) complianceItems.push(e.subject); });
+    docLibrary.forEach(function(d){ if(complianceKeywords.some(function(k){return d.name.toLowerCase().includes(k);})) complianceItems.push(d.name); });
+    html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px">Compliance · emails &amp; documents</div>';
+    if (complianceItems.length > 0) {
+      html += '<div class="ins" onclick="qa(\'Review my compliance and insurance items and tell me what actions I need to take: '+complianceItems.slice(0,3).join(', ').replace(/\'/g,'')+'\')"><div class="il">'+complianceItems.length+' item'+(complianceItems.length>1?'s':'')+' detected</div><div class="it">'+complianceItems.slice(0,3).join(' · ')+'</div></div>';
+    } else {
+      html += '<div class="ins"><div class="il">No compliance items detected</div><div class="it" style="color:var(--t3)">Upload insurance or audit documents to track them here</div></div>';
+    }
+
+    // Staff capacity
+    var overloaded = SD.filter(function(s){ return s.capacity>=85; });
+    html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px">Staff capacity</div>';
+    if (SD.length > 0) {
+      var capText = 'Avg capacity: '+Math.round(SD.reduce(function(a,b){return a+b.capacity;},0)/SD.length)+'%';
+      if (overloaded.length > 0) capText += ' · '+overloaded.length+' overloaded';
+      html += '<div class="ins" onclick="qa(\'Give me a staff capacity analysis and recommend workload adjustments\')"><div class="il">From check-ins</div><div class="it">'+capText+'</div></div>';
+    } else {
+      html += '<div class="ins"><div class="il">Staff capacity</div><div class="it" style="color:var(--t3)">No check-ins synced yet</div></div>';
+    }
+
+  } catch(e) {
+    html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">Error loading metrics: '+e.message+'</div>';
+  }
+
+  el.innerHTML = html || '<div style="font-size:11px;color:var(--t3);padding:8px 0">No live data available.</div>';
+}
+
+// ── CLOCKIFY ──
+var clockifyData = null;
+async function loadClockify() {
+  var listEl=document.getElementById('clockifyStaffList'),flagsEl=document.getElementById('clockifyFlagsList'),statusEl=document.getElementById('clockifyConnStatus'),alertEl=document.getElementById('clockifyAlert');
+  if(listEl) listEl.innerHTML='<div style="font-size:12px;color:var(--t2);padding:12px 0">Loading Clockify data...</div>';
+  try {
+    var sr=await fetch('/clockify/status');
+    if(!sr.ok) throw new Error('Server returned '+sr.status);
+    var sd=await sr.json();
+    if(!sd.connected){
+      if(statusEl) statusEl.innerHTML='<span style="color:var(--r)">Not connected</span>';
+      if(alertEl){alertEl.style.display='block';alertEl.innerHTML='<div class="alert-box warn"><div class="ab-title">Clockify not connected</div><div class="ab-text">Add <strong>CLOCKIFY_API_KEY</strong> to Azure App Service → Configuration → Application Settings. <a href="https://app.clockify.me/user/settings" target="_blank" style="color:var(--b)">Get your API key →</a></div></div>';}
+      if(listEl) listEl.innerHTML='<div style="font-size:12px;color:var(--t3);padding:12px 0">Connect Clockify to see time tracking data.</div>';
+      return;
+    }
+    if(statusEl) statusEl.innerHTML='<span style="color:var(--g)">✓ Connected · '+sd.workspace+'</span>';
+    if(alertEl) alertEl.style.display='none';
+  } catch(e){ if(statusEl) statusEl.innerHTML='<span style="color:var(--r)">Connection error</span>'; return; }
+  try {
+    var r=await fetch('/clockify/summary');
+    if(!r.ok) throw new Error('Server returned '+r.status);
+    var d=await r.json(); if(d.error) throw new Error(d.error);
+    clockifyData=d;
+    var totalHours=d.summary.reduce(function(a,b){return a+b.totalHours;},0);
+    var totalFlags=d.summary.reduce(function(a,b){return a+(b.flags||[]).length;},0);
+    var el1=document.getElementById('cf-total-hours'),el2=document.getElementById('cf-flags'),el3=document.getElementById('cf-staff-count');
+    if(el1) el1.textContent=Math.round(totalHours*10)/10+'h';
+    if(el2){el2.textContent=totalFlags;el2.style.color=totalFlags>0?'var(--r)':'var(--g)';}
+    if(el3) el3.textContent=d.summary.filter(function(s){return s.totalHours>0;}).length;
+    var badge=document.getElementById('clockifyBadge');
+    if(badge){badge.style.display=totalFlags>0?'inline-block':'none';badge.textContent=totalFlags;}
+    if(listEl){
+      var wkLabel=d.weekStart?new Date(d.weekStart).toLocaleDateString('en-AU',{day:'numeric',month:'short'})+' →':'This week';
+      listEl.innerHTML=d.summary.map(function(person,i){
+        var av=['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
+        var ini=person.name.split(' ').map(function(w){return w[0]||'';}).join('').substring(0,2).toUpperCase();
+        var ci=person.checkIn;
+        var ciBar=ci?('<div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span style="font-size:9px;color:var(--t3);min-width:80px">Reported cap</span><div style="flex:1;background:var(--bg3);border-radius:3px;height:4px"><div style="width:'+ci.capacity+'%;height:100%;border-radius:3px;background:'+(ci.capacity>=85?'var(--r)':ci.capacity>=70?'var(--a)':'var(--g)')+'"></div></div><span style="font-size:9px;font-weight:500;color:var(--t2)">'+ci.capacity+'%</span></div>'):'';
+        var impliedPct=person.totalHours>0?Math.min(100,Math.round((person.totalHours/37.5)*100)):0;
+        var cfBar='<div style="display:flex;align-items:center;gap:6px;margin-top:3px"><span style="font-size:9px;color:var(--t3);min-width:80px">Clockify logged</span><div style="flex:1;background:var(--bg3);border-radius:3px;height:4px"><div style="width:'+impliedPct+'%;height:100%;border-radius:3px;background:var(--b)"></div></div><span style="font-size:9px;font-weight:500;color:var(--b)">'+person.totalHours+'h</span></div>';
+        var projects=Object.keys(person.projects).map(function(p){return '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--bg3);color:var(--t2);margin:1px 2px 1px 0;display:inline-block">'+p+' '+person.projects[p].hours+'h</span>';}).join('');
+        var flagCount=(person.flags||[]).length;
+        var flagBadge=flagCount>0?'<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--rl);color:#A32D2D;margin-left:6px">'+flagCount+' flag'+(flagCount>1?'s':'')+'</span>':'';
+        return '<div style="padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer" onclick="analyseStaffClockify(\''+person.name+'\')">'+
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'+
+            '<div style="width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;flex-shrink:0;'+av[i%av.length]+'">'+ini+'</div>'+
+            '<span style="font-size:12px;font-weight:500;color:var(--t1)">'+person.name.split(' ')[0]+'</span>'+flagBadge+
+            '<span style="font-size:10px;color:var(--t3);margin-left:auto">'+wkLabel+'</span>'+
+          '</div>'+cfBar+ciBar+(projects?'<div style="margin-top:5px">'+projects+'</div>':'')+
+        '</div>';
+      }).join('')||'<div style="font-size:12px;color:var(--t3);padding:12px 0">No time entries found this week.</div>';
+    }
+    var allFlags=[];
+    d.summary.forEach(function(person){(person.flags||[]).forEach(function(f){allFlags.push({person:person.name,flag:f});});});
+    if(flagsEl){
+      flagsEl.innerHTML=allFlags.length===0?'<div style="font-size:12px;color:var(--g);padding:8px 0">✓ No inconsistencies detected this week.</div>':
+        allFlags.map(function(item){var sev=item.flag.severity==='high'?'ph':item.flag.severity==='medium'?'pm':'pl';return '<div class="pri" onclick="analyseStaffClockify(\''+item.person+'\')"><span class="pp '+sev+'">'+(item.flag.severity==='high'?'High':item.flag.severity==='medium'?'Med':'Low')+'</span><span class="pt"><strong>'+item.person.split(' ')[0]+'</strong> — '+item.flag.message+'</span></div>';}).join('');
+    }
+  } catch(e){ if(listEl) listEl.innerHTML='<div style="font-size:12px;color:var(--r);padding:12px 0">Error: '+e.message+'</div>'; }
+}
+
+function analyseStaffClockify(name) {
+  if(!clockifyData){qa('Analyse the Clockify time tracking data for '+name+' and compare it against their check-in data.');return;}
+  var person=clockifyData.summary.find(function(p){return p.name===name;});
+  if(!person) return;
+  var ctx='CLOCKIFY DATA FOR '+name.toUpperCase()+' (this week):\nTotal hours: '+person.totalHours+'h\n';
+  Object.keys(person.projects).forEach(function(p){ctx+='- '+p+': '+person.projects[p].hours+'h\n';});
+  if(person.checkIn) ctx+='\nCHECK-IN: Capacity '+person.checkIn.capacity+'% | Projects: '+(person.checkIn.projects||'none')+' | Blockers: '+(person.checkIn.blockers||'none')+'\n';
+  if(person.flags&&person.flags.length>0) ctx+='\nFLAGS:\n'+person.flags.map(function(f){return '- '+f.message;}).join('\n');
+  qa('Analyse this Clockify vs check-in data for '+name+' — are they aligned? What should I follow up on?\n\n'+ctx);
+}
+
+function analyseClockify() {
+  if(!clockifyData||!clockifyData.summary){qa('Analyse the Clockify time tracking data for all staff this week. Cross-reference with check-ins and flag inconsistencies.');return;}
+  var ctx='CLOCKIFY WEEKLY SUMMARY:\n\n';
+  clockifyData.summary.forEach(function(p){ctx+=p.name+': '+p.totalHours+'h logged'+(p.checkIn?' | check-in: '+p.checkIn.capacity+'%':'')+'\n';});
+  qa('Analyse this Clockify data for all staff — flag inconsistencies with check-ins and who I should follow up with.\n\n'+ctx.substring(0,3000));
+}
+
 
 // ── CHAT FILE ATTACHMENTS ──
 var chatAttachments = []; // {name, type, mimeType, content, base64, size}
