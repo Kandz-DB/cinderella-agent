@@ -1,24 +1,7 @@
 import express from "express";
 import crypto from "crypto";
-import { readFileSync, writeFileSync, existsSync, appendFileSync } from 'fs';
-
-
-// ── AZURE BLOB STORAGE (Documents) ──
-import { createRequire } from 'module';
-const _require = createRequire(import.meta.url);
-let BlobServiceClient;
-try { BlobServiceClient = _require('@azure/storage-blob').BlobServiceClient; } catch(e) { console.warn('azure-blob not installed — using local fallback'); }
-const BLOB_CONN = process.env.BLOB_CONNECTION_STRING;
-const BLOB_CONT = process.env.AZURE_STORAGE_CONTAINER || 'cinderella-data';
-const DOCS_LOCAL = '/home/documents/';
-
-async function getBlobContainer() {
-  if (!BlobServiceClient || !BLOB_CONN) return null;
-  const client = BlobServiceClient.fromConnectionString(BLOB_CONN);
-  const cc = client.getContainerClient(BLOB_CONT);
-  await cc.createIfNotExists();
-  return cc;
-}
+import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs';
+import { join as pathJoin } from 'path';
 
 // In-memory log of AI calls
 const aiCallLog = [];
@@ -676,50 +659,40 @@ app.post('/checkins/submit', (req, res) => {
 });
 
 
-// ── EMAIL: Create draft in Outlook Drafts folder ──
-app.post('/graph/email/draft', async (req, res) => {
+// ── AZURE BLOB STORAGE ──
+const BLOB_CONN = process.env.BLOB_CONNECTION_STRING;
+const BLOB_CONT = process.env.AZURE_STORAGE_CONTAINER || 'cinderella-data';
+const DOCS_LOCAL = '/home/documents/';
+
+async function getBlobContainer() {
+  if (!BLOB_CONN) return null;
   try {
-    const token = await getValidToken();
-    const { subject, body, to } = req.body;
-    const toRecipients = (Array.isArray(to) ? to : to.split(/[;,]/).map(e => e.trim()).filter(Boolean))
-      .map(email => ({ emailAddress: { address: email.trim() } }));
-    const response = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        subject,
-        body: { contentType: 'Text', content: body },
-        toRecipients
-      })
-    });
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
-    res.json({ success: true, id: data.id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const { BlobServiceClient } = await import('@azure/storage-blob');
+    const client = BlobServiceClient.fromConnectionString(BLOB_CONN);
+    const cc = client.getContainerClient(BLOB_CONT);
+    await cc.createIfNotExists();
+    return cc;
+  } catch(e) {
+    console.warn('Blob unavailable:', e.message);
+    return null;
   }
-});
+}
 
-
-// ── DOCUMENT LIBRARY (Azure Blob or local fallback) ──
-const multer = require('multer');
-const upload_mw = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20*1024*1024 } });
-
+// ── DOCUMENT LIBRARY ──
 app.get('/docs/list', requireAuth, async (req, res) => {
   try {
     const cc = await getBlobContainer();
     if (cc) {
       const docs = [];
-      for await (const b of cc.listBlobsFlat({ includeMetadata: true })) {
+      for await (const b of cc.listBlobsFlat()) {
         docs.push({ name: b.name, size: b.properties.contentLength, uploaded: b.properties.lastModified, type: b.properties.contentType || 'application/octet-stream' });
       }
       return res.json({ docs });
     }
     // Local fallback
-    const fs2 = require('fs'); const path2 = require('path');
-    if (!fs2.existsSync(DOCS_LOCAL)) return res.json({ docs: [] });
-    const files = fs2.readdirSync(DOCS_LOCAL).map(f => {
-      const s = fs2.statSync(path2.join(DOCS_LOCAL,f));
+    if (!existsSync(DOCS_LOCAL)) return res.json({ docs: [] });
+    const files = readdirSync(DOCS_LOCAL).map(f => {
+      const s = statSync(pathJoin(DOCS_LOCAL, f));
       return { name: f, size: s.size, uploaded: s.mtime };
     });
     res.json({ docs: files });
@@ -735,9 +708,8 @@ app.post('/docs/upload', requireAuth, express.raw({ type: '*/*', limit: '20mb' }
       const bc = cc.getBlockBlobClient(fname);
       await bc.uploadData(req.body, { blobHTTPHeaders: { blobContentType: ctype } });
     } else {
-      const fs2 = require('fs'); const path2 = require('path');
-      if (!fs2.existsSync(DOCS_LOCAL)) fs2.mkdirSync(DOCS_LOCAL, { recursive: true });
-      fs2.writeFileSync(path2.join(DOCS_LOCAL, fname), req.body);
+      if (!existsSync(DOCS_LOCAL)) mkdirSync(DOCS_LOCAL, { recursive: true });
+      writeFileSync(pathJoin(DOCS_LOCAL, fname), req.body);
     }
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -750,16 +722,12 @@ app.get('/docs/read/:name', requireAuth, async (req, res) => {
     let buf;
     if (cc) {
       const bc = cc.getBlockBlobClient(fname);
-      const dl = await bc.downloadToBuffer();
-      buf = dl;
+      buf = await bc.downloadToBuffer();
     } else {
-      const fs2 = require('fs'); const path2 = require('path');
-      buf = fs2.readFileSync(path2.join(DOCS_LOCAL, fname));
+      buf = readFileSync(pathJoin(DOCS_LOCAL, fname));
     }
-    // For text-based files, return as text; otherwise base64
-    const ctype = req.headers.accept || '';
     if (fname.match(/\.(txt|md|csv)$/i)) {
-      res.setHeader('Content-Type','text/plain'); res.send(buf.toString('utf8'));
+      res.setHeader('Content-Type', 'text/plain'); res.send(buf.toString('utf8'));
     } else {
       res.json({ data: buf.toString('base64'), name: fname });
     }
@@ -773,105 +741,114 @@ app.delete('/docs/:name', requireAuth, async (req, res) => {
     if (cc) {
       await cc.getBlockBlobClient(fname).delete();
     } else {
-      const fs2 = require('fs'); const path2 = require('path');
-      const fp = path2.join(DOCS_LOCAL, fname);
-      if (require('fs').existsSync(fp)) require('fs').unlinkSync(fp);
+      const fp = pathJoin(DOCS_LOCAL, fname);
+      if (existsSync(fp)) unlinkSync(fp);
     }
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── EMAIL DRAFT ──
+app.post('/graph/email/draft', async (req, res) => {
+  try {
+    const token = await getValidToken();
+    const { subject, body, to } = req.body;
+    const toRecipients = (Array.isArray(to) ? to : to.split(/[;,]/).map(e => e.trim()).filter(Boolean))
+      .map(email => ({ emailAddress: { address: email.trim() } }));
+    const response = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject, body: { contentType: 'Text', content: body }, toRecipients })
+    });
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    res.json({ success: true, id: data.id });
+  } catch(err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── REPORT GENERATION ──
 app.post('/generate/report', requireAuth, async (req, res) => {
   try {
     const { type, label } = req.body;
-    const monthDate = new Date(); monthDate.setMonth(monthDate.getMonth()-1);
-    const monthName = monthDate.toLocaleString('en-AU',{month:'long'}); const yr = monthDate.getFullYear();
-    let context = `REPORT TYPE: ${type}\nMONTH: ${monthName} ${yr}\n\n`;
+    const monthDate = new Date(); monthDate.setMonth(monthDate.getMonth() - 1);
+    const monthName = monthDate.toLocaleString('en-AU', { month: 'long' });
+    const yr = monthDate.getFullYear();
+    let context = `REPORT: ${label||type} | MONTH: ${monthName} ${yr}\n\n`;
 
-    // 1. Staff check-ins for last month
+    // Staff check-ins for last month
     try {
-      const raw = JSON.parse(fs.readFileSync('/home/checkins.json','utf8')||'[]');
+      const raw = JSON.parse(readFileSync('/home/checkins.json', 'utf8') || '[]');
       const mm = monthDate.getMonth(); const yy = monthDate.getFullYear();
-      const monthly = raw.filter(c=>{ if(!c.submitted) return false; const d=new Date(c.submitted); return d.getMonth()===mm&&d.getFullYear()===yy; });
+      const monthly = raw.filter(c => { if (!c.submitted) return false; const d = new Date(c.submitted); return d.getMonth()===mm && d.getFullYear()===yy; });
       if (monthly.length > 0) {
-        context += 'STAFF CHECK-INS ('+monthName+'):\n';
-        monthly.forEach(c=>{ context+=`- ${c.name}: ${c.capacity}% capacity | Projects: ${c.projects||'not stated'} | Blockers: ${c.blockers||'none'} | Focus: ${c.focus||'-'} | Support: ${c.support||'none needed'}\n`; });
+        context += `STAFF CHECK-INS (${monthName}):\n`;
+        monthly.forEach(c => { context += `- ${c.name}: ${c.capacity}% capacity | Projects: ${c.projects||'not stated'} | Blockers: ${c.blockers||'none'} | Focus: ${c.focus||'-'}\n`; });
         context += '\n';
       }
-    } catch(e){}
+    } catch(e) {}
 
-    // 2. Document library contents
+    // Document library
     try {
       const cc = await getBlobContainer();
       if (cc) {
-        const docNames = []; for await (const b of cc.listBlobsFlat()) docNames.push(b.name);
-        if (docNames.length) context += 'DOCUMENT LIBRARY: '+docNames.join(', ')+'\n\n';
+        const names = []; for await (const b of cc.listBlobsFlat()) names.push(b.name);
+        if (names.length) context += `DOCUMENTS IN LIBRARY: ${names.join(', ')}\n\n`;
       }
-    } catch(e){}
+    } catch(e) {}
 
-    // 3. Key emails from M365 (last month)
+    // Key emails from last month
     try {
       const token = await getValidToken();
       const since = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1).toISOString();
       const until = new Date(monthDate.getFullYear(), monthDate.getMonth()+1, 1).toISOString();
-      const emailData = await graphGet(`/me/messages?$top=30&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${until}&$select=subject,from,receivedDateTime,importance&$orderby=receivedDateTime desc`);
+      const emailData = await graphGet(`/me/messages?$top=30&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${until}&$select=subject,from,importance&$orderby=receivedDateTime desc`);
       if (emailData.value?.length) {
-        context += 'KEY EMAILS ('+monthName+'):\n';
-        emailData.value.forEach(e=>{ context+=`- ${e.from?.emailAddress?.name||'unknown'}: ${e.subject}${e.importance==='high'?' [IMPORTANT]':''}\n`; });
+        context += `KEY EMAILS (${monthName}):\n`;
+        emailData.value.forEach(e => { context += `- ${e.from?.emailAddress?.name||'unknown'}: ${e.subject}${e.importance==='high'?' [HIGH]':''}\n`; });
         context += '\n';
       }
-    } catch(e){}
+    } catch(e) {}
 
-    // 4. Generate report content with AI
     const sysPrompt = type==='board'
-      ? `You are Cinderella, executive assistant to Kandia Robertson (COO) of Risk 2 Solution, a SaaS platform company. Write a complete, professional COO board report for ${monthName} ${yr}. Use ALL data provided. Be specific with names and numbers. Do NOT use placeholder text. Format with clear HTML headings and bullet points. Include every section even if data is limited — use what you have and note gaps. Minimum 600 words.`
-      : `You are Cinderella, executive assistant to Kandia Robertson (COO) of Risk 2 Solution. Generate a complete professional ${label||type} document for ${monthName} ${yr} using the data provided. Format with HTML headings and structure. Be comprehensive and specific.`;
+      ? `You are Cinderella, executive assistant to Kandia Robertson (COO) of Risk 2 Solution. Write a complete professional COO board report for ${monthName} ${yr}. Use all data provided. Be specific. No placeholder text. Format with HTML headings and bullet lists. Write every section fully.`
+      : `You are Cinderella, executive assistant to Kandia Robertson (COO) of Risk 2 Solution. Generate a complete professional ${label||type} document for ${monthName} ${yr} using the data provided. Format with HTML structure. Be comprehensive.`;
 
     const userMsg = type==='board'
-      ? `Generate the COO board report for ${monthName} ${yr}. Use the data below. Structure:\n1. Executive Summary\n2. People & Culture (check-in data, capacity, blockers)\n3. Operations & Delivery\n4. Client Update\n5. Compliance & Risk\n6. Platform & Technology\n7. Financial Highlights\n8. Next Month Priorities\n\n${context}`
-      : `Generate a ${label||type} document using this data:\n\n${context}`;
+      ? `Generate the full COO board report for ${monthName} ${yr}. Sections: 1. Executive Summary 2. People & Culture 3. Operations & Delivery 4. Client Update 5. Compliance & Risk 6. Platform & Technology 7. Next Month Priorities\n\nDATA:\n${context}`
+      : `Generate a complete ${label||type} document.\n\nDATA:\n${context}`;
 
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method:'POST',
-      headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
-      body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:4000, system:sysPrompt, messages:[{role:'user',content:userMsg}] })
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 4000, system: sysPrompt, messages: [{ role: 'user', content: userMsg }] })
     });
     const aiData = await aiRes.json();
-    const reportContent = aiData.content?.[0]?.text || 'Unable to generate report content.';
+    const reportContent = aiData.content?.[0]?.text || 'Unable to generate report.';
 
-    // Build Word-compatible HTML document
     const docHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-<head><meta charset="utf-8"><title>${label||type} — ${monthName} ${yr}</title>
+<head><meta charset="utf-8"><title>${label||type}</title>
 <style>
-body{font-family:Arial,sans-serif;font-size:11pt;color:#111;margin:2cm 2.5cm;line-height:1.5}
-h1{font-size:18pt;color:#1F4E79;border-bottom:2pt solid #1F4E79;padding-bottom:4pt;margin-top:0}
-h2{font-size:14pt;color:#2E75B6;margin-top:16pt;margin-bottom:4pt}
-h3{font-size:12pt;color:#2E75B6;margin-top:12pt;margin-bottom:2pt}
+body{font-family:Arial,sans-serif;font-size:11pt;margin:2cm 2.5cm;line-height:1.5}
+h1{font-size:18pt;color:#1F4E79;border-bottom:2pt solid #1F4E79;padding-bottom:4pt}
+h2{font-size:14pt;color:#2E75B6;margin-top:16pt}
+h3{font-size:12pt;color:#2E75B6}
 .cover{text-align:center;margin-bottom:40pt;padding:20pt;border:1pt solid #2E75B6}
-.cover h1{border:none;font-size:22pt}
-.cover .sub{font-size:13pt;color:#555;margin-top:4pt}
-.cover .meta{font-size:10pt;color:#888;margin-top:8pt}
-table{border-collapse:collapse;width:100%;margin:8pt 0}
-td,th{border:0.5pt solid #CCC;padding:4pt 8pt;font-size:10pt}
+ul,ol{margin:4pt 0;padding-left:20pt}li{margin-bottom:3pt}
+table{border-collapse:collapse;width:100%}td,th{border:.5pt solid #CCC;padding:4pt 8pt}
 th{background:#EEF3F9;font-weight:bold}
-ul,ol{margin:4pt 0;padding-left:20pt}
-li{margin-bottom:2pt}
-.section{margin-bottom:16pt}
-p{margin:4pt 0}
 </style></head>
 <body>
 <div class="cover">
-<h1>${label||type.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</h1>
-<div class="sub">Risk 2 Solution</div>
-<div class="meta">Prepared by Cinderella AI | Kandia Robertson, COO | ${monthName} ${yr}</div>
+<h1>${label||type}</h1>
+<p style="font-size:13pt;color:#555">Risk 2 Solution</p>
+<p style="font-size:10pt;color:#888">Prepared by Cinderella AI &nbsp;|&nbsp; Kandia Robertson, COO &nbsp;|&nbsp; ${monthName} ${yr}</p>
 </div>
-${reportContent.replace(/\n/g,'<br>').replace(/#{1,3} (.+)/g,(m,t,i)=>`<h${i||2}>${t}</h${i||2}>`)}
+${reportContent}
 </body></html>`;
 
-    const filename = (label||type).replace(/[^a-z0-9]/gi,'-')+'-'+monthName+'-'+yr+'.doc';
+    const filename = `${(label||type).replace(/[^a-z0-9]/gi,'-')}-${monthName}-${yr}.doc`;
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Type','application/msword');
+    res.setHeader('Content-Type', 'application/msword');
     res.send(docHtml);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
