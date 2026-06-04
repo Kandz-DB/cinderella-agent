@@ -6019,7 +6019,19 @@ async function loadOpenActions(force) {
     var r = await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,system:'You are a COO executive assistant. Return only valid JSON arrays, no markdown, no commentary.',messages:[{role:'user',content:prompt}]})});
     var d = await r.json();
     var text = d.content&&d.content[0]?d.content[0].text:'[]';
-    var actions = JSON.parse(text.replace(/```json|```/g,'').trim());
+    var cleanText = text.replace(/```json|```/g,'').trim();
+    // Extract just the JSON array
+    var arrStart = cleanText.indexOf('[');
+    var arrEnd = cleanText.lastIndexOf(']');
+    if (arrStart !== -1 && arrEnd !== -1) cleanText = cleanText.substring(arrStart, arrEnd+1);
+    // Remove control characters that break JSON
+    cleanText = cleanText.replace(/[\x00-\x1F\x7F]/g, function(c){ return c === '\n' ? ' ' : ''; });
+    var actions = [];
+    try { actions = JSON.parse(cleanText); } catch(pe) {
+      // Try stripping trailing incomplete object
+      var lastComma = cleanText.lastIndexOf(',{');
+      if (lastComma > 0) { try { actions = JSON.parse(cleanText.substring(0,lastComma)+']'); } catch(e2){} }
+    }
     if (actions && actions.length > 0) _openActionsCache = actions;
     renderOpenActions(actions);
   } catch(e) {
@@ -6275,11 +6287,8 @@ function removeChatAttachment(idx) {
   renderChatAttachments();
 }
 
-</script>
 
-</body>
-
-</htmlasync function sendAllReminders() {
+async function sendAllReminders() {
   var checked = SD.map(function(s){ return s.name.toLowerCase(); });
   var missing = ALL_STAFF.filter(function(s){
     var first = s.name.split(' ')[0].toLowerCase();
@@ -6336,4 +6345,8 @@ function removeChatAttachment(idx) {
   }
 }
 
->
+</script>
+
+</body>
+
+</html>
