@@ -2193,6 +2193,13 @@ function replyToInfoEmail(idx) {
 
 function openOutlook(){ window.open('https://outlook.office.com/mail/inbox','_blank'); }
 
+
+function feedbackClick(i) {
+  var f = window._feedbackItems && window._feedbackItems[i];
+  if (!f) return;
+  qa('Draft a professional follow-up response to ' + f.client + ' regarding their feedback: ' + f.note);
+}
+
 function r2sProjectClick(i) {
   var p = window._r2sProjects && window._r2sProjects[i];
   if (!p) return;
@@ -6058,56 +6065,41 @@ async function loadR2SMetrics() {
       return '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--bg3);color:var(--t3);margin-right:3px">'+label+' '+d.label+'</span>';
     }
 
-    // Monday.com projects
+    // Client feedback from Monday.com — only actionable items
     try {
-      var mr = await fetch('/monday/projects');
-      if (!mr.ok) {
-        html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">Monday.com: server error ' + mr.status + (mr.status===401?' — try refreshing the page':'') + '</div>';
-      } else {
-        var d = await mr.json();
-        console.log('[R2S] Monday:', JSON.stringify(d).substring(0,200));
-        if (d.error) {
-          html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">Monday.com error: ' + (typeof d.error==='string'?d.error:JSON.stringify(d.error).substring(0,80)) + '</div>';
-        } else if (!d.boards || d.boards.length === 0) {
-          html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">Monday.com connected — no boards returned. Check board IDs in server.js.</div>';
-        } else {
-          var projectBoard = d.boards.find(function(b){ return b.items&&b.items.length>0; }) || d.boards[0];
-          html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Client projects · ' + d.boards.reduce(function(a,b){return a+(b.items?b.items.length:0);},0) + ' active</div>';
-          if (projectBoard && projectBoard.items && projectBoard.items.length > 0) {
-            var projects = projectBoard.items.map(function(item){
-              var cols=item.column_values||[];
-              var status=col(cols,'color_mks0pnz5'), projDesc=col(cols,'text__1'), contact=col(cols,'text8__1');
-              var email=col(cols,'client_contact_email__1'), due=parseDate(col(cols,'date4'));
-              var value=col(cols,'numbers9__1'), blockers=col(cols,'long_text8__1');
-              var domain=(email.split('@')[1]||'').split('.')[0];
-              var company=domain?(domain.length<=5?domain.toUpperCase():domain.charAt(0).toUpperCase()+domain.slice(1)):item.name;
-              var pct=statusPct(status);
-              if((status||'').toLowerCase().match(/done|complet|deliver|closed/)) return null;
-              return {company:company,project:projDesc||item.name,contact:contact,status:status,pct:pct,due:due,value:value,blockers:blockers};
-            }).filter(Boolean);
-            window._r2sProjects = projects;
-            html += projects.map(function(p, pi){
-              var dueT=dateTag(p.due,'Due');
-              var valTag=p.value?'<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--gl);color:#0F6E56;margin-right:3px">$'+Number(p.value).toLocaleString()+'</span>':'';
-              var blockTag=p.blockers?'<div style="font-size:9px;color:var(--r);margin-top:3px">&#9888; '+p.blockers.substring(0,80)+'</div>':'';
-              return '<div style="padding:8px 0;border-bottom:0.5px solid var(--bl);cursor:pointer" onclick="r2sProjectClick('+pi+')">'
-                +'<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px">'
-                  +'<div><div style="font-size:12px;font-weight:600;color:var(--t1)">'+p.company+'</div>'
-                  +'<div style="font-size:10px;color:var(--t2);margin-top:1px">'+p.project+(p.contact?' · '+p.contact:'')+'</div></div>'
-                  +'<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--bg3);color:var(--t2);white-space:nowrap;flex-shrink:0">'+(p.status||'Active')+'</span>'
-                +'</div>'
-                +'<div style="display:flex;align-items:center;gap:4px;margin-bottom:4px">'
-                  +'<div style="flex:1;background:var(--bg3);border-radius:3px;height:5px"><div style="width:'+p.pct+'%;height:100%;border-radius:3px;background:'+pctColour(p.pct)+'"></div></div>'
-                  +'<span style="font-size:9px;color:var(--t3);min-width:28px;text-align:right">'+p.pct+'%</span>'
-                +'</div>'
-                +(dueT||valTag?'<div style="margin-top:2px">'+dueT+valTag+'</div>':'')+blockTag
-              +'</div>';
-            }).join('');
-          }
+      var fr = await fetch('/monday/feedback');
+      if (fr.ok) {
+        var fd = await fr.json();
+        var boards = fd.boards || [];
+        var actionableItems = [];
+        boards.forEach(function(board) {
+          (board.items || []).forEach(function(item) {
+            var cols = item.column_values || [];
+            function fcol(id){ var c=cols.find(function(cv){return cv.id===id;}); return c?(c.text||''):''; }
+            var sentiment = fcol('color__1') || fcol('status__1') || fcol('status') || '';
+            var notes = fcol('long_text__1') || fcol('text__1') || fcol('notes__1') || '';
+            var clientName = fcol('text8__1') || item.name || '';
+            var needsAction = sentiment.toLowerCase().match(/negative|concern|issue|dissatisf|unhappy|problem|escalat/) ||
+              notes.toLowerCase().match(/request|more info|need|when|follow.?up|waiting|no response|haven.?t heard|question|clarif/);
+            if (needsAction) {
+              actionableItems.push({ client: clientName, note: notes.substring(0,120), sentiment: sentiment });
+            }
+          });
+        });
+        if (actionableItems.length > 0) {
+          html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Client feedback · action required</div>';
+          html += window._feedbackItems = actionableItems;
+          actionableItems.map(function(f, fi) {
+            return '<div class="ins" onclick="feedbackClick('+fi+')">' +
+              '<div class="il">' + f.client + '</div>' +
+              '<div class="it">' + (f.note || f.sentiment) + '</div>' +
+            '</div>';
+          }).join('');
         }
+        // No section shown if no actionable feedback — that's a good thing
       }
-    } catch(mondayErr) {
-      html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">Monday.com unavailable: ' + mondayErr.message + '</div>';
+    } catch(fbErr) {
+      console.warn('Feedback fetch failed:', fbErr.message);
     }
 
     // Compliance from emails
@@ -6293,34 +6285,54 @@ function removeChatAttachment(idx) {
     var first = s.name.split(' ')[0].toLowerCase();
     return !checked.some(function(n){ return n.includes(first); });
   });
-  if (missing.length === 0) { closeModal(); alert('All staff have already submitted check-ins this week!'); return; }
+  if (missing.length === 0) {
+    alert('All staff have already submitted check-ins this week!');
+    return;
+  }
   var emailList = missing.map(function(s){ return s.email; });
   var subject = 'Reminder: weekly check-in';
   var emailBody = 'Hi team,\n\nI hope you are all having a great week so far!\n\nThis is a reminder to please submit your weekly check-in if you haven\'t already. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin\n\nThanks so much!\n\nKandia';
 
-  // Try to create Outlook draft via Graph
+  // Try Graph API draft first
   var draftCreated = false;
   try {
-    var r = await fetch('/graph/email/draft', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subject:subject,body:emailBody,to:emailList})});
-    if (r.ok) {
-      var d = await r.json();
-      draftCreated = d && d.success;
-    }
-  } catch(e) { console.warn('Graph draft failed:', e.message); }
+    var r = await fetch('/graph/email/draft', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({subject: subject, body: emailBody, to: emailList})
+    });
+    var d = await r.json();
+    draftCreated = !!(d && d.success);
+  } catch(e) { console.warn('Graph draft:', e.message); }
 
   closeModal();
 
   if (draftCreated) {
-    openModal('Draft saved to Outlook', missing.length + ' staff reminders ready to send',
-      '<div class="alert-box ok"><div class="ab-title">Draft saved to your Outlook Drafts folder</div>' +
-      '<div class="ab-text">To: ' + missing.map(function(s){return s.name;}).join(', ') + '</div></div>' +
-      '<div class="mfield"><div class="mfl">Recipients</div><div class="mfv" style="font-size:11px">' + missing.map(function(s){return s.name+' — '+s.email;}).join('<br>') + '</div></div>' +
-      '<button class="m-btn" style="background:#0078D4" onclick="openOutlookDrafts()">Open Outlook Drafts to send</button> ' +
-      '<button class="m-btn sec" onclick="closeModal()">Close</button>'
-    );
+    var recipientList = missing.map(function(s){ return '<div style="font-size:11px;padding:2px 0">'+s.name+' — '+s.email+'</div>'; }).join('');
+    document.getElementById('draftModal').classList.add('open');
+    document.getElementById('dm-title').textContent = 'Draft saved to Outlook';
+    document.getElementById('dm-sub').textContent = missing.length + ' staff will receive the reminder';
+    document.getElementById('dm-icon').textContent = '📧';
+    document.getElementById('dm-loading').style.display = 'none';
+    document.getElementById('dm-draft-content').style.display = 'block';
+    document.getElementById('dm-email-actions').style.display = 'flex';
+    document.getElementById('dm-email-note').style.display = 'none';
+    document.getElementById('dm-to').value = emailList.join('; ');
+    document.getElementById('dm-subject').value = subject;
+    document.getElementById('dm-body').value = emailBody;
   } else {
     // Fallback: show editable draft modal
-    openDraftModal('Team', emailBody, subject, 'email', emailList.join('; '));
+    document.getElementById('draftModal').classList.add('open');
+    document.getElementById('dm-title').textContent = 'Draft email to staff';
+    document.getElementById('dm-sub').textContent = 'Edit before sending — ' + missing.length + ' recipients';
+    document.getElementById('dm-icon').textContent = '📧';
+    document.getElementById('dm-loading').style.display = 'none';
+    document.getElementById('dm-draft-content').style.display = 'block';
+    document.getElementById('dm-email-actions').style.display = 'flex';
+    document.getElementById('dm-email-note').style.display = 'block';
+    document.getElementById('dm-to').value = emailList.join('; ');
+    document.getElementById('dm-subject').value = subject;
+    document.getElementById('dm-body').value = emailBody;
   }
 }
 
