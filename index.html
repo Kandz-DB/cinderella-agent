@@ -2088,19 +2088,9 @@ async function loadInfoEmails() {
     var r = await fetch('/graph/info-emails');
 
     if (!r.ok) {
-
-      var errText = await r.text().catch(function(){ return 'unknown error'; });
-
-      console.warn('info@ mailbox error:', r.status, errText);
-
-      // Show error in email panel
-
-      var el = document.getElementById('infoEmailList');
-
-      if (el) el.innerHTML = '<div style="font-size:10px;color:var(--t3);padding:4px 0">info@ mailbox: reconnect M365 via /auth/login</div>';
-
+      // Silently skip — info@ needs delegate access in M365 admin centre
+      console.warn('info@ mailbox unavailable (status', r.status, ')— grant Kandia delegate access to info@ in M365 admin');
       return;
-
     }
 
     var d = await r.json();
@@ -3909,17 +3899,7 @@ async function syncNow(){
 
     });
 
-    // If no check-ins this week, also include most recent prior week so dashboard isn't empty
-
-    if (thisWeek.length === 0) {
-
-      var prevMonday = new Date(lastMonday);
-
-      prevMonday.setDate(prevMonday.getDate() - 7);
-
-      thisWeek = allRaw.filter(function(e){ return e.submitted && new Date(e.submitted) >= prevMonday && new Date(e.submitted) < lastMonday; });
-
-    }
+    // No fallback to previous week — this week stays empty until staff submit
 
     const byP={};
 
@@ -4073,7 +4053,11 @@ function renderStaff(){
 
   if(!el)return;
 
-  if(SD.length===0){el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center;grid-column:1/-1">No check-ins yet. Send cinderella-checkin.html to staff — submissions appear here automatically.</div>';return;}
+  if(SD.length===0){
+    var missing=ALL_STAFF.map(function(s){return s.name.split(' ')[0];}).join(', ');
+    el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center;grid-column:1/-1">No check-ins received this week yet.<br><span style="font-size:11px">Waiting on: '+missing+'</span><br><br><button onclick="sendAllReminders()" style="font-size:11px;padding:5px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Send reminders to all staff</button></div>';
+    return;
+  }
 
   const sorted=[...SD].sort((a,b)=>b.capacity-a.capacity);
 
