@@ -11,7 +11,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Headers", "*");
   next();
 });
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 let latestOutput = {};
@@ -524,7 +524,7 @@ app.get('/monday/feedback', async (req, res) => {
 
 // ── PROXY (forwards chat requests to Claude) ──
 const MAX_CONVERSATION_MESSAGES = 20; // keep last 20 messages (~10 back-and-forth)
-const MAX_OUTPUT_TOKENS = 1500;       // 1500 allows full process docs from uploaded files
+const MAX_OUTPUT_TOKENS = 1000;       // cap responses — increase if she gets cut off
 
 app.options('/proxy', (req, res) => res.sendStatus(200));
 app.post('/proxy', async (req, res) => {
@@ -657,8 +657,58 @@ app.post('/checkins/submit', (req, res) => {
   }
 });
 
+
+// ── EMAIL: Create draft in Outlook ──
+app.post('/graph/email/draft', async (req, res) => {
+  try {
+    const token = await getValidToken();
+    const { subject, body, to } = req.body;
+    const toRecipients = (Array.isArray(to) ? to : to.split(/[;,]/).map(e => e.trim()).filter(Boolean))
+      .map(email => ({ emailAddress: { address: email.trim() } }));
+    const response = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subject,
+        body: { contentType: 'Text', content: body },
+        toRecipients
+      })
+    });
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    res.json({ success: true, id: data.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── SERVE DASHBOARD ──
 app.use(express.static('.'));
+
+// ── EMAIL: Create draft in Outlook ──
+app.post('/graph/email/draft', async (req, res) => {
+  try {
+    const token = await getValidToken();
+    const { subject, body, to } = req.body;
+    const toRecipients = (Array.isArray(to) ? to : to.split(/[;,]/).map(e => e.trim()).filter(Boolean))
+      .map(email => ({ emailAddress: { address: email.trim() } }));
+    const response = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subject,
+        body: { contentType: 'Text', content: body },
+        toRecipients
+      })
+    });
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    res.json({ success: true, id: data.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── SERVE DASHBOARD ──
 app.use(express.static('.'));
 
