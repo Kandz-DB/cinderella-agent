@@ -2192,6 +2192,7 @@ function replyToInfoEmail(idx) {
 }
 
 function openOutlook(){ window.open('https://outlook.office.com/mail/inbox','_blank'); }
+function openOutlookDrafts(){ window.open('https://outlook.office.com/mail/drafts','_blank'); }
 
 function dismissNotify(){ var el=document.getElementById('cinderella-notify'); if(el)el.remove(); }
 
@@ -4199,50 +4200,29 @@ function showMissingStaffModal() {
 
 }
 
-function sendReminderFromModal(idx) {
-
+async function sendReminderFromModal(idx) {
   var s = window._missingStaffModal && window._missingStaffModal[idx];
-
   if (!s) return;
-
   var firstName = s.name.split(' ')[0];
-
-  var emailBody = 'Hi ' + firstName + ',\n\nI hope you are having a great week so far!\n\nPlease don\'t forget to send your weekly check-in. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent.onrender.com/checkin\n\nThanks so much!\n\nKandia';
-
+  var subject = 'Reminder: weekly check-in';
+  var emailBody = 'Hi ' + firstName + ',\n\nI hope you are having a great week so far!\n\nPlease don\'t forget to send your weekly check-in. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin\n\nThanks so much!\n\nKandia';
   closeModal();
-
-  // Store email body for draft modal to use
-
-  window._pendingEmailBody = emailBody;
-
-  openDraftModal(s.name, emailBody, 'Reminder: weekly check-in', 'email', s.email);
-
-}
-
-function sendAllReminders() {
-
-  var checked = SD.map(function(s){ return s.name.toLowerCase(); });
-
-  var missing = ALL_STAFF.filter(function(s){
-
-    var first = s.name.split(' ')[0].toLowerCase();
-
-    return !checked.some(function(n){ return n.includes(first); });
-
-  });
-
-  if (missing.length === 0) { closeModal(); return; }
-
-  var emails = missing.map(function(s){ return s.email; }).join('; ');
-
-  var names = missing.map(function(s){ return s.name.split(' ')[0]; }).join(', ');
-
-  var emailBody = 'Hi team,\n\nI hope you are all having a great week so far!\n\nThis is a reminder to please submit your weekly check-in if you haven\'t already. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent.onrender.com/checkin\n\nThanks so much!\n\nKandia';
-
-  closeModal();
-
-  openDraftModal('Team', emailBody, 'Reminder: weekly check-in', 'email', emails);
-
+  if (M365.connected) {
+    try {
+      var r = await fetch('/graph/email/draft', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subject:subject,body:emailBody,to:[s.email]})});
+      var d = await r.json();
+      if (d.success) {
+        openModal('Draft saved to Outlook','Reminder for '+s.name,
+          '<div class="alert-box ok"><div class="ab-title">Draft saved to your Outlook Drafts folder</div></div>'+
+          '<div class="mfield"><div class="mfl">To</div><div class="mfv">'+s.name+' &lt;'+s.email+'&gt;</div></div>'+
+          '<button class="m-btn" style="background:#0078D4" onclick="openOutlookDrafts()">Open Outlook Drafts to send</button> '+
+          '<button class="m-btn sec" onclick="closeModal()">Close</button>'
+        );
+        return;
+      }
+    } catch(e) { console.warn('Draft failed:', e.message); }
+  }
+  openDraftModal(s.name, emailBody, subject, 'email', s.email);
 }
 
 function staffAction(type) {
