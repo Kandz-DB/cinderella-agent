@@ -6,241 +6,154 @@
 <title>Weekly Check-in — Risk 2 Solution</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#f7f6f3;--card:#ffffff;--border:rgba(0,0,0,0.1);
-  --text:#1a1a18;--sub:#5a5a56;--hint:#9a9994;
-  --accent:#1D9E75;--accent-light:#E1F5EE;
-  --red:#E24B4A;--font:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-}
-@media(prefers-color-scheme:dark){
-  :root{--bg:#1c1c1a;--card:#252522;--border:rgba(255,255,255,0.1);--text:#f0ede6;--sub:#a8a49c;--hint:#6a6660;--accent-light:#0F3D2E;}
-}
-body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:32px 16px}
-.wrap{width:100%;max-width:540px}
-.header{margin-bottom:24px}
-.logo{font-size:11px;color:var(--hint);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:8px}
-h1{font-size:22px;font-weight:500;color:var(--text);margin-bottom:5px}
-.sub{font-size:13px;color:var(--sub);line-height:1.5}
-.card{background:var(--card);border:0.5px solid var(--border);border-radius:12px;padding:20px 22px;margin-bottom:14px}
-.card-label{font-size:10px;color:var(--hint);letter-spacing:0.07em;text-transform:uppercase;margin-bottom:14px;font-weight:500}
-.field{margin-bottom:15px}
-.field:last-child{margin-bottom:0}
-label{display:block;font-size:13px;font-weight:500;color:var(--text);margin-bottom:5px}
-.hint{font-size:11px;color:var(--hint);margin-bottom:5px}
-input[type=text],textarea,select{width:100%;border:0.5px solid var(--border);border-radius:8px;padding:9px 12px;font-size:13px;font-family:var(--font);background:var(--card);color:var(--text);transition:border-color 0.15s}
-input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
-textarea{resize:vertical;min-height:68px;line-height:1.5}
-.cap-row{display:flex;align-items:center;gap:12px}
-.cap-slider{flex:1;accent-color:var(--accent)}
-.cap-val{font-size:20px;font-weight:500;color:var(--text);min-width:46px;text-align:right}
-.cap-labels{display:flex;justify-content:space-between;font-size:10px;color:var(--hint);margin-top:4px}
-.btn-group{display:flex;gap:7px}
-.btn-opt{flex:1;border:0.5px solid var(--border);border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer;font-size:12px;color:var(--sub);background:none;font-family:var(--font);transition:all 0.12s}
-.btn-opt:hover{border-color:var(--accent);color:var(--accent)}
-.btn-opt.sel{border-color:var(--accent);background:var(--accent-light);color:var(--accent);font-weight:500}
-.avail-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}
-.submit-btn{width:100%;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:12px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--font);margin-top:4px;transition:opacity 0.15s}
-.submit-btn:hover{opacity:0.9}
-.submit-btn:disabled{opacity:0.5;cursor:not-allowed}
-.result{display:none;background:var(--card);border:0.5px solid var(--border);border-radius:12px;padding:28px;text-align:center}
-.result-icon{width:48px;height:48px;border-radius:50%;background:var(--accent-light);display:flex;align-items:center;justify-content:center;margin:0 auto 14px}
-.result-title{font-size:18px;font-weight:500;color:var(--text);margin-bottom:6px}
-.result-sub{font-size:13px;color:var(--sub);line-height:1.6}
-.error-msg{background:#FCEBEB;border:0.5px solid #F7C1C1;border-radius:8px;padding:10px 13px;font-size:12px;color:#A32D2D;margin-top:10px;display:none;line-height:1.5}
-.spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:6px}
-@keyframes spin{to{transform:rotate(360deg)}}
-.req{color:var(--red)}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f6f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:#fff;border-radius:16px;padding:32px;max-width:500px;width:100%;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+.logo{font-size:20px;font-weight:700;color:#4ECDC4;margin-bottom:4px;letter-spacing:-.5px}
+.sub{font-size:12px;color:#888;margin-bottom:28px}
+h2{font-size:16px;font-weight:600;color:#1a1a1a;margin-bottom:20px}
+label{font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:5px;margin-top:16px}
+input,select,textarea{width:100%;padding:10px 12px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:14px;font-family:inherit;background:#fafafa;transition:border .2s;outline:none;resize:vertical}
+input:focus,select:focus,textarea:focus{border-color:#4ECDC4;background:#fff}
+.slider-row{display:flex;align-items:center;gap:12px}
+input[type=range]{flex:1;accent-color:#4ECDC4}
+.cap-val{font-size:18px;font-weight:700;color:#4ECDC4;min-width:44px;text-align:right}
+.btn{width:100%;padding:14px;background:linear-gradient(135deg,#4ECDC4,#45B7AA);color:#fff;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;margin-top:24px;font-family:inherit;transition:opacity .2s}
+.btn:hover{opacity:.9}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.success{display:none;text-align:center;padding:24px 0}
+.success .tick{font-size:48px;margin-bottom:12px}
+.success h3{font-size:18px;font-weight:600;color:#1a1a1a;margin-bottom:6px}
+.success p{font-size:13px;color:#888}
+.error-msg{background:#FEE;border:1px solid #FCC;border-radius:8px;padding:12px;font-size:13px;color:#A33;margin-top:12px;display:none}
+.sending{display:none;text-align:center;padding:12px;font-size:13px;color:#888}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="header">
-    <div class="logo">Risk 2 Solution · Weekly check-in</div>
-    <h1>How's your week going?</h1>
-    <div class="sub">Fill this in and hit submit — takes about 2 minutes. Your COO will see it automatically.</div>
+<div class="card">
+  <div class="logo">Cinderella</div>
+  <div class="sub">Executive Assistant to COO · Risk 2 Solution</div>
+
+  <div id="form-section">
+    <h2>Weekly Check-in</h2>
+
+    <label>Your name</label>
+    <select id="name">
+      <option value="">Select your name...</option>
+      <option>Janita Zhang</option>
+      <option>Reinette Kruger</option>
+      <option>Diane Kruger</option>
+      <option>Garima Arora</option>
+      <option>Paul Johnston</option>
+      <option>Dani Stevenson</option>
+      <option>Ross Mackenzie</option>
+      <option>Cherry Abadeza</option>
+    </select>
+
+    <label>Capacity this week (%)</label>
+    <div class="slider-row">
+      <input type="range" id="capacity" min="10" max="100" value="80" oninput="document.getElementById('capval').textContent=this.value+'%'">
+      <div class="cap-val" id="capval">80%</div>
+    </div>
+
+    <label>Projects you're working on this week</label>
+    <input type="text" id="projects" placeholder="e.g. Client onboarding, ISO prep, platform review">
+
+    <label>Any blockers or things you need support with?</label>
+    <textarea id="blockers" rows="2" placeholder="None, or describe what you need..."></textarea>
+
+    <label>Your main focus for next week</label>
+    <input type="text" id="focus" placeholder="e.g. Complete Q2 review, onboard new client">
+
+    <label>Anything else Kandia should know?</label>
+    <textarea id="support" rows="2" placeholder="Optional — team updates, personal notes, etc."></textarea>
+
+    <div class="error-msg" id="error-msg"></div>
+    <div class="sending" id="sending-msg">Submitting your check-in...</div>
+    <button class="btn" id="submit-btn" onclick="submitCheckin()">Submit check-in</button>
   </div>
 
-  <div id="formWrap">
-    <div class="card">
-      <div class="card-label">Your details</div>
-      <div class="field">
-        <label>Your name <span class="req">*</span></label>
-        <input type="text" id="f-name" placeholder="e.g. Alex Robertson" autocomplete="name" />
-      </div>
-      <div class="field">
-        <label>Your role</label>
-        <input type="text" id="f-role" placeholder="e.g. Risk Analyst" />
-      </div>
-      <div class="field">
-        <label>Week ending</label>
-        <input type="text" id="f-week" placeholder="e.g. 25 Apr 2025" />
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">Capacity &amp; workload</div>
-      <div class="field">
-        <label>How full was your plate this week? <span class="req">*</span></label>
-        <div class="hint">100% = no spare capacity at all</div>
-        <div class="cap-row">
-          <input type="range" class="cap-slider" id="f-cap" min="0" max="100" step="5" value="70"
-            oninput="document.getElementById('capVal').textContent=this.value+'%'; updateCapColor('capVal',this.value)">
-          <div class="cap-val" id="capVal">70%</div>
-        </div>
-        <div class="cap-labels"><span>Empty</span><span>Comfortable</span><span>At limit</span></div>
-      </div>
-      <div class="field">
-        <label>Workload trend vs last week</label>
-        <div class="btn-group">
-          <button class="btn-opt" onclick="pick(this,'trend','Lighter')">↓ Lighter</button>
-          <button class="btn-opt sel" onclick="pick(this,'trend','Similar')">→ Similar</button>
-          <button class="btn-opt" onclick="pick(this,'trend','Heavier')">↑ Heavier</button>
-        </div>
-      </div>
-      <div class="field">
-        <label>How full is your plate next week? <span class="req">*</span></label>
-        <div class="hint">Based on what you know right now</div>
-        <div class="cap-row">
-          <input type="range" class="cap-slider" id="f-cap-next" min="0" max="100" step="5" value="70"
-            oninput="document.getElementById('capValNext').textContent=this.value+'%'; updateCapColor('capValNext',this.value)">
-          <div class="cap-val" id="capValNext">70%</div>
-        </div>
-        <div class="cap-labels"><span>Empty</span><span>Comfortable</span><span>At limit</span></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">Projects &amp; blockers</div>
-      <div class="field">
-        <label>What are you mainly working on? <span class="req">*</span></label>
-        <div class="hint">List your key projects or tasks, separated by commas</div>
-        <textarea id="f-projects" placeholder="e.g. Titan Corp risk assessment, ISO audit prep, client incident review"></textarea>
-      </div>
-      <div class="field">
-        <label>Anything blocking your work?</label>
-        <textarea id="f-blockers" placeholder="e.g. Waiting on approval from Marcus, unclear requirements for audit section 4" style="min-height:52px"></textarea>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">Availability</div>
-      <div class="field">
-        <label>Are you fully available next week?</label>
-        <div class="avail-grid">
-          <button class="btn-opt sel" onclick="pick(this,'avail','Full week')">✓ Full week</button>
-          <button class="btn-opt" onclick="pick(this,'avail','Half day out')">Half day out</button>
-          <button class="btn-opt" onclick="pick(this,'avail','1 day out')">1 day out</button>
-          <button class="btn-opt" onclick="pick(this,'avail','2+ days out')">2+ days out</button>
-        </div>
-      </div>
-      <div class="field">
-        <label>Leave or out-of-office details</label>
-        <input type="text" id="f-leave" placeholder="e.g. Fri 26 Apr afternoon" />
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-label">Skills &amp; notes</div>
-      <div class="field">
-        <label>Your main skill areas</label>
-        <div class="hint">Helps match work to the right people — update when your skills grow</div>
-        <input type="text" id="f-skills" placeholder="e.g. Risk assessment, compliance auditing, client onboarding" />
-      </div>
-      <div class="field">
-        <label>Anything else for your COO?</label>
-        <textarea id="f-notes" placeholder="e.g. I have bandwidth Tue–Thu, happy to take on extra work this week..." style="min-height:52px"></textarea>
-      </div>
-    </div>
-
-    <div class="error-msg" id="errorMsg"></div>
-    <button class="submit-btn" id="submitBtn" onclick="submitForm()">Submit check-in</button>
-  </div>
-
-  <div class="result" id="result">
-    <div class="result-icon">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1D9E75" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-    </div>
-    <div class="result-title">Check-in submitted</div>
-    <div class="result-sub" id="resultSub">Your check-in has been sent to your COO automatically. No code needed — you're done!</div>
+  <div class="success" id="success-section">
+    <div class="tick">✅</div>
+    <h3>Check-in received!</h3>
+    <p>Thanks <span id="success-name"></span> — Kandia will review your update shortly.</p>
   </div>
 </div>
 
 <script>
-const picks = { trend: 'Similar', avail: 'Full week' };
+async function submitCheckin() {
+  var name = document.getElementById('name').value;
+  if (!name) { showError('Please select your name before submitting.'); return; }
 
-window.onload = () => {
-  const d = new Date();
-  const day = d.getDay();
-  const daysToFri = day === 5 ? 0 : day === 6 ? 6 : 5 - day;
-  const fri = new Date(d);
-  fri.setDate(d.getDate() + daysToFri);
-  document.getElementById('f-week').value = fri.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
-};
-
-function pick(btn, group, val) {
-  btn.parentElement.querySelectorAll('.btn-opt').forEach(b => b.classList.remove('sel'));
-  btn.classList.add('sel');
-  picks[group] = val;
-}
-
-function updateCapColor(elId, val) {
-  const v = parseInt(val);
-  const el = document.getElementById(elId);
-  el.style.color = v >= 90 ? '#E24B4A' : v >= 75 ? '#EF9F27' : '#1D9E75';
-}
-
-async function submitForm() {
-  const name = document.getElementById('f-name').value.trim();
-  const projects = document.getElementById('f-projects').value.trim();
-  const errEl = document.getElementById('errorMsg');
-  errEl.style.display = 'none';
-
-  if (!name) { showError('Please enter your name.'); return; }
-  if (!projects) { showError('Please enter what you\'re working on.'); return; }
-
-  const btn = document.getElementById('submitBtn');
+  var btn = document.getElementById('submit-btn');
+  var errEl = document.getElementById('error-msg');
+  var sendEl = document.getElementById('sending-msg');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Submitting...';
+  errEl.style.display = 'none';
+  sendEl.style.display = 'block';
 
-  const entry = {
-    id: Date.now(),
-    submitted: new Date().toISOString(),
-    name,
-    role: document.getElementById('f-role').value.trim(),
-    weekEnding: document.getElementById('f-week').value.trim(),
-    capacity: parseInt(document.getElementById('f-cap').value),
-    capacityNext: parseInt(document.getElementById('f-cap-next').value),
-    trend: picks.trend,
-    projects,
-    blockers: document.getElementById('f-blockers').value.trim(),
-    availability: picks.avail,
-    leave: document.getElementById('f-leave').value.trim(),
-    skills: document.getElementById('f-skills').value.trim(),
-    notes: document.getElementById('f-notes').value.trim()
+  // Calculate week ending (Sunday)
+  var today = new Date();
+  var day = today.getDay();
+  var sunday = new Date(today);
+  sunday.setDate(today.getDate() + (day === 0 ? 0 : 7 - day));
+  var weekEnding = sunday.toISOString().split('T')[0];
+
+  var payload = {
+    name: name,
+    capacity: parseInt(document.getElementById('capacity').value) || 80,
+    projects: document.getElementById('projects').value.trim(),
+    blockers: document.getElementById('blockers').value.trim() || 'None',
+    focus: document.getElementById('focus').value.trim(),
+    support: document.getElementById('support').value.trim(),
+    weekEnding: weekEnding,
+    submitted: new Date().toISOString()
   };
 
-  try {
-    const res = await fetch('/checkins/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(entry)
-    });
-    if (!res.ok) throw new Error('Save failed. Please try again.');
+  var attempts = 0;
+  var maxAttempts = 3;
+  var lastError = '';
 
-    document.getElementById('formWrap').style.display = 'none';
-    document.getElementById('result').style.display = 'block';
-    document.getElementById('resultSub').textContent =
-      `Thanks ${name.split(' ')[0]} — your check-in has been sent to your COO automatically. You're done!`;
+  while (attempts < maxAttempts) {
+    attempts++;
+    try {
+      var serverUrl = window.location.origin;
+      var r = await fetch(serverUrl + '/checkins/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
-  } catch (e) {
-    btn.disabled = false;
-    btn.innerHTML = 'Submit check-in';
-    showError(e.message || 'Something went wrong. Please try again or contact your COO.');
+      var data = await r.json();
+
+      if (r.ok && data.success) {
+        // Success
+        sendEl.style.display = 'none';
+        document.getElementById('form-section').style.display = 'none';
+        document.getElementById('success-name').textContent = name.split(' ')[0];
+        document.getElementById('success-section').style.display = 'block';
+        return;
+      } else {
+        lastError = data.error || ('Server error ' + r.status);
+        if (r.status === 400) break; // Don't retry validation errors
+      }
+    } catch(e) {
+      lastError = 'Network error — please check your connection. (' + e.message + ')';
+    }
+
+    if (attempts < maxAttempts) {
+      sendEl.textContent = 'Retrying... (attempt ' + (attempts+1) + ' of ' + maxAttempts + ')';
+      await new Promise(function(resolve){ setTimeout(resolve, 2000); });
+    }
   }
+
+  // All attempts failed
+  sendEl.style.display = 'none';
+  btn.disabled = false;
+  showError('Could not submit your check-in after ' + maxAttempts + ' attempts. Error: ' + lastError + '\n\nPlease screenshot this message and send it to Kandia.');
 }
 
 function showError(msg) {
-  const el = document.getElementById('errorMsg');
+  var el = document.getElementById('error-msg');
   el.textContent = msg;
   el.style.display = 'block';
 }
