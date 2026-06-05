@@ -3929,11 +3929,14 @@ async function syncNow(){
     lastMonday.setDate(lastMonday.getDate() - (dow === 0 ? 6 : dow - 1));
 
     var thisWeek = allRaw.filter(function(e){
-
-      if (!e.submitted) return false;
-
-      return new Date(e.submitted) >= lastMonday;
-
+      // Match by submitted timestamp OR weekEnding as fallback
+      if (e.submitted) return new Date(e.submitted) >= lastMonday;
+      if (e.weekEnding) {
+        var we = new Date(e.weekEnding);
+        var weMonday = new Date(we); weMonday.setDate(we.getDate() - 6);
+        return weMonday >= lastMonday || we >= lastMonday;
+      }
+      return false;
     });
 
     // No fallback to previous week — this week stays empty until staff submit
