@@ -643,7 +643,14 @@ app.put('/checkins/update', (req, res) => {
 
 app.post('/checkins/submit', (req, res) => {
   try {
-    const entry = req.body;
+    // Always stamp submitted time in case form doesn't include it
+    const entry = { ...req.body, submitted: req.body.submitted || new Date().toISOString() };
+    // Also stamp weekEnding if missing (use current week's Sunday)
+    if (!entry.weekEnding) {
+      const d = new Date(); const day = d.getDay();
+      d.setDate(d.getDate() + (day === 0 ? 0 : 7 - day));
+      entry.weekEnding = d.toISOString().split('T')[0];
+    }
     const existing = loadCheckIns();
     const idx = existing.findIndex(e =>
       e.name && e.name.toLowerCase() === (entry.name||'').toLowerCase() &&
@@ -652,8 +659,10 @@ app.post('/checkins/submit', (req, res) => {
     if (idx >= 0) existing[idx] = entry;
     else existing.push(entry);
     saveCheckIns(existing);
+    console.log(`Check-in saved: ${entry.name} for week ending ${entry.weekEnding}`);
     res.json({ success: true });
   } catch(e) {
+    console.error('Check-in submit error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
