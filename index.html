@@ -4095,7 +4095,7 @@ function renderStaff(){
 
   if(SD.length===0){
     var missing=ALL_STAFF.map(function(s){return s.name.split(' ')[0];}).join(', ');
-    el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center;grid-column:1/-1">No check-ins received this week yet.<br><span style="font-size:11px">Waiting on: '+missing+'</span><br><br><button onclick="sendAllReminders()" style="font-size:11px;padding:5px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Send reminders to all staff</button></div>';
+    el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center;grid-column:1/-1">No check-ins received this week yet.<br><span style="font-size:11px">Waiting on: '+missing+'</span><br><br><button onclick="sendAllReminders()" style="font-size:11px;padding:5px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f);margin-right:8px">Send reminders to all staff</button><button onclick="openManualCheckin()" style="font-size:11px;padding:5px 14px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">+ Add check-in manually</button></div>';
     return;
   }
 
@@ -6428,6 +6428,58 @@ async function generateReport(type, label) {
   }
 }
 
+
+// ── MANUAL CHECK-IN ENTRY ──
+function openManualCheckin(prefillName) {
+  var staffOptions = ALL_STAFF.map(function(s){
+    return '<option value="'+s.name+'"'+(prefillName===s.name?' selected':'')+'>'+s.name+'</option>';
+  }).join('');
+  var today = new Date();
+  var day = today.getDay();
+  var sunday = new Date(today);
+  sunday.setDate(today.getDate() + (day === 0 ? 0 : 7 - day));
+  var weekEnding = sunday.toISOString().split('T')[0];
+
+  openModal('Add check-in manually', 'For staff who submitted but data was not received',
+    '<div class="mfield"><div class="mfl">Staff member</div>'+
+    '<select id="mc-name" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;background:var(--bg2)"><option value="">Select...</option>'+staffOptions+'</select></div>'+
+    '<div class="mfield"><div class="mfl">Capacity this week (%)</div>'+
+    '<input id="mc-cap" type="number" min="0" max="100" value="80" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>'+
+    '<div class="mfield"><div class="mfl">Projects working on</div>'+
+    '<input id="mc-proj" type="text" placeholder="e.g. Client onboarding, ISO prep" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>'+
+    '<div class="mfield"><div class="mfl">Blockers / needs support with</div>'+
+    '<input id="mc-block" type="text" placeholder="None" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>'+
+    '<div class="mfield"><div class="mfl">Focus next week</div>'+
+    '<input id="mc-focus" type="text" placeholder="e.g. Complete Q2 review" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>'+
+    '<input type="hidden" id="mc-week" value="'+weekEnding+'">'+
+    '<button class="m-btn" onclick="submitManualCheckin()">Save check-in</button> '+
+    '<button class="m-btn sec" onclick="closeModal()">Cancel</button>'
+  );
+}
+
+async function submitManualCheckin() {
+  var name = document.getElementById('mc-name').value;
+  var cap = document.getElementById('mc-cap').value;
+  var proj = document.getElementById('mc-proj').value;
+  var block = document.getElementById('mc-block').value;
+  var focus = document.getElementById('mc-focus').value;
+  var week = document.getElementById('mc-week').value;
+  if (!name) { alert('Please select a staff member'); return; }
+  try {
+    var r = await fetch('/checkins/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, capacity: parseInt(cap)||80, projects: proj, blockers: block, focus: focus, weekEnding: week, submitted: new Date().toISOString() })
+    });
+    var d = await r.json();
+    if (!d.success) throw new Error(d.error || 'Failed');
+    closeModal();
+    await syncNow();
+    alert('Check-in saved for ' + name + ' ✓');
+  } catch(e) {
+    alert('Error saving check-in: ' + e.message);
+  }
+}
 
 </script>
 
