@@ -646,11 +646,57 @@ app.put('/checkins/update', (req, res) => {
   }
 });
 
-app.post('/checkins/submit', (req, res) => {
+app.post('/checkins/submit', async (req, res) => {
   try {
-    // Always stamp submitted time in case form doesn't include it
-    const entry = { ...req.body, submitted: req.body.submitted || new Date().toISOString() };
-    // Also stamp weekEnding if missing (use current week's Sunday)
+    const entry = {
+      ...req.body,
+      submitted: req.body.submitted || new Date().toISOString(),
+      receivedAt: new Date().toISOString()  // server-side receipt stamp
+    };
+    if (!entry.weekEnding) {
+      const d = new Date(); const day = d.getDay();
+      d.setDate(d.getDate() + (day === 0 ? 0 : 7 - day));
+      entry.weekEnding = d.toISOString().split('T')[0];
+    }
+    if (!entry.name) return res.status(400).json({ error: 'Name is required' });
+
+    // PRIMARY: save to local file
+    const existing = loadCheckIns();
+    const idx = existing.findIndex(e =>
+      e.name && e.name.toLowerCase() === entry.name.toLowerCase() &&
+      e.weekEnding === entry.weekEnding
+    );
+    if (idx >= 0) existing[idx] = entry;
+    else existing.push(entry);
+    saveCheckIns(existing);
+    console.log('[CheckIn] SAVED:', entry.name, '| week ending', entry.weekEnding, '| received', entry.receivedAt);
+
+    // BACKUP: also write to Azure Blob Storage
+    try {
+      const cc = await getBlobContainer();
+      if (cc) {
+        const safeName = (entry.name||'unknown').replace(/\s+/g, '-');
+        const blobKey = 'checkins/' + entry.weekEnding + '/' + safeName + '.json';
+        const bc = cc.getBlockBlobClient(blobKey);
+        const blob_payload = JSON.stringify(entry);
+        await bc.upload(blob_payload, blob_payload.length, { blobHTTPHeaders: { blobContentType: 'application/json' } });
+        console.log('[CheckIn] BLOB BACKUP:', blobKey);
+      }
+    } catch(blobErr) {
+      console.warn('[CheckIn] Blob backup failed (not critical):', blobErr.message);
+    }
+
+    res.json({ success: true, name: entry.name, weekEnding: entry.weekEnding });
+  } catch(e) {
+    console.error('[CheckIn] ERROR:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Manual check-in entry (dashboard only — requires auth)
+app.post('/checkins/manual', requireAuth, async (req, res) => {
+  try {
+    const entry = { ...req.body, submitted: req.body.submitted || new Date().toISOString(), manualEntry: true, receivedAt: new Date().toISOString() };
     if (!entry.weekEnding) {
       const d = new Date(); const day = d.getDay();
       d.setDate(d.getDate() + (day === 0 ? 0 : 7 - day));
@@ -664,10 +710,9 @@ app.post('/checkins/submit', (req, res) => {
     if (idx >= 0) existing[idx] = entry;
     else existing.push(entry);
     saveCheckIns(existing);
-    console.log(`Check-in saved: ${entry.name} for week ending ${entry.weekEnding}`);
+    console.log('[CheckIn] MANUAL ENTRY:', entry.name, '| week ending', entry.weekEnding);
     res.json({ success: true });
   } catch(e) {
-    console.error('Check-in submit error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
