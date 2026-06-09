@@ -18375,13 +18375,16 @@ async function loadOpenActions(force) {
       var parts = clean.split(' — ');
       var task = parts[0] || clean;
       var source = parts[1] ? '<span style="font-size:9px;color:var(--t3);margin-left:4px">· ' + parts[1] + '</span>' : '';
+      window._cooActions = window._cooActions || [];
+      var ai = window._cooActions.length;
+      window._cooActions.push({task: task, source: src || 'COO Duties', urgency: label});
       var q = 'Help me with: ' + task.replace(/"/g, "'");
       return '<div class="pri" style="display:flex;align-items:center;gap:4px">' +
         '<div onclick="qa(this.parentElement.dataset.q)" data-q="' + q.replace(/"/g,'&quot;') + '" style="flex:1;display:flex;align-items:center;gap:6px;cursor:pointer">' +
           '<span class="pp ' + cls + '">' + label + '</span>' +
           '<span class="pt">' + task + source + '</span>' +
         '</div>' +
-        '<button onclick="cooTrack('+ai+',this)" title="Track" style="flex-shrink:0;background:none;border:1px solid var(--bl);border-radius:6px;padding:1px 6px;font-size:10px;color:var(--t3);cursor:pointer;font-family:var(--f)">+</button>' +
+        '<button onclick="cooTrack(' + ai + ',this)" title="Track" style="flex-shrink:0;background:none;border:1px solid var(--bl);border-radius:6px;padding:1px 6px;font-size:10px;color:var(--t3);cursor:pointer;font-family:var(--f)">+</button>' +
         '<button onclick="dismissCOOAction(this.parentElement)" title="Dismiss" style="flex-shrink:0;background:none;border:none;font-size:14px;color:var(--t3);cursor:pointer;line-height:1;padding:0 2px">×</button>' +
       '</div>';
     }).filter(Boolean).join('');
