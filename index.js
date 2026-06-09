@@ -21,7 +21,33 @@ let isRunning = false;
 // ── SIMPLE PASSWORD PROTECTION ──
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'changeme';
 const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
-const activeSessions = new Set();
+// Sessions persisted to disk so restarts don't log everyone out
+const SESSIONS_PATH = '/home/sessions.json';
+const SESSION_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function loadActiveSessions() {
+  try {
+    const data = JSON.parse(readFileSync(SESSIONS_PATH, 'utf8') || '{}');
+    const now = Date.now();
+    const valid = new Set();
+    for (const [token, expiry] of Object.entries(data)) {
+      if (expiry > now) valid.add(token);
+    }
+    console.log('[Sessions] Loaded', valid.size, 'valid sessions from disk');
+    return valid;
+  } catch(e) { return new Set(); }
+}
+
+function saveActiveSessions(set) {
+  try {
+    const obj = {};
+    const expiry = Date.now() + SESSION_TTL;
+    for (const token of set) obj[token] = expiry;
+    writeFileSync(SESSIONS_PATH, JSON.stringify(obj));
+  } catch(e) { console.warn('[Sessions] Save failed:', e.message); }
+}
+
+const activeSessions = loadActiveSessions();
 
 // Login page
 app.get('/login', (req, res) => {
@@ -67,6 +93,8 @@ app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
   if (req.body.password === DASHBOARD_PASSWORD) {
     const token = crypto.randomBytes(16).toString('hex');
     activeSessions.add(token);
+    saveActiveSessions(activeSessions);
+    console.log('[Sessions] New session saved for', token.substring(0,8)+'...');
     res.setHeader('Set-Cookie', `cin_session=${token}; Path=/; HttpOnly; Max-Age=86400`);
     res.redirect('/');
   } else {
@@ -78,7 +106,7 @@ app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
 app.get('/logout', (req, res) => {
   const cookie = req.headers.cookie || '';
   const match = cookie.match(/cin_session=([^;]+)/);
-  if (match) activeSessions.delete(match[1]);
+  if (match) { activeSessions.delete(match[1]); saveActiveSessions(activeSessions); }
   res.setHeader('Set-Cookie', 'cin_session=; Path=/; Max-Age=0');
   res.redirect('/login');
 });
@@ -90,7 +118,7 @@ function requireAuth(req, res, next) {
   const match = cookie.match(/cin_session=([^;]+)/);
   if (match && activeSessions.has(match[1])) return next();
   // API routes get JSON 401 (not HTML redirect) so the dashboard handles it gracefully
-  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status')) {
+  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status') || req.path.startsWith('/openactions') || req.path.startsWith('/generate') || req.path.startsWith('/docs')) {
     return res.status(401).json({ error: { message: 'Session expired — please refresh the page and log in again.' } });
   }
   res.redirect('/login');
