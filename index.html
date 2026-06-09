@@ -13652,6 +13652,27 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 </div>
 
 <script>
+// Auto-detect session expiry on any fetch response
+async function safeFetch(url, opts) {
+  var r = await fetch(url, opts);
+  if (r.status === 401) {
+    var d = await r.json().catch(function(){ return {}; });
+    var msg = (d.error && d.error.message) || '';
+    if (msg.includes('Session') || msg.includes('expired')) {
+      // Show global session banner
+      var banner = document.getElementById('session-banner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'session-banner';
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#A32D2D;color:#fff;text-align:center;padding:10px;font-size:13px;z-index:99999;font-family:var(--f)';
+        banner.innerHTML = '⚠️ Your session has expired. <a href="/auth/login" style="color:#fff;font-weight:600;text-decoration:underline">Click here to log back in</a>';
+        document.body.appendChild(banner);
+      }
+    }
+  }
+  return r;
+}
+
 
 let C={api:'proxy',bin:'69eac07b36566621a8e6511a',key:'$2a$10$6AnrWdAfkw1SbaKZOuSTz.XXjK/mQVzlPX4rhyOOT6378sp855ouO'};
 
@@ -18325,7 +18346,12 @@ async function loadOpenActions(force) {
     // Show actual API error if present
     if (d.error || d.type === 'error') {
       var errMsg = (d.error && d.error.message) || JSON.stringify(d.error || d).substring(0, 120);
-      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">API error: ' + errMsg + ' <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
+      var isSessionErr = errMsg.toLowerCase().includes('session') || errMsg.toLowerCase().includes('expired') || errMsg.includes('401');
+      if (isSessionErr) {
+        el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Session expired. <a href="/auth/login" style="color:var(--b)">Click here to log in again</a> — your data is safe.</div>';
+      } else {
+        el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Error: ' + errMsg + ' <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
+      }
       return;
     }
 
@@ -18785,11 +18811,16 @@ var _trackerActions = [];
 async function loadTracker() {
   try {
     var r = await fetch('/openactions');
+    if (!r.ok) {
+      if (r.status === 401) console.warn('[Tracker] Session expired — please log in again');
+      else console.warn('[Tracker] Server error', r.status);
+      return;
+    }
     var d = await r.json();
     _trackerActions = d.actions || [];
     renderTracker();
     updateTrackerBadge();
-  } catch(e) { console.warn('Tracker load:', e.message); }
+  } catch(e) { console.warn('[Tracker] Load failed:', e.message); }
 }
 
 function updateTrackerBadge() {
