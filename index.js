@@ -414,26 +414,37 @@ app.post('/graph/calendar/create', async (req, res) => {
 // ── TEAMS: Get recent unread chats ──
 app.get('/graph/teams', async (req, res) => {
   try {
-    const chatsData = await graphGet('/me/chats?$top=10');
+    console.log('[Teams] Fetching chats...');
+    const chatsData = await graphGet('/me/chats?$top=20&$expand=members');
+    if (chatsData.error) {
+      console.warn('[Teams] Graph error:', JSON.stringify(chatsData.error));
+      return res.status(400).json({ error: chatsData.error.message || 'Graph API error', chats: [] });
+    }
+    const allChats = chatsData.value || [];
+    console.log('[Teams] Found', allChats.length, 'chats');
     const chats = [];
-    for (const chat of (chatsData.value || []).slice(0, 8)) {
+    for (const chat of allChats.slice(0, 15)) {
       try {
-        const msgs = await graphGet(`/me/chats/${chat.id}/messages?$top=5`);
-        const unread = msgs.value.filter(m => m.body?.content && m.from?.user?.displayName);
-        if (unread.length > 0) {
+        const msgs = await graphGet('/me/chats/' + chat.id + '/messages?$top=5');
+        const valid = (msgs.value || []).filter(m => m.body && m.body.content && m.from && m.from.user && m.from.user.displayName);
+        if (valid.length > 0) {
+          // Get participant names for topic
+          const members = (chat.members || []).map(m => (m.displayName || '').split(' ')[0]).filter(Boolean).join(', ');
           chats.push({
             chatId: chat.id,
-            topic: chat.topic || 'Direct message',
-            lastMessage: unread[0]?.body?.content?.replace(/<[^>]*>/g, '').substring(0, 120),
-            from: unread[0]?.from?.user?.displayName,
-            time: unread[0]?.createdDateTime
+            topic: chat.topic || members || 'Direct message',
+            lastMessage: valid[0].body.content.replace(/<[^>]*>/g, '').substring(0, 150),
+            from: valid[0].from.user.displayName,
+            time: valid[0].createdDateTime
           });
         }
-      } catch (e) { /* skip chats we can't read */ }
+      } catch (e) { console.warn('[Teams] Skipping chat:', e.message); }
     }
+    console.log('[Teams] Returning', chats.length, 'chats with messages');
     res.json({ chats });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[Teams] Fatal error:', err.message);
+    res.status(500).json({ error: err.message, chats: [] });
   }
 });
 
