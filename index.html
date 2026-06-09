@@ -940,6 +940,8 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
         <div style="display:flex;gap:6px">
 
+          <button onclick="openManualCheckin()" style="font-size:11px;padding:4px 10px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">+ Add manually</button>
+
           <button class="week-btn active" id="viewWeekBtn" onclick="setStaffView('week')">This week</button>
 
           <button class="week-btn" id="viewMonthBtn" onclick="setStaffView('month')">Monthly summary</button>
@@ -6007,76 +6009,97 @@ var OPEN_ACTIONS_TTL = 30 * 60 * 1000; // 30 minutes
 async function loadOpenActions(force) {
   var el = document.getElementById('openActionsList');
   if (!el) return;
+
   // Use cache if fresh (within 30 min) and not forced
   var cacheAge = Date.now() - _openActionsTime;
-  if (_openActionsCache && _openActionsCache.length > 0 && !force && cacheAge < OPEN_ACTIONS_TTL) {
-    renderOpenActions(_openActionsCache);
-    var minsLeft = Math.round((OPEN_ACTIONS_TTL - cacheAge) / 60000);
-    var refreshEl = el.parentElement && el.parentElement.querySelector('.ct-action');
-    if (refreshEl) refreshEl.title = 'Next auto-scan in ' + minsLeft + ' min';
+  if (_openActionsCache && !force && cacheAge < OPEN_ACTIONS_TTL) {
+    el.innerHTML = _openActionsCache;
     return;
   }
 
-  // Don't call AI if no data to scan — saves API credits
-  var hasEmails = M365.emails.length > 0 || (infoEmails||[]).length > 0 || (M365.teams||[]).length > 0;
+  // Check if we have any data to scan
+  var hasEmails = M365.emails.length > 0 || (infoEmails||[]).length > 0;
+  var hasTeamsData = (M365.teams||[]).length > 0;
   var hasDocs = docLibrary.length > 0;
-  if (!hasEmails && !hasDocs) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Open Actions scans your live M365 emails and uploaded documents. ' +
-      'M365 emails may still be loading — click Refresh in a moment, or ' +
-      '<button onclick="loadM365Data().then(function(){loadOpenActions(true);})" style="background:none;border:none;color:var(--b);cursor:pointer;font-family:var(--f);font-size:11px;padding:0;text-decoration:underline">reload emails and scan</button>.</div>';
+
+  if (!hasEmails && !hasTeamsData && !hasDocs) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">M365 emails are still loading. <button onclick="loadM365Data().then(function(){loadOpenActions(true);})" style="background:none;border:none;color:var(--b);cursor:pointer;font-family:var(--f);font-size:11px;padding:0;text-decoration:underline">Click here to reload and scan</button></div>';
     return;
   }
 
-  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Cinderella is scanning emails and documents...</div>';
+  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Scanning ' + M365.emails.length + ' emails' + (hasTeamsData?' + Teams':'') + '...</div>';
+
   try {
-    var emailSummary = M365.emails.slice(0,20).map(function(e){ return e.from+' ('+e.hoursOld+'h ago): '+e.subject; }).join('\n') || 'No emails loaded';
-    var infoSummary = (infoEmails||[]).slice(0,10).map(function(e){ return '[info@] '+e.from+': '+e.subject; }).join('\n');
-    var _teamNames = ['janita','reinette','diane','ross','dave','cherry','garima'];
-    var _twoDaysAgo = Date.now() - (2 * 24 * 60 * 60 * 1000);
-    var _actionKeywords = ['action','follow up','follow-up','can you','could you','please','need','deadline','urgent','asap','send','review','approve','sign','confirm','update','let me know','waiting','overdue','by when','when can','schedule','book','organise','organize','meeting','call','report','complete','finish','check','invoice','payment','contract','document','policy','iso','audit'];
-    var teamsSummary = (M365.teams||[]).filter(function(t){
-      // Only chats with the specified team members
-      var topic = (t.topic||'').toLowerCase();
-      var from = (t.from||'').toLowerCase();
-      var nameMatch = _teamNames.some(function(n){ return topic.includes(n) || from.includes(n); });
-      if (!nameMatch) return false;
-      // Only messages from last 2 days
-      if (t.time && new Date(t.time).getTime() < _twoDaysAgo) return false;
-      // Only messages that look action-relevant
-      var msg = (t.lastMessage||'').toLowerCase();
-      return _actionKeywords.some(function(k){ return msg.includes(k); });
+    // Build context
+    var emailLines = M365.emails.slice(0,25).map(function(e){ return '- ' + (e.from||'?') + ': ' + (e.subject||'?'); }).join('\n') || 'No emails';
+    var infoLines = (infoEmails||[]).slice(0,10).map(function(e){ return '- [info@] ' + e.from + ': ' + e.subject; }).join('\n');
+    var teamsLines = (M365.teams||[]).filter(function(t){
+      var n = ['janita','reinette','diane','ross','dave','cherry','garima'];
+      var twoDays = Date.now() - 172800000;
+      if (t.time && new Date(t.time).getTime() < twoDays) return false;
+      var src = ((t.from||'') + ' ' + (t.topic||'')).toLowerCase();
+      return n.some(function(nm){ return src.includes(nm); });
     }).slice(0,10).map(function(t){
-      var hoursAgo = t.time ? Math.round((Date.now()-new Date(t.time).getTime())/3600000) : '?';
-      return '[Teams '+hoursAgo+'h ago] '+t.from+' in "'+t.topic+'": '+(t.lastMessage||'').substring(0,150);
+      return '- [Teams] ' + t.from + ': ' + (t.lastMessage||'').substring(0,100);
     }).join('\n');
-    var docSummary = docLibrary.map(function(d){ return d.name; }).join(', ') || 'No documents uploaded';
-    var hasTeams = teamsSummary.trim().length > 0;
-    var prompt = 'You are Cinderella, COO assistant for Risk 2 Solution. Based on the emails, Teams messages and documents below, identify the real open action items Kandia needs to address. Focus on: tasks mentioned in Teams, requests awaiting response, insurance renewals, contract deadlines, compliance tasks, approvals pending, outstanding responses, invoices, HR items, audit prep, client onboarding actions. Assign urgency: Urgent (overdue or due this week), This week, Next week. Return ONLY a JSON array, no markdown:\n[{"urgency":"Urgent","task":"one-line description","source":"email, Teams, or doc name","prompt":"a question Kandia can ask Cinderella for help with this"}]\n\nReturn 5-8 actions maximum.\n\nEMAILS:\n'+emailSummary+'\n\n'+infoSummary+(hasTeams?'\n\nTEAMS CHATS:\n'+teamsSummary:'')+'\n\nDOCUMENTS:\n'+docSummary;
-    var r = await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,system:'You are a COO executive assistant. Return only valid JSON arrays, no markdown, no commentary.',messages:[{role:'user',content:prompt}]})});
+    var docLines = docLibrary.map(function(d){ return '- ' + d.name; }).join('\n') || 'None';
+    var blockerLines = SD.filter(function(s){ return s.blockers && s.blockers.toLowerCase() !== 'none' && s.blockers.trim(); })
+      .map(function(s){ return '- ' + (s.name||'').split(' ')[0] + ': ' + s.blockers; }).join('\n') || 'None';
+
+    var prompt = 'You are Cinderella, COO assistant to Kandia Robertson at Risk 2 Solution. Review the data below and list 5-8 real open action items Kandia needs to act on. Format each as:\n\n[URGENCY] Action description — Source\n\nUrgency options: URGENT / THIS WEEK / NEXT WEEK\n\nBe specific and practical. If an email implies follow-up, list it. If a Teams message has a request, list it. If a staff member has a blocker, list what Kandia should do. Always return at least 5 items — use context to infer priorities if data is thin.\n\nEMAILS:\n' + emailLines + (infoLines ? '\n' + infoLines : '') + (teamsLines ? '\n\nTEAMS:\n' + teamsLines : '') + '\n\nDOCUMENTS:\n' + docLines + '\n\nSTAFF BLOCKERS:\n' + blockerLines;
+
+    var r = await fetch('/proxy', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 800,
+        system: 'You are a COO executive assistant. Return only the action list, no preamble, no JSON, no markdown headers.',
+        messages: [{role:'user', content: prompt}]
+      })
+    });
     var d = await r.json();
-    var text = d.content&&d.content[0]?d.content[0].text:'[]';
-    var cleanText = text.replace(/```json|```/g,'').trim();
-    // Extract just the JSON array
-    var arrStart = cleanText.indexOf('[');
-    var arrEnd = cleanText.lastIndexOf(']');
-    if (arrStart !== -1 && arrEnd !== -1) cleanText = cleanText.substring(arrStart, arrEnd+1);
-    // Remove control characters that break JSON
-    cleanText = cleanText.replace(/[\x00-\x1F\x7F]/g, function(c){ return c === '\n' ? ' ' : ''; });
-    var actions = [];
-    try { actions = JSON.parse(cleanText); } catch(pe) {
-      // Try stripping trailing incomplete object
-      var lastComma = cleanText.lastIndexOf(',{');
-      if (lastComma > 0) { try { actions = JSON.parse(cleanText.substring(0,lastComma)+']'); } catch(e2){} }
+    var text = (d.content && d.content[0] && d.content[0].text) ? d.content[0].text.trim() : '';
+
+    if (!text) {
+      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">No response from AI. <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
+      return;
     }
-    if (actions && actions.length > 0) {
-      _openActionsCache = actions;
-      _openActionsTime = Date.now();
+
+    // Render as styled action items — no JSON needed
+    var lines = text.split('\n').filter(function(l){ return l.trim(); });
+    var html_out = lines.map(function(line) {
+      var cls = 'pl'; var label = 'Next week';
+      if (line.match(/^\[?URGENT/i))   { cls = 'ph'; label = 'Urgent'; }
+      if (line.match(/^\[?THIS WEEK/i)) { cls = 'pm'; label = 'This week'; }
+      // Clean up the prefix
+      var clean = line.replace(/^\[?(URGENT|THIS WEEK|NEXT WEEK)\]?\s*/i, '').trim();
+      if (!clean) return '';
+      var parts = clean.split(' — ');
+      var task = parts[0] || clean;
+      var source = parts[1] ? '<span style="font-size:9px;color:var(--t3);margin-left:4px">· ' + parts[1] + '</span>' : '';
+      var q = 'Help me with: ' + task.replace(/"/g, "'");
+      return '<div class="pri" onclick="qa(this.dataset.q)" data-q="' + q.replace(/"/g,'&quot;') + '">' +
+        '<span class="pp ' + cls + '">' + label + '</span>' +
+        '<span class="pt">' + task + source + '</span>' +
+      '</div>';
+    }).filter(Boolean).join('');
+
+    if (!html_out) {
+      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Could not parse actions. <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
+      return;
     }
-    renderOpenActions(actions);
+
+    // Cache the rendered HTML
+    _openActionsCache = html_out;
+    _openActionsTime = Date.now();
+    el.innerHTML = html_out;
+
   } catch(e) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Could not load actions: '+e.message+'. <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
+    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Error: ' + e.message + ' <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
   }
 }
+
 
 function renderOpenActions(actions) {
   var el = document.getElementById('openActionsList');
