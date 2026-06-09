@@ -923,6 +923,63 @@ ${reportContent}
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+
+// ── OPEN ACTIONS TRACKER ──
+const ACTIONS_PATH = '/home/openactions.json';
+function loadActions() {
+  try { return JSON.parse(readFileSync(ACTIONS_PATH,'utf8')||'[]'); } catch(e) { return []; }
+}
+function saveActions(data) {
+  writeFileSync(ACTIONS_PATH, JSON.stringify(data, null, 2));
+}
+
+app.get('/openactions', requireAuth, (req, res) => {
+  res.json({ actions: loadActions() });
+});
+
+app.post('/openactions', requireAuth, (req, res) => {
+  try {
+    const actions = loadActions();
+    const action = {
+      id: Date.now(),
+      title: req.body.title || 'Untitled action',
+      source: req.body.source || '',
+      urgency: req.body.urgency || 'This week',
+      detail: req.body.detail || '',
+      deadline: req.body.deadline || null,
+      addedAt: new Date().toISOString(),
+      status: 'open',
+      type: req.body.type || 'manual',
+      emailFrom: req.body.emailFrom || null,
+      emailSubject: req.body.emailSubject || null
+    };
+    actions.unshift(action);
+    saveActions(actions);
+    console.log('[Actions] Added:', action.title);
+    res.json({ success: true, action });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/openactions/:id', requireAuth, (req, res) => {
+  try {
+    const actions = loadActions();
+    const idx = actions.findIndex(a => String(a.id) === String(req.params.id));
+    if (idx < 0) return res.status(404).json({ error: 'Not found' });
+    actions[idx] = { ...actions[idx], ...req.body, id: actions[idx].id };
+    if (req.body.status && req.body.status !== 'open') actions[idx].resolvedAt = new Date().toISOString();
+    saveActions(actions);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/openactions/:id', requireAuth, (req, res) => {
+  try {
+    const actions = loadActions().filter(a => String(a.id) !== String(req.params.id));
+    saveActions(actions);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── SERVE DASHBOARD ──
 app.use(express.static('.'));
 
