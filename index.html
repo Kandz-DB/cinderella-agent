@@ -1833,7 +1833,7 @@ async function refreshTodayPriorities() {
 
   try {
 
-    var r = await fetch('/proxy', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:400,system:SYS,messages:[{role:'user',content:prompt}]})});
+    var r = await fetch('/proxy', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:400,system:SYS,messages:[{role:'user',content:prompt}]})});
 
     var d = await r.json();
 
@@ -3320,7 +3320,7 @@ async function generateEmailInsights() {
 
     var r = await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
 
-      model:'claude-sonnet-4-5',max_tokens:500,system:SYS,
+      model:'claude-sonnet-4-6',max_tokens:500,system:SYS,
 
       messages:[{role:'user',content:'Analyse these emails and give me 4 specific, actionable insights in plain language. Each insight 1-2 sentences max. Start each with an emoji.\n\n'+emailSummary+'\n\n'+infoSummary}]
 
@@ -4688,7 +4688,7 @@ async function autoBriefing(){
 
   try{
 
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1200,system:SYS,messages:[{role:'user',content:briefingPrompt}]})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1200,system:SYS,messages:[{role:'user',content:briefingPrompt}]})});
 
     if(!r.ok)throw new Error('HTTP '+r.status);
 
@@ -4965,7 +4965,7 @@ async function send(){
 
   try{
 
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:2000,system:SYS+liveCtx+docCtx,messages:apiMsgs})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:2000,system:SYS+liveCtx+docCtx,messages:apiMsgs})});
 
     const d=await r.json();
 
@@ -5283,7 +5283,7 @@ async function generateEmailDraft(name,context,subject){
 
   try{
 
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:600,messages:[{role:'user',content:prompt}]})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:600,messages:[{role:'user',content:prompt}]})});
 
     const d=await r.json();
 
@@ -5377,7 +5377,7 @@ async function refineEmail(){
 
   try{
 
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:500,messages:[{role:'user',content:prompt2}]})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:500,messages:[{role:'user',content:prompt2}]})});
 
     const d=await r.json();
 
@@ -6052,17 +6052,26 @@ async function loadOpenActions(force) {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
+        model: 'claude-sonnet-4-6',
         max_tokens: 800,
         system: 'You are a COO executive assistant. Return only the action list, no preamble, no JSON, no markdown headers.',
         messages: [{role:'user', content: prompt}]
       })
     });
     var d = await r.json();
+
+    // Show actual API error if present
+    if (d.error || d.type === 'error') {
+      var errMsg = (d.error && d.error.message) || JSON.stringify(d.error || d).substring(0, 120);
+      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">API error: ' + errMsg + ' <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
+      return;
+    }
+
     var text = (d.content && d.content[0] && d.content[0].text) ? d.content[0].text.trim() : '';
 
     if (!text) {
-      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">No response from AI. <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
+      var raw = JSON.stringify(d).substring(0, 200);
+      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Empty AI response. Raw: ' + raw + ' <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
       return;
     }
 
