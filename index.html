@@ -8162,20 +8162,33 @@ function showDraftResult(name,subject,body){
 
 }
 
-function openInOutlook(){
+async function openInOutlook(){
+  var to = document.getElementById('dm-to').value || '';
+  var subject = document.getElementById('dm-subject').value || '';
+  var body = document.getElementById('dm-body').value || '';
 
-  const to=encodeURIComponent(document.getElementById('dm-to').value);
+  // Try Graph API draft first (cleaner than mailto)
+  try {
+    var toList = to.split(/[;,]/).map(function(e){ return e.trim(); }).filter(Boolean);
+    if (toList.length > 0) {
+      var r = await fetch('/graph/email/draft', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({subject: subject, body: body, to: toList})
+      });
+      var d = await r.json();
+      if (d.success) {
+        openOutlookDrafts();
+        return;
+      }
+    }
+  } catch(e) { console.warn('Draft creation failed, using compose URL'); }
 
-  const subject=encodeURIComponent(document.getElementById('dm-subject').value);
-
-  const body=encodeURIComponent(document.getElementById('dm-body').value);
-
-  // Open compose in Outlook Web instead of desktop app
-
-  var outlookComposeUrl = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(to) + '&subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-
-  window.open(outlookComposeUrl, '_blank');
-
+  // Fallback: Outlook compose URL — encode once only
+  var url = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(to) +
+    '&subject=' + encodeURIComponent(subject) +
+    '&body=' + encodeURIComponent(body);
+  window.open(url, '_blank');
 }
 
 function copyEmail(){
