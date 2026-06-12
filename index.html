@@ -4206,6 +4206,12 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 </div>
 
 <script>
+function complianceClick(el) {
+  var items = el.getAttribute('data-items') || '';
+  var prompt = 'Give me a focused action list ONLY for these compliance and insurance items: ' + items.replace(/\|/g, ', ') + '. For each item state: (1) exact action needed, (2) owner, (3) deadline or urgency. Be direct. No tangents, no questions back.';
+  qa(prompt);
+}
+
 // Auto-detect session expiry on any fetch response
 async function safeFetch(url, opts) {
   var r = await fetch(url, opts);
@@ -9055,7 +9061,9 @@ async function loadR2SMetrics() {
     docLibrary.forEach(function(d){ if(complianceKeywords.some(function(k){return d.name.toLowerCase().includes(k);})) complianceItems.push(d.name); });
     html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px">Compliance · emails &amp; documents</div>';
     if (complianceItems.length > 0) {
-      html += '<div class="ins" onclick="qa(\'Review my compliance and insurance items and tell me what actions I need to take: '+complianceItems.slice(0,3).join(', ').replace(/\'/g,'')+'\')"><div class="il">'+complianceItems.length+' item'+(complianceItems.length>1?'s':'')+' detected</div><div class="it">'+complianceItems.slice(0,3).join(' · ')+'</div></div>';
+      html += '<div class="ins" onclick="complianceClick(this)" data-items="' + complianceItems.slice(0,5).join('|').replace(/"/g,'&quot;') + '">' +
+      '<div class="il">' + complianceItems.length + ' item' + (complianceItems.length>1?'s':'') + ' detected</div>' +
+      '<div class="it">' + complianceItems.slice(0,3).join(' · ') + '</div></div>';
     } else {
       html += '<div class="ins"><div class="il">No compliance items detected</div><div class="it" style="color:var(--t3)">Upload insurance or audit documents to track them here</div></div>';
     }
