@@ -6,36 +6,64 @@
 <title>Weekly Check-in — Risk 2 Solution</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f6f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
-.card{background:#fff;border-radius:16px;padding:32px;max-width:500px;width:100%;box-shadow:0 4px 24px rgba(0,0,0,.08)}
-.logo{font-size:20px;font-weight:700;color:#4ECDC4;margin-bottom:4px;letter-spacing:-.5px}
-.sub{font-size:12px;color:#888;margin-bottom:28px}
-h2{font-size:16px;font-weight:600;color:#1a1a1a;margin-bottom:20px}
-label{font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:5px;margin-top:16px}
-input,select,textarea{width:100%;padding:10px 12px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:14px;font-family:inherit;background:#fafafa;transition:border .2s;outline:none;resize:vertical}
-input:focus,select:focus,textarea:focus{border-color:#4ECDC4;background:#fff}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f6f9;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px}
+.card{background:#fff;border-radius:16px;padding:28px 28px 32px;max-width:540px;width:100%;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+.logo{font-size:20px;font-weight:700;color:#4ECDC4;margin-bottom:2px;letter-spacing:-.5px}
+.sub{font-size:12px;color:#888;margin-bottom:24px}
+h2{font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:18px}
+.section{border-top:1px solid #f0f0f0;padding-top:18px;margin-top:18px}
+.section-title{font-size:11px;font-weight:700;color:#4ECDC4;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px}
+label{font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:5px;margin-top:14px}
+label:first-child{margin-top:0}
+input[type=text],select,textarea{width:100%;padding:9px 12px;border:1.5px solid #e8e8e8;border-radius:10px;font-size:13px;font-family:inherit;background:#fafafa;transition:border .2s;outline:none;resize:vertical}
+input[type=text]:focus,select:focus,textarea:focus{border-color:#4ECDC4;background:#fff}
+
+/* Capacity sliders */
+.cap-block{background:#f8fffe;border:1.5px solid #e0f7f5;border-radius:12px;padding:14px 16px;margin-top:8px}
+.cap-label{font-size:11px;font-weight:600;color:#4ECDC4;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
 .slider-row{display:flex;align-items:center;gap:12px}
-input[type=range]{flex:1;accent-color:#4ECDC4}
-.cap-val{font-size:18px;font-weight:700;color:#4ECDC4;min-width:44px;text-align:right}
+input[type=range]{flex:1;accent-color:#4ECDC4;height:4px}
+.cap-val{font-size:20px;font-weight:700;color:#4ECDC4;min-width:52px;text-align:right}
+.trend-row{display:flex;gap:8px;margin-top:10px}
+.trend-btn{flex:1;padding:6px 4px;border:1.5px solid #e8e8e8;border-radius:8px;font-size:11px;font-weight:600;font-family:inherit;background:#fff;cursor:pointer;transition:all .15s;color:#888}
+.trend-btn.active{border-color:#4ECDC4;background:#f0fffe;color:#4ECDC4}
+.trend-btn.heavy.active{border-color:#F56565;background:#FFF5F5;color:#C53030}
+.trend-btn.light.active{border-color:#48BB78;background:#F0FFF4;color:#276749}
+
+/* Availability */
+.avail-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.day-btn{padding:6px 12px;border:1.5px solid #e8e8e8;border-radius:8px;font-size:12px;font-weight:500;font-family:inherit;background:#fff;cursor:pointer;transition:all .15s;color:#666}
+.day-btn.selected{border-color:#E53E3E;background:#FFF5F5;color:#C53030}
+.day-btn.full-week{border-color:#4ECDC4;background:#f0fffe;color:#4ECDC4}
+.avail-note{font-size:11px;color:#aaa;margin-top:6px}
+
+/* Skills chips */
+.skills-grid{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.skill-chip{padding:5px 12px;border:1.5px solid #e8e8e8;border-radius:20px;font-size:12px;font-weight:500;font-family:inherit;background:#fff;cursor:pointer;transition:all .15s;color:#666}
+.skill-chip.selected{border-color:#4ECDC4;background:#f0fffe;color:#4ECDC4;font-weight:600}
+.skill-custom{margin-top:8px}
+
+/* Submit */
 .btn{width:100%;padding:14px;background:linear-gradient(135deg,#4ECDC4,#45B7AA);color:#fff;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;margin-top:24px;font-family:inherit;transition:opacity .2s}
 .btn:hover{opacity:.9}
 .btn:disabled{opacity:.5;cursor:not-allowed}
-.success{display:none;text-align:center;padding:24px 0}
+.error-msg{background:#FEE;border:1px solid #FCC;border-radius:8px;padding:12px;font-size:13px;color:#A33;margin-top:12px;display:none;white-space:pre-wrap}
+.sending-msg{display:none;text-align:center;padding:10px;font-size:12px;color:#888}
+.success{display:none;text-align:center;padding:32px 0}
 .success .tick{font-size:48px;margin-bottom:12px}
-.success h3{font-size:18px;font-weight:600;color:#1a1a1a;margin-bottom:6px}
+.success h3{font-size:18px;font-weight:600;margin-bottom:6px}
 .success p{font-size:13px;color:#888}
-.error-msg{background:#FEE;border:1px solid #FCC;border-radius:8px;padding:12px;font-size:13px;color:#A33;margin-top:12px;display:none}
-.sending{display:none;text-align:center;padding:12px;font-size:13px;color:#888}
 </style>
 </head>
 <body>
 <div class="card">
   <div class="logo">Cinderella</div>
-  <div class="sub">Executive Assistant to COO · Risk 2 Solution</div>
+  <div class="sub">Weekly Check-in · Risk 2 Solution</div>
 
   <div id="form-section">
-    <h2>Weekly Check-in</h2>
+    <h2>How was your week?</h2>
 
+    <!-- Name & Role -->
     <label>Your name</label>
     <select id="name">
       <option value="">Select your name...</option>
@@ -49,37 +77,186 @@ input[type=range]{flex:1;accent-color:#4ECDC4}
       <option>Cherry Abadeza</option>
     </select>
 
-    <label>Capacity this week (%)</label>
-    <div class="slider-row">
-      <input type="range" id="capacity" min="10" max="100" value="80" oninput="document.getElementById('capval').textContent=this.value+'%'">
-      <div class="cap-val" id="capval">80%</div>
+    <label style="margin-top:12px">Your role</label>
+    <input type="text" id="role" placeholder="e.g. Trainer, Admin Officer, Operations Lead">
+
+    <!-- Capacity -->
+    <div class="section">
+      <div class="section-title">Capacity</div>
+
+      <div class="cap-block">
+        <div class="cap-label">This week — how full was your plate?</div>
+        <div class="slider-row">
+          <input type="range" id="capacity" min="10" max="100" value="80" oninput="updateCapacity()">
+          <div class="cap-val" id="capval">80%</div>
+        </div>
+      </div>
+
+      <div class="cap-block" style="margin-top:10px">
+        <div class="cap-label">Next week — how does it look?</div>
+        <div class="slider-row">
+          <input type="range" id="capacityNext" min="10" max="100" value="80" oninput="updateCapacity()">
+          <div class="cap-val" id="capNextVal">80%</div>
+        </div>
+        <div style="margin-top:10px">
+          <div style="font-size:11px;font-weight:600;color:#888;margin-bottom:6px">Compared to this week...</div>
+          <div class="trend-row">
+            <button type="button" class="trend-btn light" id="trend-lighter" onclick="setTrend('Lighter')">↓ Lighter</button>
+            <button type="button" class="trend-btn active" id="trend-similar" onclick="setTrend('Similar')">→ Similar</button>
+            <button type="button" class="trend-btn heavy" id="trend-heavier" onclick="setTrend('Heavier')">↑ Heavier</button>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <label>Projects you're working on this week</label>
-    <input type="text" id="projects" placeholder="e.g. Client onboarding, ISO prep, platform review">
+    <!-- Availability -->
+    <div class="section">
+      <div class="section-title">Availability next week</div>
+      <div class="avail-row" id="avail-row">
+        <button type="button" class="day-btn full-week" id="btn-full" onclick="toggleDay('full')">Full week</button>
+        <button type="button" class="day-btn" id="btn-mon" onclick="toggleDay('mon')">Mon</button>
+        <button type="button" class="day-btn" id="btn-tue" onclick="toggleDay('tue')">Tue</button>
+        <button type="button" class="day-btn" id="btn-wed" onclick="toggleDay('wed')">Wed</button>
+        <button type="button" class="day-btn" id="btn-thu" onclick="toggleDay('thu')">Thu</button>
+        <button type="button" class="day-btn" id="btn-fri" onclick="toggleDay('fri')">Fri</button>
+      </div>
+      <div class="avail-note" id="avail-note">Click days you're on leave or unavailable</div>
+      <label style="margin-top:12px">Leave details <span style="font-weight:400;color:#aaa">(optional)</span></label>
+      <input type="text" id="leave" placeholder="e.g. Mon: annual leave, Fri: RDO">
+    </div>
 
-    <label>Any blockers or things you need support with?</label>
-    <textarea id="blockers" rows="2" placeholder="None, or describe what you need..."></textarea>
+    <!-- Skills -->
+    <div class="section">
+      <div class="section-title">Skills applied this week</div>
+      <div class="skills-grid" id="skills-grid">
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Administration</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Logistics</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Events</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Marketing</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Business development</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Training & assessment</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Finance</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Client management</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Project management</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Risk management</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Compliance</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">IT & systems</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">HR & people</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Strategy</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Design & drafting</button>
+        <button type="button" class="skill-chip" onclick="toggleSkill(this)">Research</button>
+      </div>
+      <div class="skill-custom">
+        <input type="text" id="skills-custom" placeholder="Other skills (comma separated)...">
+      </div>
+    </div>
 
-    <label>Your main focus for next week</label>
-    <input type="text" id="focus" placeholder="e.g. Complete Q2 review, onboard new client">
+    <!-- Projects & Blockers -->
+    <div class="section">
+      <div class="section-title">Projects & support</div>
+      <label>Projects you worked on this week</label>
+      <textarea id="projects" rows="3" placeholder="What were you focused on this week?"></textarea>
 
-    <label>Anything else Kandia should know?</label>
-    <textarea id="support" rows="2" placeholder="Optional — team updates, personal notes, etc."></textarea>
+      <label>Any blockers or things you need support with?</label>
+      <textarea id="blockers" rows="2" placeholder="None, or describe what you need..."></textarea>
+
+      <label>Your main focus for next week</label>
+      <input type="text" id="focus" placeholder="What's the priority heading into next week?">
+
+      <label>Anything else Kandia should know?</label>
+      <textarea id="notes" rows="2" placeholder="Optional — team updates, wins, concerns..."></textarea>
+    </div>
 
     <div class="error-msg" id="error-msg"></div>
-    <div class="sending" id="sending-msg">Submitting your check-in...</div>
+    <div class="sending-msg" id="sending-msg">Submitting your check-in...</div>
     <button class="btn" id="submit-btn" onclick="submitCheckin()">Submit check-in</button>
   </div>
 
   <div class="success" id="success-section">
     <div class="tick">✅</div>
     <h3>Check-in received!</h3>
-    <p>Thanks <span id="success-name"></span> — Kandia will review your update shortly.</p>
+    <p>Thanks <span id="success-name"></span> — have a great week ahead!</p>
   </div>
 </div>
 
 <script>
+var selectedTrend = 'Similar';
+var leaveDays = [];
+var fullWeek = true;
+
+function updateCapacity() {
+  var c = parseInt(document.getElementById('capacity').value);
+  var cn = parseInt(document.getElementById('capacityNext').value);
+  document.getElementById('capval').textContent = c + '%';
+  document.getElementById('capNextVal').textContent = cn + '%';
+  // Auto-update trend based on slider difference
+  var diff = cn - c;
+  if (diff >= 8) setTrend('Heavier');
+  else if (diff <= -8) setTrend('Lighter');
+  else setTrend('Similar');
+}
+
+function setTrend(trend) {
+  selectedTrend = trend;
+  ['lighter','similar','heavier'].forEach(function(t) {
+    var btn = document.getElementById('trend-' + t);
+    btn.classList.remove('active');
+  });
+  document.getElementById('trend-' + trend.toLowerCase()).classList.add('active');
+}
+
+function toggleDay(day) {
+  if (day === 'full') {
+    fullWeek = true;
+    leaveDays = [];
+    document.querySelectorAll('.day-btn').forEach(function(b){ b.classList.remove('selected'); });
+    document.getElementById('btn-full').classList.add('full-week');
+    document.getElementById('avail-note').textContent = 'Available all week';
+    return;
+  }
+  // Deselect full week
+  fullWeek = false;
+  document.getElementById('btn-full').classList.remove('full-week');
+
+  var idx = leaveDays.indexOf(day);
+  var btn = document.getElementById('btn-' + day);
+  if (idx >= 0) {
+    leaveDays.splice(idx, 1);
+    btn.classList.remove('selected');
+  } else {
+    leaveDays.push(day);
+    btn.classList.add('selected');
+  }
+  if (leaveDays.length === 0) {
+    fullWeek = true;
+    document.getElementById('btn-full').classList.add('full-week');
+    document.getElementById('avail-note').textContent = 'Available all week';
+  } else {
+    var dayNames = {'mon':'Monday','tue':'Tuesday','wed':'Wednesday','thu':'Thursday','fri':'Friday'};
+    document.getElementById('avail-note').textContent = 'Leave/unavailable: ' + leaveDays.map(function(d){ return dayNames[d]; }).join(', ');
+  }
+}
+
+function toggleSkill(btn) {
+  btn.classList.toggle('selected');
+}
+
+function getAvailabilityString() {
+  if (fullWeek || leaveDays.length === 0) return 'Full week';
+  var dayNames = {'mon':'Monday','tue':'Tuesday','wed':'Wednesday','thu':'Thursday','fri':'Friday'};
+  return leaveDays.length + '+ days out — leave on: ' + leaveDays.map(function(d){ return dayNames[d]; }).join(', ');
+}
+
+function getSkillsString() {
+  var selected = [];
+  document.querySelectorAll('.skill-chip.selected').forEach(function(chip){
+    selected.push(chip.textContent.trim());
+  });
+  var custom = document.getElementById('skills-custom').value.trim();
+  if (custom) custom.split(',').forEach(function(s){ var t=s.trim(); if(t) selected.push(t); });
+  return selected.join(', ');
+}
+
 async function submitCheckin() {
   var name = document.getElementById('name').value;
   if (!name) { showError('Please select your name before submitting.'); return; }
@@ -90,66 +267,62 @@ async function submitCheckin() {
   btn.disabled = true;
   errEl.style.display = 'none';
   sendEl.style.display = 'block';
+  sendEl.textContent = 'Submitting your check-in...';
 
-  // Calculate week ending (Sunday)
   var today = new Date();
   var day = today.getDay();
   var sunday = new Date(today);
   sunday.setDate(today.getDate() + (day === 0 ? 0 : 7 - day));
-  var weekEnding = sunday.toISOString().split('T')[0];
+  var weekEnding = sunday.getDate() + ' ' + sunday.toLocaleString('en-AU',{month:'long'}) + ' ' + sunday.getFullYear();
 
   var payload = {
     name: name,
+    role: document.getElementById('role').value.trim(),
     capacity: parseInt(document.getElementById('capacity').value) || 80,
+    capacityNext: parseInt(document.getElementById('capacityNext').value) || 80,
+    trend: selectedTrend,
+    availability: getAvailabilityString(),
+    leave: document.getElementById('leave').value.trim(),
+    skills: getSkillsString(),
     projects: document.getElementById('projects').value.trim(),
     blockers: document.getElementById('blockers').value.trim() || 'None',
     focus: document.getElementById('focus').value.trim(),
-    support: document.getElementById('support').value.trim(),
+    notes: document.getElementById('notes').value.trim(),
     weekEnding: weekEnding,
     submitted: new Date().toISOString()
   };
 
   var attempts = 0;
-  var maxAttempts = 3;
   var lastError = '';
-
-  while (attempts < maxAttempts) {
+  while (attempts < 3) {
     attempts++;
     try {
-      var serverUrl = window.location.origin;
-      var r = await fetch(serverUrl + '/checkins/submit', {
+      var r = await fetch(window.location.origin + '/checkins/submit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
       });
-
       var data = await r.json();
-
       if (r.ok && data.success) {
-        // Success
         sendEl.style.display = 'none';
         document.getElementById('form-section').style.display = 'none';
         document.getElementById('success-name').textContent = name.split(' ')[0];
         document.getElementById('success-section').style.display = 'block';
         return;
-      } else {
-        lastError = data.error || ('Server error ' + r.status);
-        if (r.status === 400) break; // Don't retry validation errors
       }
+      lastError = data.error || ('Server error ' + r.status);
+      if (r.status === 400) break;
     } catch(e) {
-      lastError = 'Network error — please check your connection. (' + e.message + ')';
+      lastError = 'Network error: ' + e.message;
     }
-
-    if (attempts < maxAttempts) {
-      sendEl.textContent = 'Retrying... (attempt ' + (attempts+1) + ' of ' + maxAttempts + ')';
-      await new Promise(function(resolve){ setTimeout(resolve, 2000); });
+    if (attempts < 3) {
+      sendEl.textContent = 'Retrying... (attempt ' + (attempts+1) + ' of 3)';
+      await new Promise(function(res){ setTimeout(res, 2000); });
     }
   }
-
-  // All attempts failed
   sendEl.style.display = 'none';
   btn.disabled = false;
-  showError('Could not submit your check-in after ' + maxAttempts + ' attempts. Error: ' + lastError + '\n\nPlease screenshot this message and send it to Kandia.');
+  showError('Could not submit after 3 attempts.\n\nError: ' + lastError + '\n\nPlease screenshot and send to Kandia.');
 }
 
 function showError(msg) {
