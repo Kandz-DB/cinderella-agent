@@ -1177,8 +1177,12 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
           <div class="card">
 
-            <div class="ct">R2S metrics <span class="ct-action" onclick="loadR2SMetrics()">↻ Refresh</span></div>
+            <div class="ct">Board report <span class="ct-action" onclick="generateBoardReportManual()">Generate now</span></div>
+            <div id="boardReportStatus">
+              <div style="font-size:11px;color:var(--t2);padding:4px 0">Loading...</div>
+            </div>
 
+            <div class="ct" style="margin-top:16px">R2S metrics <span class="ct-action" onclick="loadR2SMetrics()">↻ Refresh</span></div>
             <div id="r2sMetricsList"><div style="font-size:11px;color:var(--t2);padding:8px 0">Loading live data...</div></div>
 
           </div>
@@ -2574,8 +2578,12 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
           <div class="card">
 
-            <div class="ct">R2S metrics <span class="ct-action" onclick="loadR2SMetrics()">↻ Refresh</span></div>
+            <div class="ct">Board report <span class="ct-action" onclick="generateBoardReportManual()">Generate now</span></div>
+            <div id="boardReportStatus">
+              <div style="font-size:11px;color:var(--t2);padding:4px 0">Loading...</div>
+            </div>
 
+            <div class="ct" style="margin-top:16px">R2S metrics <span class="ct-action" onclick="loadR2SMetrics()">↻ Refresh</span></div>
             <div id="r2sMetricsList"><div style="font-size:11px;color:var(--t2);padding:8px 0">Loading live data...</div></div>
 
           </div>
@@ -3971,8 +3979,12 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
           <div class="card">
 
-            <div class="ct">R2S metrics <span class="ct-action" onclick="loadR2SMetrics()">↻ Refresh</span></div>
+            <div class="ct">Board report <span class="ct-action" onclick="generateBoardReportManual()">Generate now</span></div>
+            <div id="boardReportStatus">
+              <div style="font-size:11px;color:var(--t2);padding:4px 0">Loading...</div>
+            </div>
 
+            <div class="ct" style="margin-top:16px">R2S metrics <span class="ct-action" onclick="loadR2SMetrics()">↻ Refresh</span></div>
             <div id="r2sMetricsList"><div style="font-size:11px;color:var(--t2);padding:8px 0">Loading live data...</div></div>
 
           </div>
@@ -4185,27 +4197,45 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
           <div class="ct">Scheduling suggestions <span class="ct-action" onclick="qa('Optimise my calendar for the next 2 weeks based on my priorities and commitments')">Optimise my calendar</span></div>
 
-          <div class="ins" onclick="qa('Book a 30-minute prep block at 10:15 today for Titan Corp onboarding')"><div class="il">Book now</div><div class="it">30 min prep at 10:15 for Titan Corp — no prep time blocked before 11:00 meeting.</div></div>
+          <div class="ins" onclick="qa('Book a 30-minute prep block at 10:15 today for Titan Corp onboarding')"><div class="il">Book now</div><div class="it">30 min prep at 10:15 for Titan Corp —
+// ── BOARD REPORT ──
+async function loadBoardReportStatus() {
+  var el = document.getElementById('boardReportStatus');
+  if (!el) return;
+  try {
+    var r = await fetch('/board-report/latest');
+    if (!r.ok) { el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No report generated yet. Click Generate now to create one.</div>'; return; }
+    var d = await r.json();
+    if (!d.filename) { el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No report generated yet. Click Generate now to create one.</div>'; return; }
+    var genDate = d.generatedAt ? new Date(d.generatedAt).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : 'Unknown';
+    el.innerHTML = '<div style="background:var(--gl);border-radius:10px;padding:10px 12px;margin-top:4px">' +
+      '<div style="font-size:12px;font-weight:600;color:#0F6E56;margin-bottom:3px">📋 ' + d.monthName + ' ' + d.yr + ' Report Ready</div>' +
+      '<div style="font-size:11px;color:var(--t2);margin-bottom:8px">For: ' + (d.meetingSubject||'Board Meeting') + '<br>Generated: ' + genDate + '</div>' +
+      '<button onclick="downloadBoardReport()" style="font-size:11px;padding:5px 14px;background:#0F6E56;color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">⬇ Download Report</button>' +
+    '</div>';
+  } catch(e) { el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">Could not load report status.</div>'; }
+}
 
-          <div class="ins" onclick="qa('Schedule the ISO 27001 pre-audit session for Monday with Sofia Ng')"><div class="il">This week</div><div class="it">ISO pre-check session Monday 11:00 — 90 min deep work with Sofia Ng.</div></div>
+function downloadBoardReport() {
+  window.open('/board-report/download', '_blank');
+}
 
-          <div class="ins" onclick="qa('Set up a quarterly vendor review cadence starting Tuesday')"><div class="il">Create recurring</div><div class="it">No quarterly vendor review exists. Cinderella recommends setting Tue 10:00 as recurring quarterly.</div></div>
+async function generateBoardReportManual() {
+  var el = document.getElementById('boardReportStatus');
+  if (el) el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">⏳ Generating report — this takes 30-60 seconds, please wait...</div>';
+  try {
+    var r = await fetch('/board-report/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
+    var d = await r.json();
+    if (d.success) {
+      await loadBoardReportStatus();
+    } else {
+      if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + (d.error||'Failed') + '</div>';
+    }
+  } catch(e) {
+    if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + e.message + '</div>';
+  }
+}
 
-          <div class="ins" onclick="qa('Block lunch and end-of-day buffer in my calendar for the rest of this week')"><div class="il">Protect your time</div><div class="it">No lunch or end-of-day buffer blocked this week.</div></div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-  </div><!-- end main -->
-
-</div><!-- end app -->
-
-</div>
-
-<script>
 function complianceClick(el) {
   var items = el.getAttribute('data-items') || '';
   var prompt = 'Give me a focused action list ONLY for these compliance and insurance items: ' + items.replace(/\|/g, ', ') + '. For each item state: (1) exact action needed, (2) owner, (3) deadline or urgency. Be direct. No tangents, no questions back.';
@@ -7394,8 +7424,9 @@ function show(id,btn){
 
   // Load live data when COO tab opens
   if(id==='coo'){
-    loadOpenActions(false); // uses 30-min cache; click Refresh to force
+    loadOpenActions(false);
     loadR2SMetrics();
+    loadBoardReportStatus();
   }
   if(id==='tracker') loadTracker();
 
@@ -7573,7 +7604,11 @@ function closeModal(){document.getElementById('modal').classList.remove('open');
 
 const SYS=[
 
-  'You are Cinderella, the personal executive assistant to Kandia, COO of Risk 2 Solution, an integrated strategic risk management company in Australia.',
+  'You are Cinderella, the personal executive assistant to Kandia Robertson, COO of Risk 2 Solution Group — Australia\'s most awarded integrated risk management company.',
+
+  '',
+
+  'ABOUT RISK 2 SOLUTION GROUP: Professional services firm specialising in Risk Management (Presilience® programs, Business Continuity, CRO-as-a-Service), Security (SoCI compliance, OVA prevention, CSO-as-a-Service), Technology & Cybersecurity (vCISO, SOC monitoring, Vulnerability Remediation), Training & Education (RTO #4785, Graduate qualifications, R2S Academy eLearning), and Emergency Planning Services (EMPs, Evacuation Diagrams, Warden Training, BCP). ISO certified: 9001, 45001, 14001, 18788. 20+ years, 800+ clients, 150,000+ people trained. Murrarie QLD. NOTE: Medical division divested — never reference medical personnel or medical services.',
 
   '',
 
@@ -7581,7 +7616,7 @@ const SYS=[
 
   '',
 
-  'YOUR ROLE: Kandia right hand. Proactive, warm, direct. Surface what matters before she asks. Draft properly. Flag problems early.',
+  'YOUR ROLE: Kandia right hand. Proactive, warm, direct. Surface what matters before she asks. Draft properly. Flag problems early. Apply best-practice COO knowledge for professional services and consulting firms.',
 
   '',
 
@@ -7597,11 +7632,11 @@ const SYS=[
 
   '',
 
-  'WHAT KEEPS KANDIA UP AT NIGHT: Cash flow and financial performance. Client delivery and project management. Staff time and effectiveness (capacity, burnout, blockers). Board reporting.',
+  'WHAT KEEPS KANDIA UP AT NIGHT: Cash flow and financial performance. Client delivery and project management. Staff capacity, wellbeing and effectiveness. RTO compliance and training delivery standards. Government panel obligations. Board reporting. ISO certification maintenance.',
 
   '',
 
-  'BUSINESS CONTEXT: Risk 2 Solution, Australia. Team: Janita Zhang, Reinette Kruger, Diane Kruger (finance, diane.k@risk2solution.com), Garima Arora, Paul Johnston, Dani Stevenson, Ross Mackenzie. Dave Cohen is CEO. Clients: Titan Corp, Delta Inc, Prentice Group.',
+  'BUSINESS CONTEXT: Risk 2 Solution Group, Australia. Team: Janita Zhang (Marketing & IT), Reinette Kruger (Admin), Diane Kruger (Finance & Corporate Ops, diane.k@risk2solution.com), Garima Arora (Emergency Planning Design), Paul Johnston (Risk Management), Dani Stevenson (Training), Ross Mackenzie (Training & Capability). Dave Cohen is CEO. Key service lines: Risk Management, Security, Emergency Planning, Training (RTO), Cybersecurity. Presilience® is the flagship methodology.',
 
   'STAFF CHECK-IN DATA: When Kandia asks about staff history, check-ins, skills, capacity trends, cross-training or succession, full historical check-in data is included in the context above (FULL CHECK-IN HISTORY section). Use it to give specific, named answers about each staff member. Never say you cannot access this data — it is provided directly in the message.',
 
@@ -9558,6 +9593,34 @@ async function saveManualAction() {
   await addToTracker(
     title,
     document.getElementById('at-source').value.trim() || 'Manual',
+    document.getElementById('at-urgency').value,
+    document.getElementById('at-detail').value.trim(),
+    null, null
+  );
+  // Set deadline separately
+  var deadline = document.getElementById('at-deadline').value.trim();
+  if (deadline && _trackerActions[0]) {
+    await fetch('/openactions/' + _trackerActions[0].id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({deadline:deadline})});
+  }
+  closeModal();
+  show('tracker', document.getElementById('actionTrackerBtn'));
+}
+
+
+function cooTrack(i, btn) {
+  var a = window._cooActions && window._cooActions[i];
+  if (!a) return;
+  addToTracker(a.task, a.source, a.urgency, '', null, null);
+  btn.textContent = '✓'; btn.style.color = 'var(--g)';
+}
+
+function dismissCOOAction(el) {
+  el.style.opacity = '0';
+  el.style.transition = 'opacity 0.2s';
+  setTimeout(function(){ el.remove(); }, 200);
+}
+
+value.trim() || 'Manual',
     document.getElementById('at-urgency').value,
     document.getElementById('at-detail').value.trim(),
     null, null
