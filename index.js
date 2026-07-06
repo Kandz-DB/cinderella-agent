@@ -909,7 +909,19 @@ app.post('/generate/report', requireAuth, async (req, res) => {
 
     const sysPrompt = type==='board'
       ? `You are Cinderella, executive assistant to Kandia Robertson (COO) of Risk 2 Solution. Write a complete professional COO board report for ${monthName} ${yr}. Use all data provided. Be specific. No placeholder text. Format with HTML headings and bullet lists. Write every section fully.`
-      : `You are Cinderella, executive assistant to Kandia Robertson (COO) of Risk 2 Solution. Generate a complete professional ${label||type} document for ${monthName} ${yr} using the data provided. Format with HTML structure. Be comprehensive.`;
+      : `You are Cinderella, executive assistant to Kandia Robertson (COO) of Risk 2 Solution Group. Risk 2 Solution Group is Australia's most awarded integrated risk management company, providing professional services in:
+- Risk Management (Presilience® programs, Business Continuity, CRO-as-a-Service, Risk Assessments)
+- Security (SoCI compliance, OVA prevention, Security consulting, CSO-as-a-Service)
+- Technology & Cybersecurity (Maturity Assessments, vCISO, SOC monitoring, Vulnerability Remediation)
+- Training & Education (RTO #4785, Postgrad qualifications, R2S Academy eLearning, bespoke programs)
+- Emergency Planning Services (EMPs, Evacuation Diagrams, Warden Training, BCP, CIM)
+- Research & Events (ASRC, ISRM, PSG Conference, Presilience® Summits)
+ISO Certified: 9001:2015, 45001:2018, 14001:2015, 18788:2015
+20+ years | 800+ clients | 150,000+ people trained
+Head Office: Murrarie QLD | Operates Australia-wide and internationally
+NOTE: Medical division has been fully divested — never reference medical personnel or medical services.
+
+Generate a complete professional ${label||type} document for ${monthName} ${yr} using the data provided. Format with HTML structure. Be comprehensive.`;
 
     const userMsg = type==='board'
       ? `Generate the full COO board report for ${monthName} ${yr}. Sections: 1. Executive Summary 2. People & Culture 3. Operations & Delivery 4. Client Update 5. Compliance & Risk 6. Platform & Technology 7. Next Month Priorities\n\nDATA:\n${context}`
@@ -1008,6 +1020,350 @@ app.delete('/openactions/:id', requireAuth, (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+
+// ── BOARD REPORT SYSTEM ──
+const BOARD_STATE_PATH = '/home/board-report-state.json';
+const KANDIA_EMAIL = process.env.KANDIA_EMAIL || 'kandia@risk2solution.com';
+
+function loadBoardState() {
+  try { return JSON.parse(readFileSync(BOARD_STATE_PATH,'utf8')||'{}'); } catch(e) { return {}; }
+}
+function saveBoardState(s) {
+  try { writeFileSync(BOARD_STATE_PATH, JSON.stringify(s,null,2)); } catch(e) {}
+}
+
+async function checkBoardMeetingSchedule() {
+  if (!tokenStore.access_token) return;
+  const state = loadBoardState();
+  const now = new Date();
+  // Only run once per day max
+  if (state.lastCheck && (now - new Date(state.lastCheck)) < 20*60*60*1000) return;
+  state.lastCheck = now.toISOString();
+  saveBoardState(state);
+
+  const dayOfWeek = now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
+  if (dayOfWeek !== 'Thursday') return; // Only act on Thursdays
+
+  console.log('[BoardReport] Thursday detected — scanning calendar for upcoming board meetings...');
+  try {
+    // Look ahead 14 days for a board meeting
+    const from = now.toISOString();
+    const to = new Date(now.getTime() + 14*24*60*60*1000).toISOString();
+    const cal = await graphGet(`/me/calendarView?startDateTime=${from}&endDateTime=${to}&$select=subject,start,end&$top=20`);
+    const boardMeeting = (cal.value||[]).find(e =>
+      e.subject && e.subject.toLowerCase().includes('board') &&
+      (e.subject.toLowerCase().includes('meeting') || e.subject.toLowerCase().includes('report') || e.subject.toLowerCase().includes('director'))
+    );
+    if (!boardMeeting) { console.log('[BoardReport] No board meeting found in next 14 days'); return; }
+
+    const meetingDate = new Date(boardMeeting.start.dateTime || boardMeeting.start.date);
+    const daysUntil = Math.round((meetingDate - now) / (24*60*60*1000));
+    const monthKey = meetingDate.toISOString().substring(0,7);
+    console.log('[BoardReport] Board meeting found:', boardMeeting.subject, '— in', daysUntil, 'days (', monthKey, ')');
+
+    // Don't send if we already notified for this month's meeting
+    if (state.notifiedMonth === monthKey) { console.log('[BoardReport] Already notified for', monthKey); return; }
+    if (daysUntil > 10) { console.log('[BoardReport] Meeting too far out, will check closer to date'); return; }
+
+    // Generate the report
+    console.log('[BoardReport] Generating report for', boardMeeting.subject, '...');
+    const reportPath = await generateBoardReport(meetingDate, boardMeeting.subject);
+
+    // Send email notification to Kandia
+    await sendBoardReportNotification(boardMeeting.subject, meetingDate, daysUntil, reportPath);
+    state.notifiedMonth = monthKey;
+    state.lastReportPath = reportPath;
+    state.lastReportMeeting = boardMeeting.subject;
+    state.lastReportDate = now.toISOString();
+    saveBoardState(state);
+    console.log('[BoardReport] ✅ Notification sent and state saved');
+  } catch(e) {
+    console.error('[BoardReport] Error:', e.message);
+  }
+}
+
+async function generateBoardReport(meetingDate, meetingSubject) {
+  const reportMonth = new Date(meetingDate);
+  reportMonth.setMonth(reportMonth.getMonth() - 1);
+  const monthName = reportMonth.toLocaleString('en-AU',{month:'long'});
+  const yr = reportMonth.getFullYear();
+  const mm = reportMonth.getMonth();
+  const yy = reportMonth.getFullYear();
+
+  let context = 'BOARD REPORT CONTEXT\n===================\n\n';
+
+  // 1. Staff check-ins for the month
+  try {
+    const raw = JSON.parse(readFileSync('/home/checkins.json','utf8')||'[]');
+    const monthly = raw.filter(c => {
+      if (!c.submitted) return false;
+      const d = new Date(c.submitted);
+      return d.getMonth()===mm && d.getFullYear()===yy;
+    });
+    if (monthly.length > 0) {
+      context += 'STAFF CHECK-INS ('+monthName+' — '+monthly.length+' submissions):\n';
+      monthly.forEach(c => {
+        context += '- '+c.name+' ('+c.role+'): capacity '+c.capacity+'%';
+        if (c.capacityNext) context += ', next week forecast '+c.capacityNext+'%';
+        if (c.trend) context += ', trend: '+c.trend;
+        if (c.projects) context += '\n  Projects: '+c.projects;
+        if (c.blockers && c.blockers.toLowerCase() !== 'none') context += '\n  Blockers: '+c.blockers;
+        if (c.skills) context += '\n  Skills applied: '+c.skills;
+        context += '\n';
+      });
+      context += '\n';
+    }
+  } catch(e) {}
+
+  // 2. Emails from the report month (especially Diane's finance updates)
+  try {
+    const since = new Date(yy, mm, 1).toISOString();
+    const until = new Date(yy, mm+1, 1).toISOString();
+    const emailData = await graphGet(`/me/messages?$top=50&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${until}&$select=subject,from,body,importance,receivedDateTime&$orderby=receivedDateTime desc`);
+    const emails = emailData.value || [];
+    // Finance emails (from Diane or about finance/payroll/month end)
+    const financeEmails = emails.filter(e => {
+      const from = (e.from?.emailAddress?.name||'').toLowerCase();
+      const subj = (e.subject||'').toLowerCase();
+      return from.includes('diane') || subj.match(/payroll|month.?end|year.?end|finance|financial|invoice|budget|reconcil|p&l|profit|revenue/);
+    });
+    if (financeEmails.length > 0) {
+      context += 'FINANCE & OPERATIONS EMAILS ('+monthName+'):\n';
+      financeEmails.slice(0,10).forEach(e => {
+        const preview = (e.body?.content||'').replace(/<[^>]*>/g,'').replace(/\s+/g,' ').substring(0,200);
+        context += '- From '+( e.from?.emailAddress?.name||'?')+': '+e.subject+'\n  '+preview+'\n';
+      });
+      context += '\n';
+    }
+    // Other key emails
+    const otherEmails = emails.filter(e => !financeEmails.includes(e)).slice(0,20);
+    if (otherEmails.length > 0) {
+      context += 'OTHER KEY EMAILS ('+monthName+'):\n';
+      otherEmails.forEach(e => {
+        context += '- '+(e.from?.emailAddress?.name||'?')+': '+e.subject+(e.importance==='high'?' [HIGH PRIORITY]':'')+'\n';
+      });
+      context += '\n';
+    }
+  } catch(e) { console.warn('[BoardReport] Email fetch:', e.message); }
+
+  // 3. Document library - templates and past reports
+  try {
+    const cc = await getBlobContainer();
+    if (cc) {
+      const docs = []; const pastReports = [];
+      for await (const b of cc.listBlobsFlat()) {
+        if (b.name.toLowerCase().match(/board.?report|board.?pack/)) pastReports.push(b.name);
+        else docs.push(b.name);
+      }
+      if (pastReports.length > 0) context += 'PAST BOARD REPORTS IN LIBRARY: '+pastReports.join(', ')+'\n\n';
+      if (docs.length > 0) context += 'OTHER DOCUMENTS: '+docs.join(', ')+'\n\n';
+    }
+  } catch(e) {}
+
+  // 4. Monday.com client projects
+  try {
+    const monday = await fetch('https://api.monday.com/v2', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':process.env.MONDAY_API_KEY},
+      body:JSON.stringify({query:'{ boards(ids:[2031906973,2005758439,2005747804]) { name items_page { items { name column_values { id text } } } } }'})
+    });
+    const md = await monday.json();
+    const boards = md.data?.boards || [];
+    if (boards.length > 0) {
+      context += 'CLIENT PROJECTS (Monday.com):\n';
+      boards.forEach(b => {
+        const items = b.items_page?.items || [];
+        items.slice(0,8).forEach(item => {
+          const status = (item.column_values||[]).find(c=>c.id.includes('color')||c.id.includes('status'));
+          context += '- '+item.name+(status?' ['+status.text+']':'')+'\n';
+        });
+      });
+      context += '\n';
+    }
+  } catch(e) {}
+
+  // 5. Open actions tracker
+  try {
+    const actions = loadActions();
+    const open = actions.filter(a => a.status === 'open');
+    if (open.length > 0) {
+      context += 'OPEN ACTION ITEMS (from tracker):\n';
+      open.forEach(a => context += '- ['+a.urgency+'] '+a.title+' (from: '+a.source+')'+'\n');
+      context += '\n';
+    }
+  } catch(e) {}
+
+  // Generate comprehensive report with AI
+  const systemPrompt = `You are Cinderella, elite executive assistant and intelligence analyst for Kandia Robertson (COO) at Risk 2 Solution Group, Australia's most awarded integrated risk management company (Risk Management, Security, Cybersecurity, Training & Education RTO #4785, Emergency Planning). Presilience® is their flagship methodology. Medical division divested — exclude. Nationwide operations, 20+ years, ISO certified.
+
+Generate a comprehensive, professional COO board report for ${monthName} ${yr} for the board meeting: "${meetingSubject}".
+
+Apply best-practice knowledge for:
+- Small business COO board reporting standards
+- Australian business compliance and regulatory context
+- Professional services and consulting firm operations metrics
+- Professional services delivery benchmarks
+- People & culture best practice for small teams
+
+The report must be:
+- Comprehensive but concise (board members are busy — be specific, not verbose)
+- Data-driven where evidence exists, clearly flagging gaps where data is limited
+- Forward-looking — identify risks, opportunities and recommendations
+- Formatted in professional HTML with clear sections and tables where useful
+
+Identify and highlight:
+- Gaps in compliance, processes or operations
+- Staff welfare concerns from check-in patterns
+- Financial trends or anomalies
+- Client delivery risks
+- Recommendations based on industry best practice`;
+
+  const userMsg = `Generate the full COO board report for ${monthName} ${yr}.
+
+Board meeting: ${meetingSubject}
+Meeting date: ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
+Report prepared by: Cinderella AI on behalf of Kandia Robertson, COO
+
+Structure the report with these sections:
+1. Executive Summary & Key Highlights
+2. People & Culture — staff capacity, wellbeing, skills utilisation, attendance
+3. Financial Overview — based on available email data, flag gaps where full P&L not available
+4. Client Delivery & Projects — status, risks, upcoming milestones
+5. Operations & Platform — technology, systems, process updates
+6. Compliance & Risk — regulatory, insurance, certification status and gaps identified
+7. Policies & Processes — updates, gaps, improvements implemented or needed
+8. Strategic Priorities & Recommendations — COO recommendations for next month
+9. Items for Board Decision or Awareness
+
+DATA AVAILABLE:
+${context}
+
+Where data is limited, clearly state "Data not available — recommend [specific action]" and apply best-practice benchmarks for a business of this size and type.`;
+
+  const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+    body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:6000, system:systemPrompt, messages:[{role:'user',content:userMsg}] })
+  });
+  const aiData = await aiRes.json();
+  const reportContent = aiData.content?.[0]?.text || 'Report generation failed — please generate manually.';
+
+  // Build Word-compatible HTML
+  const docHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset="utf-8"><title>COO Board Report — ${monthName} ${yr}</title>
+<style>
+body{font-family:Arial,sans-serif;font-size:11pt;margin:2cm 2.5cm;line-height:1.5;color:#111}
+h1{font-size:20pt;color:#1F4E79;border-bottom:2pt solid #1F4E79;padding-bottom:6pt;margin-top:0}
+h2{font-size:14pt;color:#2E75B6;margin-top:20pt;margin-bottom:6pt;border-left:4pt solid #2E75B6;padding-left:8pt}
+h3{font-size:12pt;color:#2E75B6;margin-top:12pt}
+.cover{text-align:center;margin-bottom:40pt;padding:24pt;border:1pt solid #2E75B6;background:#F5F9FF}
+table{border-collapse:collapse;width:100%;margin:8pt 0}
+td,th{border:.5pt solid #CCC;padding:5pt 8pt;font-size:10pt}
+th{background:#EEF3F9;font-weight:bold;text-align:left}
+ul,ol{margin:4pt 0;padding-left:20pt}li{margin-bottom:3pt}
+.highlight{background:#FFF9E6;border-left:3pt solid #F6C90E;padding:6pt 10pt;margin:8pt 0}
+.risk{background:#FFF5F5;border-left:3pt solid #FC8181;padding:6pt 10pt;margin:8pt 0}
+.good{background:#F0FFF4;border-left:3pt solid #68D391;padding:6pt 10pt;margin:8pt 0}
+</style></head>
+<body>
+<div class="cover">
+<h1>COO Board Report</h1>
+<p style="font-size:15pt;color:#2E75B6;margin:6pt 0">Risk 2 Solution</p>
+<p style="font-size:12pt;color:#555">${monthName} ${yr}</p>
+<p style="font-size:10pt;color:#888;margin-top:8pt">Prepared by Cinderella AI on behalf of Kandia Robertson, COO<br>
+For: ${meetingSubject}<br>
+Meeting date: ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</p>
+</div>
+${reportContent}
+</body></html>`;
+
+  // Save to blob storage
+  const filename = 'board-report-'+yr+'-'+String(mm+1).padStart(2,'0')+'.doc';
+  try {
+    const cc = await getBlobContainer();
+    if (cc) {
+      const bc = cc.getBlockBlobClient('board-reports/' + filename);
+      await bc.upload(docHtml, Buffer.byteLength(docHtml), {blobHTTPHeaders:{blobContentType:'application/msword'}});
+      console.log('[BoardReport] Saved to blob:', filename);
+    }
+  } catch(e) { console.warn('[BoardReport] Blob save failed:', e.message); }
+
+  // Also save locally
+  try { writeFileSync('/home/'+filename, docHtml); } catch(e) {}
+  writeFileSync('/home/board-report-latest.json', JSON.stringify({filename, monthName, yr, generatedAt: new Date().toISOString(), meetingSubject}));
+  return filename;
+}
+
+async function sendBoardReportNotification(meetingSubject, meetingDate, daysUntil, filename) {
+  const monthDate = new Date(meetingDate);
+  monthDate.setMonth(monthDate.getMonth()-1);
+  const monthName = monthDate.toLocaleString('en-AU',{month:'long'});
+  const yr = monthDate.getFullYear();
+
+  const emailBody = 'Hi Kandia,\n\nYour COO board report for ' + monthName + ' ' + yr + ' has been prepared and is ready for your review.\n\n' +
+    'BOARD MEETING: ' + meetingSubject + '\n' +
+    'DATE: ' + meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'}) + '\n' +
+    'DAYS UNTIL MEETING: ' + daysUntil + '\n\n' +
+    'TO DOWNLOAD YOUR REPORT:\n' +
+    'Log into Cinderella → COO Duties tab → Board Report section\n' +
+    'Direct link: https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net\n\n' +
+    'The report has been auto-generated using:\n' +
+    '• Staff check-ins and capacity data for ' + monthName + '\n' +
+    '• Key emails received and sent during the month\n' +
+    '• Client project status from Monday.com\n' +
+    '• Open action items from your tracker\n' +
+    '• Document library and past board reports\n\n' +
+    'Please review and add any additional context before the board meeting. The report is a starting point — your judgment and any verbal updates will be essential.\n\n' +
+    'Cinderella\nExecutive Assistant to Kandia Robertson, COO\nRisk 2 Solution';
+
+  try {
+    const token = await getValidToken();
+    await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+      method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        message:{
+          subject:'📋 Board Report Ready — '+monthName+' '+yr+' (Meeting in '+daysUntil+' days)',
+          body:{contentType:'Text', content:emailBody},
+          toRecipients:[{emailAddress:{address:KANDIA_EMAIL}}],
+          importance:'high'
+        },
+        saveToSentItems:true
+      })
+    });
+    console.log('[BoardReport] Notification email sent to', KANDIA_EMAIL);
+  } catch(e) {
+    console.error('[BoardReport] Email send failed:', e.message);
+  }
+}
+
+// Manual trigger endpoint
+app.post('/board-report/generate', requireAuth, async (req, res) => {
+  try {
+    const now = new Date();
+    const filename = await generateBoardReport(req.body.meetingDate ? new Date(req.body.meetingDate) : new Date(now.getTime() + 14*24*60*60*1000), req.body.meetingSubject || 'Board Meeting');
+    res.json({ success: true, filename });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/board-report/latest', requireAuth, (req, res) => {
+  try {
+    const state = JSON.parse(readFileSync('/home/board-report-latest.json','utf8')||'{}');
+    res.json(state);
+  } catch(e) { res.json({}); }
+});
+
+app.get('/board-report/download', requireAuth, async (req, res) => {
+  try {
+    const state = JSON.parse(readFileSync('/home/board-report-latest.json','utf8')||'{}');
+    if (!state.filename) return res.status(404).json({error:'No report generated yet'});
+    const content = readFileSync('/home/'+state.filename,'utf8');
+    res.setHeader('Content-Disposition','attachment; filename="'+state.filename+'"');
+    res.setHeader('Content-Type','application/msword');
+    res.send(content);
+  } catch(e) { res.status(404).json({error:e.message}); }
+});
+
 // ── SERVE DASHBOARD ──
 app.use(express.static('.'));
 
@@ -1043,7 +1399,18 @@ async function think() {
       }
     }
     const staff = [];
-    const prompt = `You are Cinderella, an elite COO executive assistant. Analyse and return ONLY raw JSON with no markdown.
+    const prompt = `You are Cinderella, elite COO executive assistant for Risk 2 Solution Group. Risk 2 Solution Group is Australia's most awarded integrated risk management company, providing professional services in:
+- Risk Management (Presilience® programs, Business Continuity, CRO-as-a-Service, Risk Assessments)
+- Security (SoCI compliance, OVA prevention, Security consulting, CSO-as-a-Service)
+- Technology & Cybersecurity (Maturity Assessments, vCISO, SOC monitoring, Vulnerability Remediation)
+- Training & Education (RTO #4785, Postgrad qualifications, R2S Academy eLearning, bespoke programs)
+- Emergency Planning Services (EMPs, Evacuation Diagrams, Warden Training, BCP, CIM)
+- Research & Events (ASRC, ISRM, PSG Conference, Presilience® Summits)
+ISO Certified: 9001:2015, 45001:2018, 14001:2015, 18788:2015
+20+ years | 800+ clients | 150,000+ people trained
+Head Office: Murrarie QLD | Operates Australia-wide and internationally
+NOTE: Medical division has been fully divested — never reference medical personnel or medical services.
+Analyse and return ONLY raw JSON with no markdown.
 Emails: ${JSON.stringify(emails)}
 Calendar today: ${calendarSummary}
 Staff: ${JSON.stringify(staff)}
@@ -1064,6 +1431,8 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
       const clean = data.content[0].text.replace(/```json/g,'').replace(/```/g,'').trim();
       try { latestOutput = JSON.parse(clean); } catch(e) {}
     }
+    // Check board meeting schedule (Thursdays only)
+    await checkBoardMeetingSchedule();
   } catch (err) {
     console.error("❌ Error:", err.message);
   } finally {
