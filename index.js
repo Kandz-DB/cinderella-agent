@@ -1023,7 +1023,17 @@ app.delete('/openactions/:id', requireAuth, (req, res) => {
 
 // ── BOARD REPORT SYSTEM ──
 const BOARD_STATE_PATH = '/home/board-report-state.json';
-const KANDIA_EMAIL = process.env.KANDIA_EMAIL || 'kandia@risk2solution.com';
+// Kandia's email is pulled from the authenticated M365 account — no env var needed
+let KANDIA_EMAIL = null;
+async function getKandiaEmail() {
+  if (KANDIA_EMAIL) return KANDIA_EMAIL;
+  try {
+    const me = await graphGet('/me?$select=mail,userPrincipalName');
+    KANDIA_EMAIL = me.mail || me.userPrincipalName || 'kandia@risk2solution.com';
+    console.log('[Auth] Kandia email resolved:', KANDIA_EMAIL);
+  } catch(e) { KANDIA_EMAIL = 'kandia@risk2solution.com'; }
+  return KANDIA_EMAIL;
+}
 
 function loadBoardState() {
   try { return JSON.parse(readFileSync(BOARD_STATE_PATH,'utf8')||'{}'); } catch(e) { return {}; }
@@ -1318,14 +1328,15 @@ async function sendBoardReportNotification(meetingSubject, meetingDate, daysUnti
 
   try {
     const token = await getValidToken();
-    await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+    const recipientEmail = await getKandiaEmail();
+  await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
       method:'POST',
       headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
       body:JSON.stringify({
         message:{
           subject:'📋 Board Report Ready — '+monthName+' '+yr+' (Meeting in '+daysUntil+' days)',
           body:{contentType:'Text', content:emailBody},
-          toRecipients:[{emailAddress:{address:KANDIA_EMAIL}}],
+          toRecipients:[{emailAddress:{address:recipientEmail}}],
           importance:'high'
         },
         saveToSentItems:true
