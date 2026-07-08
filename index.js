@@ -930,7 +930,7 @@ Generate a complete professional ${label||type} document for ${monthName} ${yr} 
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 4000, system: sysPrompt, messages: [{ role: 'user', content: userMsg }] })
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8000, system: sysPrompt, messages: [{ role: 'user', content: userMsg }] })
     });
     const aiData = await aiRes.json();
     const reportContent = aiData.content?.[0]?.text || 'Unable to generate report.';
@@ -1134,11 +1134,28 @@ async function generateBoardReport(meetingDate, meetingSubject) {
     }
   } catch(e) {}
 
-  // 2. Emails from the report month (especially Diane's finance updates)
+  // HARDCODED FINANCIAL DATA from Diane's confirmed FYE email (6 July 2026)
+  context += `CONFIRMED FINANCIAL DATA — from Diane Kruger email (Corporate Operations Lead) dated 6 July 2026:
+- FY 2025/26 FINAL RESULT: Year ended POSITIVE at $37,038.11
+- KEY DRIVER: EPS (Emergency Planning Services) invoiced $89,966.48 in June — $44,966.46 above target. Diane and Reinette worked to maximise invoicing to push the year into positive.
+- FY26/27 FORECAST (July-August): Currently NEGATIVE $62,000. This is a cash flow risk requiring immediate attention.
+- EPS targets increased by $5,000/month from FY26/27.
+- July EPS volume expected to be lower than June (due to the large June push — pipeline effect).
+- Q2 FY26/27 (October): PSG Conference revenue expected. However PSG venue expenses fall into July and September payments — creating short-term cash pressure.
+- Diane attached: June P&L, FY25/26 Annual P&L, and FY Executive Summary (available in email attachments).
+
+CINDERELLA FINANCIAL ANALYSIS REQUIRED:
+- Highlight the positive FYE result as a win — but with context that it was achieved by a large June push that may impact July.
+- Flag the -$62k forecast as a significant risk requiring board awareness.
+- Recommend Business Development focus: months need to be in the black. The EPS push model is not sustainable without consistent BD pipeline. The board should consider what BD activities and targets are in place for July-August to close this gap.
+- Note the PSG Conference as a positive revenue event in October but flag that venue costs in July/September will increase the short-term deficit before PSG revenue is realised.
+- Recommend Kandia present a BD action plan at next month's board meeting.\n\n`;
+
+  // 2. Emails from the report month AND current month (finance updates often arrive after month close)
   try {
     const since = new Date(yy, mm, 1).toISOString();
-    const until = new Date(yy, mm+1, 1).toISOString();
-    const emailData = await graphGet(`/me/messages?$top=50&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${until}&$select=subject,from,body,importance,receivedDateTime&$orderby=receivedDateTime desc`);
+    const nowStr = new Date().toISOString();
+    const emailData = await graphGet(`/me/messages?$top=80&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${nowStr}&$select=subject,from,body,importance,receivedDateTime&$orderby=receivedDateTime desc`);
     const emails = emailData.value || [];
     // Finance emails (from Diane or about finance/payroll/month end)
     const financeEmails = emails.filter(e => {
@@ -1213,56 +1230,68 @@ async function generateBoardReport(meetingDate, meetingSubject) {
   } catch(e) {}
 
   // Generate comprehensive report with AI
-  const systemPrompt = `You are Cinderella, elite executive assistant and intelligence analyst for Kandia Robertson (COO) at Risk 2 Solution Group, Australia's most awarded integrated risk management company (Risk Management, Security, Cybersecurity, Training & Education RTO #4785, Emergency Planning). Presilience® is their flagship methodology. Medical division divested — exclude. Nationwide operations, 20+ years, ISO certified.
+  const systemPrompt = `You are Cinderella, elite executive assistant and intelligence analyst for Kandia Robertson (COO) at Risk 2 Solution Group — Australia's most awarded integrated risk management company. Services: Risk Management (Presilience®), Security, Cybersecurity, Training & Education (RTO #4785), Emergency Planning Services. ISO certified: 9001, 45001, 14001, 18788. 20+ years, 800+ clients, 150,000+ trained. Medical division DIVESTED — never mention. Head Office: Murrarie QLD.
 
-Generate a comprehensive, professional COO board report for ${monthName} ${yr} for the board meeting: "${meetingSubject}".
+You are generating a COO Board Paper for the ${monthName} ${yr} board meeting. This is a formal document presented to the board of directors.
 
-Apply best-practice knowledge for:
-- Small business COO board reporting standards
-- Australian business compliance and regulatory context
-- Professional services and consulting firm operations metrics
-- Professional services delivery benchmarks
-- People & culture best practice for small teams
+CRITICAL REQUIREMENTS:
+- Maximum 4 pages when printed
+- Professional board paper format — not a dashboard
+- Use EXACT financial figures provided in context — never invent numbers
+- Every financial claim must reference its source (e.g. "per Diane Kruger, Corporate Operations Lead")
+- Include Cinderella's intelligent analysis and recommendations — not just data reporting
+- Flag risks with specific recommended actions
+- Keep language tight and executive — no waffle, no placeholders
+- Use HTML formatting: h2 for sections, tables for data, bold for key figures
+- Visuals and key stats in a highlighted box are encouraged (keep from original)`;
 
-The report must be:
-- Comprehensive but concise (board members are busy — be specific, not verbose)
-- Data-driven where evidence exists, clearly flagging gaps where data is limited
-- Forward-looking — identify risks, opportunities and recommendations
-- Formatted in professional HTML with clear sections and tables where useful
+  const userMsg = `BOARD PAPER — COO REPORT
+Period: ${monthName} ${yr}
+Prepared by: Kandia Robertson, Chief Operating Officer
+Meeting: ${meetingSubject} — ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
 
-Identify and highlight:
-- Gaps in compliance, processes or operations
-- Staff welfare concerns from check-in patterns
-- Financial trends or anomalies
-- Client delivery risks
-- Recommendations based on industry best practice`;
+Write the full board paper in HTML. Maximum 4 printed pages. 9 sections as below. Be specific and concise.
 
-  const userMsg = `Generate the full COO board report for ${monthName} ${yr}.
+SECTION 1 — EXECUTIVE SUMMARY (half page max)
+3-4 sentences: what happened this month, key wins, key risks. Include the FYE financial result prominently.
 
-Board meeting: ${meetingSubject}
-Meeting date: ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
-Report prepared by: Cinderella AI on behalf of Kandia Robertson, COO
+SECTION 2 — FINANCIAL OVERVIEW (one page)
+- FY 2025/26 Final Result: use EXACT figure from context
+- Key driver of the result: EPS invoicing — explain what happened and why it mattered
+- FY 2026/27 Outlook: July-August forecast — use EXACT figure from context
+- CINDERELLA ANALYSIS: Write 3-4 sentences of intelligent analysis. The year ended positively but the July-August forecast is concerning. Business development is critical to ensure months are in the black rather than the red. Flag the PSG Conference as a Q4 revenue event but note that venue expenses arrive before the revenue. Recommend the board ensure a BD action plan is in place for July-August.
+- Present as a simple HTML table: | Period | Result | Key Driver |
 
-Structure the report with these sections:
-1. Executive Summary & Key Highlights
-2. People & Culture — staff capacity, wellbeing, skills utilisation, attendance
-3. Financial Overview — based on available email data, flag gaps where full P&L not available
-4. Client Delivery & Projects — status, risks, upcoming milestones
-5. Operations & Platform — technology, systems, process updates
-6. Compliance & Risk — regulatory, insurance, certification status and gaps identified
-7. Policies & Processes — updates, gaps, improvements implemented or needed
-8. Strategic Priorities & Recommendations — COO recommendations for next month
-9. Items for Board Decision or Awareness
+SECTION 3 — PEOPLE & CULTURE (half page)
+Staff capacity from check-ins. Flag anyone overloaded or with blockers. Highlight skills utilised.
 
-DATA AVAILABLE:
+SECTION 4 — CLIENT DELIVERY & OPERATIONS (half page)
+Active projects, delivery status, any risks. Use Monday.com data if available.
+
+SECTION 5 — EMERGENCY PLANNING SERVICES (quarter page)
+EPS is the key revenue driver. Note the June invoicing achievement. Flag July volume expectations.
+
+SECTION 6 — COMPLIANCE & RISK (quarter page)
+ISO certifications, RTO obligations, any open compliance items. Flag anything needing board awareness.
+
+SECTION 7 — STRATEGIC PRIORITIES — NEXT MONTH (quarter page)
+Top 3 priorities for the COO in the coming month. Must include Business Development as #1 given the -$62k forecast.
+
+SECTION 8 — ITEMS FOR BOARD DECISION OR AWARENESS
+Bullet list of anything requiring board input, approval or noting.
+
+SECTION 9 — KEY METRICS SUMMARY
+HTML table with key numbers: FYE result, July-Aug forecast, staff headcount, check-ins received, EPS revenue June.
+
+DATA:
 ${context}
 
-Where data is limited, clearly state "Data not available — recommend [specific action]" and apply best-practice benchmarks for a business of this size and type.`;
+USE THE EXACT FINANCIAL FIGURES FROM THE DATA. Do not invent numbers. Where data is missing write "Data not available for this period".`;
 
   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
     headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
-    body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:6000, system:systemPrompt, messages:[{role:'user',content:userMsg}] })
+    body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:8000, system:systemPrompt, messages:[{role:'user',content:userMsg}] })
   });
   const aiData = await aiRes.json();
   const reportContent = aiData.content?.[0]?.text || 'Report generation failed — please generate manually.';
