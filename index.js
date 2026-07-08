@@ -1368,7 +1368,35 @@ async function sendBoardReportNotification(meetingSubject, meetingDate, daysUnti
   const recipientEmail = await getKandiaEmail();
   const subject = '📋 Board Report Ready — '+monthName+' '+yr+' (Meeting in '+daysUntil+' days)';
 
-  // Try 1: Send directly via sendMail (requires Mail.Send scope)
+  // Try 1: Create draft then send immediately (Mail.ReadWrite — works with existing permissions)
+  try {
+    const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        subject,
+        body:{contentType:'Text', content:emailBody},
+        toRecipients:[{emailAddress:{address:recipientEmail}}],
+        importance:'high'
+      })
+    });
+    const draft = await draftRes.json();
+    if (draft.id) {
+      const sendDraftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send', {
+        method:'POST', headers:{Authorization:'Bearer '+token}
+      });
+      if (sendDraftRes.status === 202) {
+        console.log('[BoardReport] ✅ Email sent via draft+send to', recipientEmail);
+        return;
+      }
+      const sendErr = await sendDraftRes.text().catch(()=>'');
+      console.warn('[BoardReport] draft/send returned', sendDraftRes.status, sendErr.substring(0,200));
+    } else {
+      console.warn('[BoardReport] Draft creation failed:', JSON.stringify(draft.error||draft).substring(0,200));
+    }
+  } catch(e) { console.warn('[BoardReport] draft+send error:', e.message); }
+
+  // Try 2: Send directly via sendMail (requires Mail.Send scope)
   try {
     const sendRes = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
       method:'POST',
@@ -1513,6 +1541,53 @@ app.get('/board-report/debug', requireAuth, (req, res) => {
   const now = new Date();
   const dayOfWeek = now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
   res.json({ state, dayOfWeek, serverTime: now.toISOString(), brisbaneTime: now.toLocaleString('en-AU',{timeZone:'Australia/Brisbane'}) });
+});
+
+// Test email — sends a simple test to Kandia and returns the exact API response
+app.get('/board-report/test-email', requireAuth, async (req, res) => {
+  try {
+    const token = await getValidToken();
+    const recipientEmail = await getKandiaEmail();
+    const results = {};
+
+    // Test 1: sendMail
+    try {
+      const r1 = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+        method:'POST',
+        headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+        body:JSON.stringify({
+          message:{subject:'Cinderella test email',body:{contentType:'Text',content:'Test from Cinderella'},toRecipients:[{emailAddress:{address:recipientEmail}}]},
+          saveToSentItems:true
+        })
+      });
+      const body1 = r1.status === 202 ? 'SUCCESS (202)' : await r1.text();
+      results.sendMail = { status: r1.status, body: body1.substring(0,300) };
+    } catch(e) { results.sendMail = { error: e.message }; }
+
+    // Test 2: Create draft
+    try {
+      const r2 = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+        method:'POST',
+        headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+        body:JSON.stringify({subject:'Cinderella draft test',body:{contentType:'Text',content:'Draft test'},toRecipients:[{emailAddress:{address:recipientEmail}}]})
+      });
+      const d2 = await r2.json();
+      results.createDraft = { status: r2.status, id: d2.id, error: d2.error };
+
+      // Test 3: Send the draft
+      if (d2.id) {
+        const r3 = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${d2.id}/send`, {
+          method:'POST', headers:{Authorization:'Bearer '+token}
+        });
+        const body3 = r3.status === 202 ? 'SUCCESS (202)' : await r3.text();
+        results.sendDraft = { status: r3.status, body: body3.substring(0,300) };
+      }
+    } catch(e) { results.createDraft = { error: e.message }; }
+
+    res.json({ recipientEmail, tokenExpiry: new Date(tokenStore.expires_at).toLocaleString('en-AU'), results });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/board-report/generate', requireAuth, async (req, res) => {
