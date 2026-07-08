@@ -1177,7 +1177,10 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
           <div class="card">
 
-            <div class="ct">Board report <span class="ct-action" onclick="generateBoardReportManual()">Generate now</span></div>
+            <div class="ct">Board report <span style="display:flex;gap:8px">
+              <span class="ct-action" onclick="forceSendBoardReport()" style="color:var(--r);font-weight:600">📧 Generate & email me now</span>
+              <span class="ct-action" onclick="generateBoardReportManual()">Generate only</span>
+            </span></div>
             <div id="boardReportStatus">
               <div style="font-size:11px;color:var(--t2);padding:4px 0">Loading...</div>
             </div>
@@ -1425,7 +1428,15 @@ async function loadBoardReportStatus() {
     var r = await fetch('/board-report/latest');
     if (!r.ok) { el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No report generated yet. Click Generate now to create one.</div>'; return; }
     var d = await r.json();
-    if (!d.filename) { el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No report generated yet. Click Generate now to create one.</div>'; return; }
+    if (!d.filename) {
+      var isThur = new Date().toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'}) === 'Thursday';
+      if (isThur) {
+        el.innerHTML = '<div style="background:var(--rl);border-radius:10px;padding:10px 12px;margin-top:4px"><div style="font-size:12px;font-weight:600;color:#A32D2D;margin-bottom:4px">⚠️ Board report due today</div><div style="font-size:11px;color:#A32D2D;margin-bottom:8px">Today is Thursday — if there is a board meeting next week, Cinderella will auto-generate this. You can also generate it manually now.</div><button onclick="generateBoardReportManual()" style="font-size:11px;padding:5px 14px;background:#A32D2D;color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Generate now</button></div>';
+      } else {
+        el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No report generated yet. Click Generate now to create one.</div>';
+      }
+      return;
+    }
     var genDate = d.generatedAt ? new Date(d.generatedAt).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : 'Unknown';
     el.innerHTML = '<div style="background:var(--gl);border-radius:10px;padding:10px 12px;margin-top:4px">' +
       '<div style="font-size:12px;font-weight:600;color:#0F6E56;margin-bottom:3px">📋 ' + d.monthName + ' ' + d.yr + ' Report Ready</div>' +
@@ -1449,6 +1460,29 @@ async function generateBoardReportManual() {
       await loadBoardReportStatus();
     } else {
       if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + (d.error||'Failed') + '</div>';
+    }
+  } catch(e) {
+    if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + e.message + '</div>';
+  }
+}
+
+async function forceSendBoardReport() {
+  var el = document.getElementById('boardReportStatus');
+  if (!confirm('This will generate the board report AND email it to you now. Continue?')) return;
+  if (el) el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">⏳ Generating report and sending email — this takes 30-60 seconds, please wait...</div>';
+  try {
+    var r = await fetch('/board-report/force-send', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
+    var d = await r.json();
+    if (d.success) {
+      await loadBoardReportStatus();
+      openModal('✅ Board report sent', 'Meeting: ' + d.meeting + ' (' + d.daysUntil + ' days away)',
+        '<div class="alert-box ok"><div class="ab-title">Report generated and emailed to you</div>' +
+        '<div class="ab-text">Check your inbox — Cinderella has sent you the board report for review. You can also download it below.</div></div>' +
+        '<button class="m-btn" onclick="downloadBoardReport()">⬇ Download report</button> ' +
+        '<button class="m-btn sec" onclick="closeModal()">Close</button>'
+      );
+    } else {
+      if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + (d.error||'Failed') + ' — try again or check Azure logs</div>';
     }
   } catch(e) {
     if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + e.message + '</div>';
@@ -6156,7 +6190,14 @@ async function loadOpenActions(force) {
     var blockerLines = SD.filter(function(s){ return s.blockers && s.blockers.toLowerCase() !== 'none' && s.blockers.trim(); })
       .map(function(s){ return '- ' + (s.name||'').split(' ')[0] + ': ' + s.blockers; }).join('\n') || 'None';
 
-    var prompt = 'You are Cinderella, COO assistant to Kandia Robertson at Risk 2 Solution. Review the data below and list 5-8 real open action items Kandia needs to act on. Format each as:\n\n[URGENCY] Action description — Source\n\nUrgency options: URGENT / THIS WEEK / NEXT WEEK\n\nBe specific and practical. If an email implies follow-up, list it. If a Teams message has a request, list it. If a staff member has a blocker, list what Kandia should do. Always return at least 5 items — use context to infer priorities if data is thin.\n\nEMAILS:\n' + emailLines + (infoLines ? '\n' + infoLines : '') + (teamsLines ? '\n\nTEAMS:\n' + teamsLines : '') + '\n\nDOCUMENTS:\n' + docLines + '\n\nSTAFF BLOCKERS:\n' + blockerLines;
+    // Thursday board report context
+  var today = new Date();
+  var brisbaneDay = today.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
+  var thursdayNote = brisbaneDay === 'Thursday'
+    ? '\n\nCRITICAL THURSDAY RULE: Today is Thursday. If there is a board meeting next week (any day Mon-Fri), the COO Board Report MUST be finalised and submitted TODAY — not next week. Flag this as URGENT regardless of when the meeting is. Kandia generates and reviews the board paper on the Thursday before every board meeting.'
+    : '';
+
+  var prompt = 'You are Cinderella, COO assistant to Kandia Robertson at Risk 2 Solution. Review the data below and list 5-8 real open action items Kandia needs to act on. Format each as:\n\n[URGENCY] Action description — Source\n\nUrgency options: URGENT / THIS WEEK / NEXT WEEK\n\nRules:\n- URGENT = needs action today or is critically overdue\n- THIS WEEK = must happen before Friday\n- NEXT WEEK = can wait until next week\n- If today is Thursday and a board meeting is next week, the board paper is URGENT (due today)\n- Be specific: name people, subjects, deadlines\n- Always return at least 5 items' + thursdayNote + '\n\nEMAILS:\n' + emailLines + (infoLines ? '\n' + infoLines : '') + (teamsLines ? '\n\nTEAMS:\n' + teamsLines : '') + '\n\nDOCUMENTS:\n' + docLines + '\n\nSTAFF BLOCKERS:\n' + blockerLines;
 
     var r = await fetch('/proxy', {
       method: 'POST',
