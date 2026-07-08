@@ -1044,51 +1044,60 @@ function saveBoardState(s) {
 
 async function checkBoardMeetingSchedule() {
   if (!tokenStore.access_token) return;
-  const state = loadBoardState();
-  const now = new Date();
-  // Only run once per day max
-  if (state.lastCheck && (now - new Date(state.lastCheck)) < 20*60*60*1000) return;
-  state.lastCheck = now.toISOString();
-  saveBoardState(state);
 
+  const now = new Date();
   const dayOfWeek = now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
   if (dayOfWeek !== 'Thursday') return; // Only act on Thursdays
 
-  console.log('[BoardReport] Thursday detected — scanning calendar for upcoming board meetings...');
+  const state = loadBoardState();
+
+  // Only run once per day — but ONLY block if we already SUCCESSFULLY sent this month
+  // Don't block on lastCheck alone — if it failed last time, retry
+  const alreadySentToday = state.lastSentDate &&
+    new Date(state.lastSentDate).toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane'}) ===
+    now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane'});
+  if (alreadySentToday) { console.log('[BoardReport] Already sent successfully today, skipping'); return; }
+
+  console.log('[BoardReport] Thursday — scanning calendar for board meetings...');
   try {
-    // Look ahead 14 days for a board meeting
+    // Look ahead 10 days for a board meeting (catches next-week meetings from Thursday)
     const from = now.toISOString();
-    const to = new Date(now.getTime() + 14*24*60*60*1000).toISOString();
+    const to = new Date(now.getTime() + 10*24*60*60*1000).toISOString();
     const cal = await graphGet(`/me/calendarView?startDateTime=${from}&endDateTime=${to}&$select=subject,start,end&$top=20`);
-    const boardMeeting = (cal.value||[]).find(e =>
-      e.subject && e.subject.toLowerCase().includes('board') &&
-      (e.subject.toLowerCase().includes('meeting') || e.subject.toLowerCase().includes('report') || e.subject.toLowerCase().includes('director'))
-    );
-    if (!boardMeeting) { console.log('[BoardReport] No board meeting found in next 14 days'); return; }
+    const boardMeeting = (cal.value||[]).find(e => {
+      if (!e.subject) return false;
+      const s = e.subject.toLowerCase();
+      return s.includes('board');  // Simple: any calendar event with "board" in the title
+    });
+    if (!boardMeeting) { console.log('[BoardReport] No board meeting found in next 10 days'); return; }
 
     const meetingDate = new Date(boardMeeting.start.dateTime || boardMeeting.start.date);
     const daysUntil = Math.round((meetingDate - now) / (24*60*60*1000));
     const monthKey = meetingDate.toISOString().substring(0,7);
-    console.log('[BoardReport] Board meeting found:', boardMeeting.subject, '— in', daysUntil, 'days (', monthKey, ')');
+    console.log('[BoardReport] Found:', boardMeeting.subject, '— in', daysUntil, 'days');
 
-    // Don't send if we already notified for this month's meeting
-    if (state.notifiedMonth === monthKey) { console.log('[BoardReport] Already notified for', monthKey); return; }
-    if (daysUntil > 10) { console.log('[BoardReport] Meeting too far out, will check closer to date'); return; }
+    // Don't re-send if already notified for this exact month's meeting
+    if (state.notifiedMonth === monthKey) {
+      console.log('[BoardReport] Already notified for', monthKey, '— skipping');
+      return;
+    }
 
-    // Generate the report
-    console.log('[BoardReport] Generating report for', boardMeeting.subject, '...');
+    // Generate and send
+    console.log('[BoardReport] Generating report...');
     const reportPath = await generateBoardReport(meetingDate, boardMeeting.subject);
-
-    // Send email notification to Kandia
     await sendBoardReportNotification(boardMeeting.subject, meetingDate, daysUntil, reportPath);
+
+    // Only save state after successful send
     state.notifiedMonth = monthKey;
     state.lastReportPath = reportPath;
     state.lastReportMeeting = boardMeeting.subject;
     state.lastReportDate = now.toISOString();
+    state.lastSentDate = now.toISOString();  // Track successful send date separately
     saveBoardState(state);
-    console.log('[BoardReport] ✅ Notification sent and state saved');
+    console.log('[BoardReport] ✅ Done — report generated and emailed to Kandia');
   } catch(e) {
-    console.error('[BoardReport] Error:', e.message);
+    console.error('[BoardReport] Error (will retry next think loop):', e.message);
+    // Don't save state — let it retry next time the think loop runs
   }
 }
 
@@ -1349,6 +1358,73 @@ async function sendBoardReportNotification(meetingSubject, meetingDate, daysUnti
 }
 
 // Manual trigger endpoint
+// Force-send: bypass notifiedMonth and lastCheck guards — for manual Thursday trigger
+app.post('/board-report/force-send', requireAuth, async (req, res) => {
+  try {
+    // Clear the notifiedMonth guard so it can re-send
+    const state = loadBoardState();
+    const prevMonth = state.notifiedMonth;
+    state.notifiedMonth = null;
+    state.lastCheck = null;
+    saveBoardState(state);
+    console.log('[BoardReport] Force-send triggered — cleared notifiedMonth:', prevMonth);
+
+    // Find board meeting in next 14 days
+    const now = new Date();
+    const to = new Date(now.getTime() + 14*24*60*60*1000).toISOString();
+    let meetingDate = null;
+    let meetingSubject = 'Board Meeting';
+    try {
+      const cal = await graphGet(`/me/calendarView?startDateTime=${now.toISOString()}&endDateTime=${to}&$select=subject,start,end&$top=20`);
+      const boardMeeting = (cal.value||[]).find(e => {
+        if (!e.subject) return false;
+        const s = e.subject.toLowerCase();
+        return s.includes('board') || s.includes('directors meeting') || s.includes('board pack') || s.includes('board paper');
+      });
+      if (boardMeeting) {
+        meetingDate = new Date(boardMeeting.start.dateTime || boardMeeting.start.date);
+        meetingSubject = boardMeeting.subject;
+        console.log('[BoardReport] Found meeting:', meetingSubject, 'on', meetingDate.toLocaleDateString());
+      } else {
+        // No calendar match — use next Tuesday as default
+        meetingDate = new Date(now);
+        const daysTuesday = (2 - now.getDay() + 7) % 7 || 7;
+        meetingDate.setDate(now.getDate() + daysTuesday);
+        meetingSubject = 'Board Meeting';
+        console.log('[BoardReport] No calendar match — defaulting to next Tuesday:', meetingDate.toLocaleDateString());
+      }
+    } catch(calErr) {
+      meetingDate = new Date(now.getTime() + 5*24*60*60*1000);
+      console.warn('[BoardReport] Calendar fetch failed:', calErr.message);
+    }
+
+    const daysUntil = Math.round((meetingDate - now) / (24*60*60*1000));
+    const reportPath = await generateBoardReport(meetingDate, meetingSubject);
+    await sendBoardReportNotification(meetingSubject, meetingDate, daysUntil, reportPath);
+
+    // Save state
+    const newState = loadBoardState();
+    newState.notifiedMonth = meetingDate.toISOString().substring(0,7);
+    newState.lastReportPath = reportPath;
+    newState.lastReportMeeting = meetingSubject;
+    newState.lastReportDate = now.toISOString();
+    saveBoardState(newState);
+
+    res.json({ success: true, meeting: meetingSubject, daysUntil, reportPath });
+  } catch(e) {
+    console.error('[BoardReport] Force-send error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Debug: show current board state
+app.get('/board-report/debug', requireAuth, (req, res) => {
+  const state = loadBoardState();
+  const now = new Date();
+  const dayOfWeek = now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
+  res.json({ state, dayOfWeek, serverTime: now.toISOString(), brisbaneTime: now.toLocaleString('en-AU',{timeZone:'Australia/Brisbane'}) });
+});
+
 app.post('/board-report/generate', requireAuth, async (req, res) => {
   try {
     const now = new Date();
