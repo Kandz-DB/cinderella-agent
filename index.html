@@ -1475,11 +1475,15 @@ async function forceSendBoardReport() {
     var d = await r.json();
     if (d.success) {
       await loadBoardReportStatus();
-      openModal('✅ Board report sent', 'Meeting: ' + d.meeting + ' (' + d.daysUntil + ' days away)',
-        '<div class="alert-box ok"><div class="ab-title">Report generated and emailed to you</div>' +
-        '<div class="ab-text">Check your inbox — Cinderella has sent you the board report for review. You can also download it below.</div></div>' +
-        '<button class="m-btn" onclick="downloadBoardReport()">⬇ Download report</button> ' +
-        '<button class="m-btn sec" onclick="closeModal()">Close</button>'
+      openModal('✅ Board report ready', 'Meeting: ' + d.meeting + ' (' + d.daysUntil + ' days away)',
+        '<div class="alert-box ok"><div class="ab-title">Report generated successfully</div>' +
+        '<div class="ab-text">The report has been saved to your <strong>Outlook Drafts</strong>. Open Outlook Drafts, review it, and send it to yourself or the board.</div></div>' +
+        '<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button class="m-btn" style="background:#0078D4" onclick="openOutlookDrafts()">📧 Open Outlook Drafts</button>' +
+        '<button class="m-btn" onclick="downloadBoardReport()">⬇ Download report</button>' +
+        '<button class="m-btn sec" onclick="closeModal()">Close</button>' +
+        '</div>' +
+        '<div style="font-size:11px;color:var(--t3);margin-top:8px">To enable auto-sending in future: Azure AD → App registrations → API permissions → add <strong>Mail.Send</strong> → Grant admin consent → then re-login at /auth/login</div>'
       );
     } else {
       if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + (d.error||'Failed') + ' — try again or check Azure logs</div>';
