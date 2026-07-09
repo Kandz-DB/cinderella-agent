@@ -1658,6 +1658,12 @@ app.get('/aurora/summary', requireAuth, async (req, res) => {
       const totalOutstanding = totalInvoiced - totalPaid;
       const overdueDelivs  = deliverables.filter(d => d.status === 'Overdue' || (d.dueDate && new Date(d.dueDate) < new Date() && d.status !== 'Complete'));
       const inProgressDelivs = deliverables.filter(d => d.status === 'In Progress');
+      // Log first deliverable structure for debugging field names
+      if (deliverables.length > 0 && !global._auroraDelivLogged) {
+        console.log('[Aurora] Deliverable fields:', Object.keys(deliverables[0]).join(', '));
+        console.log('[Aurora] Deliverable sample:', JSON.stringify(deliverables[0]).substring(0, 200));
+        global._auroraDelivLogged = true;
+      }
 
       return {
         id: p.id,
