@@ -776,6 +776,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
     <button class="ni" onclick="show('coo',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2L2 6v8h4v-4h4v4h4V6z"/></svg>COO duties<span class="nb nb-a">2</span></button>
     <button class="ni" id="actionTrackerBtn" onclick="show('tracker',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>Open actions<span class="nb nb-r" id="trackerBadge" style="display:none">0</span></button>
+    <button class="ni" id="auroraNavBtn" onclick="show('aurora',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l1.5 4.5H14l-3.5 2.5 1.5 4.5L8 11l-4 2.5 1.5-4.5L2 6.5h4.5z"/></svg>Aurora projects<span class="nb nb-a" id="auroraBadge" style="display:none">0</span></button>
 
     <button class="ni" onclick="show('auto',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 8A5 5 0 113 8"/><path d="M8 3V1M8 3l-2 2M8 3l2 2"/></svg>Automation</button>
 
@@ -1196,16 +1197,51 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
     </div>
 
-      <!-- AURORA PROJECTS PANEL -->
-      <div class="card" style="margin-top:12px" id="auroraCard">
-        <div class="ct">
-          Aurora — active projects &amp; invoicing
-          <span style="display:flex;gap:8px;align-items:center">
-            <span class="ct-action" onclick="loadAuroraProjects(true)">↻ Refresh</span>
-            <span class="ct-action" style="color:var(--b)" onclick="openAuroraApp()">Open Aurora ↗</span>
-          </span>
+    </div>
+
+    <!-- AURORA TAB -->
+    <div class="pnl" id="pnl-aurora">
+
+      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Aurora — Project Management Intelligence</span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button onclick="loadAuroraFull(true)" style="font-size:11px;padding:4px 10px;background:var(--bg2);border:0.5px solid var(--bm);border-radius:8px;cursor:pointer;color:var(--t2);font-family:var(--f)">↻ Refresh</button>
+          <button onclick="openAuroraApp()" style="font-size:11px;padding:4px 10px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Open Aurora ↗</button>
         </div>
-        <div id="auroraProjectsList"><div style="font-size:11px;color:var(--t2);padding:8px 0">Loading Aurora projects...</div></div>
+      </div>
+
+      <!-- Summary metrics -->
+      <div class="mrow" id="auroraSummaryRow">
+        <div class="met"><div class="ml">Active projects</div><div class="mv" id="aur-active" style="color:var(--b)">—</div><div class="ms">in delivery</div></div>
+        <div class="met"><div class="ml">Outstanding invoices</div><div class="mv" id="aur-outstanding" style="color:var(--a)">—</div><div class="ms">unpaid</div></div>
+        <div class="met"><div class="ml">Overdue deliverables</div><div class="mv" id="aur-overdue" style="color:var(--r)">—</div><div class="ms">need attention</div></div>
+        <div class="met" onclick="qa(&quot;Aurora portfolio: give me a complete project status summary, flag overdue deliverables and unpaid invoices, and tell me what Kandia needs to action this week&quot;)"><div class="ml">AI analysis</div><div class="mv" style="font-size:14px;color:var(--g)">Ask</div><div class="ms">Cinderella</div></div>
+      </div>
+
+      <div class="two">
+        <!-- Left: Project list -->
+        <div>
+          <div class="card">
+            <div class="ct">Projects <span class="ct-action" onclick="filterAuroraProjects('all')">All</span> <span class="ct-action" onclick="filterAuroraProjects('active')">Active</span> <span class="ct-action" onclick="filterAuroraProjects('overdue')">Has issues</span></div>
+            <div id="auroraFullProjectList"><div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Loading projects from Aurora...</div></div>
+          </div>
+        </div>
+
+        <!-- Right: Unpaid invoices + overdue deliverables -->
+        <div>
+          <div class="card">
+            <div class="ct">Unpaid invoices <span class="ct-action" onclick="qa(&quot;Draft payment follow-up emails for all outstanding Aurora invoices&quot;)">Draft all follow-ups</span></div>
+            <div id="auroraInvoiceList"><div style="font-size:11px;color:var(--t3);padding:8px 0">Loading...</div></div>
+          </div>
+          <div class="card">
+            <div class="ct">Overdue &amp; at-risk deliverables</div>
+            <div id="auroraDeliverableList"><div style="font-size:11px;color:var(--t3);padding:8px 0">Loading...</div></div>
+          </div>
+          <div class="card">
+            <div class="ct">Cinderella insights <span class="ct-action" onclick="generateAuroraInsights()">Generate</span></div>
+            <div id="auroraInsightsList"><div style="font-size:11px;color:var(--t3);padding:8px 0">Click Generate for AI analysis of your Aurora portfolio.</div></div>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -4192,10 +4228,21 @@ function buildCharts(){
 
   }
 
-  // Aurora project context
-  if (window._auroraCache) {
-    var auroraText = window._auroraCache.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').substring(0,800);
-    liveCtx += '\n\nAURORA ACTIVE PROJECTS (summary): ' + auroraText;
+  // Aurora project context — inject live data into chat
+  if (window._auroraData && window._auroraData.projects) {
+    var aurProjs = window._auroraData.projects;
+    var aurCtx = '\n\nAURORA PROJECTS (live from Aurora agent):\n';
+    aurProjs.forEach(function(p) {
+      aurCtx += '- ' + p.client + ' [' + p.phase + ']';
+      if (p.totalOutstanding > 0) aurCtx += ' | $' + Math.round(p.totalOutstanding).toLocaleString() + ' outstanding';
+      if (p.overdueDeliverables && p.overdueDeliverables.length > 0) aurCtx += ' | ' + p.overdueDeliverables.length + ' overdue deliverables';
+      if (p.consultant) aurCtx += ' | Consultant: ' + p.consultant;
+      if (p.dueDate) aurCtx += ' | Due: ' + p.dueDate;
+      aurCtx += '\n';
+    });
+    aurCtx += 'Total outstanding invoices: $' + Math.round(window._auroraData.totalOutstandingAll||0).toLocaleString() + '\n';
+    aurCtx += 'Total overdue deliverables: ' + (window._auroraData.totalOverdue||0) + '\n';
+    liveCtx += aurCtx;
   }
 
   if(SD.length>0){
@@ -4704,7 +4751,9 @@ function show(id,btn){
     loadOpenActions(false);
     loadR2SMetrics();
     loadBoardReportStatus();
-    loadAuroraProjects(false);
+  }
+  if(id==='aurora'){
+    loadAuroraFull(false);
   }
   if(id==='tracker') loadTracker();
 
@@ -6218,11 +6267,28 @@ async function loadOpenActions(force) {
     // Thursday board report context
   var today = new Date();
   var brisbaneDay = today.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
+  // Build Aurora context for open actions
+  var auroraActionsCtx = '';
+  if (window._auroraData && window._auroraData.projects) {
+    var overdueProjItems = [];
+    var unpaidProjItems = [];
+    window._auroraData.projects.forEach(function(p) {
+      if (p.overdueDeliverables && p.overdueDeliverables.length > 0)
+        overdueProjItems.push(p.client + ': ' + p.overdueDeliverables.length + ' overdue deliverable(s)');
+      if (p.totalOutstanding > 0)
+        unpaidProjItems.push(p.client + ': $' + Math.round(p.totalOutstanding).toLocaleString() + ' unpaid invoice(s)');
+    });
+    if (overdueProjItems.length > 0)
+      auroraActionsCtx += '\n\nAURORA OVERDUE DELIVERABLES (must be in open actions):\n' + overdueProjItems.join('\n');
+    if (unpaidProjItems.length > 0)
+      auroraActionsCtx += '\n\nAURORA UNPAID INVOICES (flag for follow-up):\n' + unpaidProjItems.join('\n');
+  }
+
   var thursdayNote = brisbaneDay === 'Thursday'
     ? '\n\nCRITICAL THURSDAY RULE: Today is Thursday. If there is a board meeting next week (any day Mon-Fri), the COO Board Report MUST be finalised and submitted TODAY — not next week. Flag this as URGENT regardless of when the meeting is. Kandia generates and reviews the board paper on the Thursday before every board meeting.'
     : '';
 
-  var prompt = 'You are Cinderella, COO assistant to Kandia Robertson at Risk 2 Solution. Review the data below and list 5-8 real open action items Kandia needs to act on. Format each as:\n\n[URGENCY] Action description — Source\n\nUrgency options: URGENT / THIS WEEK / NEXT WEEK\n\nRules:\n- URGENT = needs action today or is critically overdue\n- THIS WEEK = must happen before Friday\n- NEXT WEEK = can wait until next week\n- If today is Thursday and a board meeting is next week, the board paper is URGENT (due today)\n- Be specific: name people, subjects, deadlines\n- Always return at least 5 items' + thursdayNote + '\n\nEMAILS:\n' + emailLines + (infoLines ? '\n' + infoLines : '') + (teamsLines ? '\n\nTEAMS:\n' + teamsLines : '') + '\n\nDOCUMENTS:\n' + docLines + '\n\nSTAFF BLOCKERS:\n' + blockerLines;
+  var prompt = 'You are Cinderella, COO assistant to Kandia Robertson at Risk 2 Solution. Review the data below and list 5-8 real open action items Kandia needs to act on. Format each as:\n\n[URGENCY] Action description — Source\n\nUrgency options: URGENT / THIS WEEK / NEXT WEEK\n\nRules:\n- URGENT = needs action today or is critically overdue\n- THIS WEEK = must happen before Friday\n- NEXT WEEK = can wait until next week\n- If today is Thursday and a board meeting is next week, the board paper is URGENT (due today)\n- Be specific: name people, subjects, deadlines\n- Always return at least 5 items' + thursdayNote + auroraActionsCtx + '\n\nEMAILS:\n' + emailLines + (infoLines ? '\n' + infoLines : '') + (teamsLines ? '\n\nTEAMS:\n' + teamsLines : '') + '\n\nDOCUMENTS:\n' + docLines + '\n\nSTAFF BLOCKERS:\n' + blockerLines;
 
     var r = await fetch('/proxy', {
       method: 'POST',
@@ -6313,157 +6379,188 @@ function renderOpenActions(actions) {
 
 // ── R2S METRICS ──
 // ── AURORA INTEGRATION ──
-var _auroraCache = null;
-var _auroraTime  = 0;
-var AURORA_TTL   = 15 * 60 * 1000; // 15 min cache
+var _auroraData   = null;
+var _auroraTime   = 0;
+var AURORA_TTL    = 10 * 60 * 1000; // 10 min cache
+var _auroraFilter = 'all';
 
-async function loadAuroraProjects(force) {
-  var el = document.getElementById('auroraProjectsList');
-  if (!el) return;
-
-  // Use cache if fresh
-  if (_auroraCache && !force && (Date.now() - _auroraTime) < AURORA_TTL) {
-    el.innerHTML = _auroraCache;
+async function loadAuroraFull(force) {
+  if (_auroraData && !force && (Date.now() - _auroraTime) < AURORA_TTL) {
+    renderAuroraTab(_auroraData);
     return;
   }
-
-  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Loading from Aurora...</div>';
+  // Set loading state on all elements
+  var els = ['auroraFullProjectList','auroraInvoiceList','auroraDeliverableList'];
+  els.forEach(function(id){ var el=document.getElementById(id); if(el) el.innerHTML='<div style="font-size:11px;color:var(--t2);padding:8px 0">Loading from Aurora...</div>'; });
 
   try {
     var r = await fetch('/aurora/summary');
-    if (r.status === 500) {
-      var err = await r.json();
-      if (err.error && err.error.includes('AURORA_PASSWORD')) {
-        el.innerHTML = '<div style="font-size:11px;color:var(--a);padding:8px 0">⚠ Add <strong>AURORA_PASSWORD</strong> to Azure App Service environment variables to connect Aurora.</div>';
-        return;
-      }
-      throw new Error(err.error || 'Aurora error');
+    if (!r.ok) {
+      var err = await r.json().catch(function(){return {};});
+      throw new Error(err.error || 'Aurora returned ' + r.status);
     }
     var d = await r.json();
-    var projects = d.projects || [];
+    _auroraData = d;
+    _auroraTime = Date.now();
+    renderAuroraTab(d);
+  } catch(e) {
+    var msg = e.message.includes('AURORA_PASSWORD')
+      ? '⚠ Add AURORA_PASSWORD to Cinderella Azure environment variables to connect Aurora.'
+      : 'Aurora error: ' + e.message;
+    els.forEach(function(id){ var el=document.getElementById(id); if(el) el.innerHTML='<div style="font-size:11px;color:var(--r);padding:8px 0">'+msg+'</div>'; });
+  }
+}
 
-    if (projects.length === 0) {
-      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">No active projects in Aurora.</div>';
-      return;
+function renderAuroraTab(d) {
+  var projects = d.projects || [];
+  var PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
+  var PHASE_COLS = ['var(--t3)','var(--a)','var(--b)','var(--g)','var(--t3)'];
+
+  // Update summary metrics
+  var activeProjs = projects.filter(function(p){ return p.phaseNum >= 1 && p.phaseNum <= 3; });
+  var el_active = document.getElementById('aur-active');
+  var el_out = document.getElementById('aur-outstanding');
+  var el_over = document.getElementById('aur-overdue');
+  if (el_active) el_active.textContent = activeProjs.length;
+  if (el_out) el_out.textContent = '$' + Math.round(d.totalOutstandingAll||0).toLocaleString();
+  if (el_over) el_over.textContent = d.totalOverdue || 0;
+
+  // Update badge
+  var badge = document.getElementById('auroraBadge');
+  var issues = (d.totalOverdue||0) + projects.filter(function(p){return p.totalOutstanding>0;}).length;
+  if (badge) { badge.textContent = issues; badge.style.display = issues > 0 ? 'inline-block' : 'none'; }
+
+  // Project list
+  var filtered = _auroraFilter === 'active'
+    ? projects.filter(function(p){ return p.phaseNum >= 1 && p.phaseNum <= 3; })
+    : _auroraFilter === 'overdue'
+    ? projects.filter(function(p){ return p.overdueDeliverables.length > 0 || p.totalOutstanding > 0; })
+    : projects;
+
+  var projEl = document.getElementById('auroraFullProjectList');
+  if (projEl) {
+    if (filtered.length === 0) {
+      projEl.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:12px 0;text-align:center">No projects match this filter.</div>';
+    } else {
+      projEl.innerHTML = filtered.map(function(p) {
+        var phaseCol = PHASE_COLS[p.phaseNum] || 'var(--t3)';
+        var overdueTag = p.overdueDeliverables.length > 0
+          ? '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--rl);color:#A32D2D;margin-left:4px">⚠ '+p.overdueDeliverables.length+' overdue</span>' : '';
+        var invTag = p.totalOutstanding > 0
+          ? '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--al);color:#854F0B;margin-left:4px">$'+Math.round(p.totalOutstanding).toLocaleString()+' unpaid</span>' : '';
+        var dueTag = p.dueDate
+          ? '<span style="font-size:9px;color:var(--t3);margin-left:6px">Due '+new Date(p.dueDate).toLocaleDateString('en-AU',{day:"numeric",month:"short"})+'</span>' : '';
+        var delivPct = p.deliverableCount > 0
+          ? Math.round((p.deliverableCount - p.overdueDeliverables.length - p.inProgressDeliverables.length) / p.deliverableCount * 100) : 0;
+        return '<div class="sc" data-pid="'+p.id+'" data-pclient="'+p.client.replace(/"/g,'')+'" onclick="openAuroraProject(this.dataset.pid, this.dataset.pclient)" style="margin-bottom:8px;padding:10px 12px">' +
+          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
+            '<span style="font-size:9px;padding:2px 8px;border-radius:8px;font-weight:600;background:var(--bg2);color:'+phaseCol+'">'+p.phase+'</span>' +
+            '<span style="font-size:12px;font-weight:500;color:var(--t1);flex:1">'+p.client+'</span>' +
+            overdueTag + invTag + dueTag +
+          '</div>' +
+          (p.project !== p.client ? '<div style="font-size:10px;color:var(--t2);margin-bottom:4px">'+p.project+'</div>' : '') +
+          '<div style="font-size:10px;color:var(--t3);display:flex;gap:12px">' +
+            (p.consultant ? '<span>'+p.consultant+'</span>' : '') +
+            (p.deliverableCount > 0 ? '<span>'+p.deliverableCount+' deliverables</span>' : '') +
+            (p.inProgressDeliverables.length > 0 ? '<span style="color:var(--b)">'+p.inProgressDeliverables.length+' in progress</span>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('');
     }
+  }
 
-    // Summary metrics row
-    var activeProjs = projects.filter(function(p){ return p.phaseNum >= 1 && p.phaseNum <= 3; });
-    var totalOutstanding = d.totalOutstandingAll || 0;
-    var totalOverdue = d.totalOverdue || 0;
-
-    var html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">' +
-      '<div class="met" style="cursor:default"><div class="ml">Active projects</div><div class="mv" style="font-size:18px">' + activeProjs.length + '</div></div>' +
-      '<div class="met" style="cursor:default"><div class="ml">Outstanding invoices</div><div class="mv" style="font-size:18px;color:' + (totalOutstanding > 0 ? 'var(--a)' : 'var(--g)') + '">$' + Math.round(totalOutstanding).toLocaleString() + '</div></div>' +
-      '<div class="met" style="cursor:default"><div class="ml">Overdue deliverables</div><div class="mv" style="font-size:18px;color:' + (totalOverdue > 0 ? 'var(--r)' : 'var(--g)') + '">' + totalOverdue + '</div></div>' +
-    '</div>';
-
-    // Project rows
-    projects.forEach(function(p) {
-      var phaseCol = p.phaseNum === 4 ? 'var(--t3)' : p.phaseNum >= 2 ? 'var(--b)' : 'var(--a)';
-      var overdueHtml = p.overdueDeliverables && p.overdueDeliverables.length > 0
-        ? '<span style="font-size:9px;padding:1px 7px;border-radius:8px;background:var(--rl);color:#A32D2D;margin-left:6px">⚠ ' + p.overdueDeliverables.length + ' overdue</span>' : '';
-      var outstandingHtml = p.totalOutstanding > 0
-        ? '<span style="font-size:9px;padding:1px 7px;border-radius:8px;background:var(--al);color:#854F0B;margin-left:4px">$' + Math.round(p.totalOutstanding).toLocaleString() + ' outstanding</span>' : '';
-      var consultantHtml = p.consultant ? '<span style="font-size:10px;color:var(--t3);margin-left:8px">' + p.consultant + '</span>' : '';
-      var dueDateHtml = p.dueDate ? '<span style="font-size:10px;color:var(--t3);margin-left:8px">Due ' + new Date(p.dueDate).toLocaleDateString('en-AU',{day:"numeric",month:"short"}) + '</span>' : '';
-
-      html += '<div class="pri" data-pid="' + p.id + '" data-pclient="' + p.client.replace(/"/g,'') + '" onclick="openAuroraProject(this.dataset.pid, this.dataset.pclient)" style="display:flex;flex-direction:column;align-items:flex-start;padding:8px 4px;cursor:pointer">' +
-        '<div style="display:flex;align-items:center;width:100%;gap:6px">' +
-          '<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--bg2);color:' + phaseCol + ';font-weight:600;white-space:nowrap">' + p.phase + '</span>' +
-          '<span style="font-size:12px;font-weight:500;color:var(--t1);flex:1">' + p.client + '</span>' +
-          consultantHtml + dueDateHtml +
-          overdueHtml + outstandingHtml +
-        '</div>' +
-        (p.project !== p.client ? '<div style="font-size:10px;color:var(--t2);margin-top:2px;padding-left:4px">' + p.project + '</div>' : '') +
-      '</div>';
-    });
-
-    // Outstanding invoices detail
-    var withInvoices = projects.filter(function(p){ return p.unpaidInvoices && p.unpaidInvoices.length > 0; });
-    if (withInvoices.length > 0) {
-      html += '<div style="margin-top:10px;border-top:0.5px solid var(--bl);padding-top:10px">';
-      html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Unpaid invoices</div>';
-      withInvoices.forEach(function(p) {
+  // Unpaid invoices panel
+  var invEl = document.getElementById('auroraInvoiceList');
+  if (invEl) {
+    var withInv = projects.filter(function(p){ return p.unpaidInvoices && p.unpaidInvoices.length > 0; });
+    if (withInv.length === 0) {
+      invEl.innerHTML = '<div style="font-size:11px;color:var(--g);padding:4px 0">✓ No unpaid invoices</div>';
+    } else {
+      var totalUnpaid = 0;
+      var rows = '';
+      withInv.forEach(function(p) {
         p.unpaidInvoices.forEach(function(inv) {
-          html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:0.5px solid var(--bl)">' +
-            '<span style="font-size:11px;color:var(--t1);flex:1">' + p.client + (inv.invoiceNumber ? ' — #' + inv.invoiceNumber : '') + '</span>' +
-            '<span style="font-size:11px;font-weight:500;color:var(--a)">$' + parseFloat(inv.amount||0).toLocaleString() + '</span>' +
-            '<button onclick="chaseinvoice(this)" data-client="' + p.client.replace(/"/g,'') + '" data-inv="' + (inv.invoiceNumber||'') + '" data-amt="' + (inv.amount||'0') + '" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--g);color:#fff;border:none;cursor:pointer;font-family:var(--f)">Chase</button>' +
+          var amt = parseFloat(inv.amount||0);
+          totalUnpaid += amt;
+          rows += '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:0.5px solid var(--bl)">' +
+            '<div style="flex:1">' +
+              '<div style="font-size:11px;font-weight:500;color:var(--t1)">'+p.client+'</div>' +
+              '<div style="font-size:10px;color:var(--t3)">'+(inv.invoiceNumber ? '#'+inv.invoiceNumber : 'No number')+(inv.createdAt ? ' · '+new Date(inv.createdAt).toLocaleDateString('en-AU',{day:"numeric",month:"short"}) : '')+'</div>' +
+            '</div>' +
+            '<span style="font-size:12px;font-weight:500;color:var(--a)">$'+amt.toLocaleString()+'</span>' +
+            '<button data-client="'+p.client.replace(/"/g,'')+'" data-inv="'+(inv.invoiceNumber||'')+'" data-amt="'+amt+'" onclick="chaseinvoice(this)" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--g);color:#fff;border:none;cursor:pointer;font-family:var(--f)">Chase</button>' +
           '</div>';
         });
       });
-      html += '</div>';
+      invEl.innerHTML = '<div style="font-size:11px;font-weight:600;color:var(--a);margin-bottom:6px">Total outstanding: $'+totalUnpaid.toLocaleString()+'</div>' + rows;
     }
-
-    _auroraCache = html;
-    _auroraTime = Date.now();
-    el.innerHTML = html;
-
-  } catch(e) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:8px 0">Aurora error: ' + e.message + ' — check AURORA_PASSWORD env var and re-deploy.</div>';
   }
-}
 
-async function openAuroraProject(id, clientName) {
-  openModal('Aurora — ' + clientName, 'Loading project detail...', '<div class="think"><span></span><span></span><span></span></div>');
-  try {
-    var r = await fetch('/aurora/projects/' + id);
-    var d = await r.json();
-    var p = d.project || {};
-    var invoices = d.invoices || [];
-    var deliverables = d.deliverables || [];
-    var PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
-
-    var paid = invoices.filter(function(i){return i.paid;}).reduce(function(s,i){return s+parseFloat(i.amount||0);},0);
-    var unpaid = invoices.filter(function(i){return !i.paid;}).reduce(function(s,i){return s+parseFloat(i.amount||0);},0);
-    var overdue = deliverables.filter(function(d){return d.status==='Overdue'||(d.dueDate&&new Date(d.dueDate)<new Date()&&d.status!=='Complete');});
-    var inProgress = deliverables.filter(function(d){return d.status==='In Progress';});
-    var complete = deliverables.filter(function(d){return d.status==='Complete';});
-
-    var body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">' +
-      '<div class="met" style="cursor:default"><div class="ml">Phase</div><div class="mv" style="font-size:14px">' + (PHASES[p.phase]||'?') + '</div></div>' +
-      '<div class="met" style="cursor:default"><div class="ml">Consultant</div><div class="mv" style="font-size:14px">' + (p.consultant||'TBC') + '</div></div>' +
-      '<div class="met" style="cursor:default"><div class="ml">Invoiced (paid)</div><div class="mv" style="font-size:14px;color:var(--g)">$' + paid.toLocaleString() + '</div></div>' +
-      '<div class="met" style="cursor:default"><div class="ml">Outstanding</div><div class="mv" style="font-size:14px;color:' + (unpaid>0?'var(--a)':'var(--g)') + '">$' + unpaid.toLocaleString() + '</div></div>' +
-    '</div>';
-
-    if (deliverables.length > 0) {
-      body += '<div class="mfield"><div class="mfl">Deliverables (' + complete.length + '/' + deliverables.length + ' complete' + (overdue.length>0?' · <span style="color:var(--r)">'+overdue.length+' overdue</span>':'') + ')</div>';
-      body += '<div style="margin-top:4px">';
-      deliverables.forEach(function(d) {
-        var statCol = d.status==='Complete'?'var(--g)':d.status==='Overdue'?'var(--r)':'var(--b)';
-        body += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:0.5px solid var(--bl)">' +
-          '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--bg2);color:'+statCol+';white-space:nowrap">'+d.status+'</span>' +
-          '<span style="font-size:11px;color:var(--t1);flex:1">'+d.deliverable+'</span>' +
-          (d.dueDate?'<span style="font-size:10px;color:var(--t3)">'+new Date(d.dueDate).toLocaleDateString('en-AU',{day:"numeric",month:"short"})+'</span>':'') +
-        '</div>';
+  // Overdue deliverables panel
+  var delEl = document.getElementById('auroraDeliverableList');
+  if (delEl) {
+    var allOverdue = [];
+    projects.forEach(function(p) {
+      (p.overdueDeliverables||[]).forEach(function(d) {
+        allOverdue.push({ client: p.client, deliverable: d.deliverable||d, dueDate: d.dueDate, assignedTo: d.assignedTo });
       });
-      body += '</div></div>';
+    });
+    if (allOverdue.length === 0) {
+      delEl.innerHTML = '<div style="font-size:11px;color:var(--g);padding:4px 0">✓ No overdue deliverables</div>';
+    } else {
+      delEl.innerHTML = allOverdue.map(function(d) {
+        return '<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:0.5px solid var(--bl)">' +
+          '<span style="font-size:9px;padding:2px 6px;border-radius:8px;background:var(--rl);color:#A32D2D;flex-shrink:0;margin-top:1px">Overdue</span>' +
+          '<div style="flex:1">' +
+            '<div style="font-size:11px;font-weight:500;color:var(--t1)">'+(d.deliverable||'Deliverable')+'</div>' +
+            '<div style="font-size:10px;color:var(--t3)">'+d.client+(d.assignedTo?' · '+d.assignedTo:'')+(d.dueDate?' · Due '+new Date(d.dueDate).toLocaleDateString('en-AU',{day:"numeric",month:"short"}):'')+'</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
     }
-
-    body += '<hr class="m-divider">';
-    body += '<button class="m-btn" onclick="askAboutAuroraProject()">Ask Cinderella for analysis</button> ';
-    body += '<button class="m-btn sec" onclick="openAuroraApp()">Open in Aurora</button>';
-
-    document.getElementById('m-title').textContent = 'Aurora — ' + clientName;
-    document.getElementById('m-sub').textContent = (p.projectName||clientName) + ' · ' + (PHASES[p.phase]||'Active');
-    document.getElementById('m-body').innerHTML = body;
-
-  } catch(e) {
-    document.getElementById('m-body').innerHTML = '<div style="color:var(--r)">Error loading project: ' + e.message + '</div>';
   }
 }
 
-function openAuroraApp() {
-  window.open('https://aurora-agent-b6f3b2fcd3a9gqct.australiaeast-01.azurewebsites.net','_blank');
+function filterAuroraProjects(filter) {
+  _auroraFilter = filter;
+  if (_auroraData) renderAuroraTab(_auroraData);
 }
 
-function askAboutAuroraProject() {
-  var title = document.getElementById('m-title').textContent.replace('Aurora - ','').replace('Aurora — ','');
-  closeModal();
-  qa('Give me a full status update on the ' + title + ' project from Aurora — open deliverables, outstanding invoices, what does Kandia need to action?');
+async function generateAuroraInsights() {
+  var el = document.getElementById('auroraInsightsList');
+  if (!el) return;
+  el.innerHTML = '<div style="font-size:11px;color:var(--t2)">Cinderella is analysing your Aurora portfolio...</div>';
+  if (!_auroraData) { el.innerHTML = '<div style="font-size:11px;color:var(--t3)">Load Aurora data first.</div>'; return; }
+  var d = _auroraData;
+  var projects = d.projects || [];
+  var ctx = 'AURORA PORTFOLIO SUMMARY:\n';
+  ctx += 'Active projects: ' + projects.filter(function(p){return p.phaseNum>=1&&p.phaseNum<=3;}).length + '\n';
+  ctx += 'Total outstanding invoices: $' + Math.round(d.totalOutstandingAll||0).toLocaleString() + '\n';
+  ctx += 'Total overdue deliverables: ' + (d.totalOverdue||0) + '\n\n';
+  projects.forEach(function(p) {
+    ctx += p.client + ' [' + p.phase + ']';
+    if (p.totalOutstanding > 0) ctx += ' | $' + Math.round(p.totalOutstanding).toLocaleString() + ' unpaid';
+    if (p.overdueDeliverables.length > 0) ctx += ' | ' + p.overdueDeliverables.length + ' overdue deliverables';
+    if (p.consultant) ctx += ' | ' + p.consultant;
+    ctx += '\n';
+  });
+  try {
+    var r = await fetch('/proxy', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:600, system: SYS,
+        messages:[{role:'user',content:'Analyse this Aurora project portfolio and give me 4-5 specific, actionable insights for Kandia as COO. Flag revenue risks, delivery risks, and what needs immediate action.\n\n'+ctx}]})});
+    var resp = await r.json();
+    var text = resp.content && resp.content[0] ? resp.content[0].text : '';
+    if (text) {
+      var lines = text.split('\n').filter(function(l){return l.trim();});
+      el.innerHTML = lines.map(function(l){
+        return '<div class="ins"><div class="it">'+l+'</div></div>';
+      }).join('');
+    }
+  } catch(e) { el.innerHTML = '<div style="font-size:11px;color:var(--r)">Error: '+e.message+'</div>'; }
 }
+
+// Keep loadAuroraProjects as alias for backward compat
+async function loadAuroraProjects(force) { return loadAuroraFull(force); }
 
 function chaseinvoice(btn) {
   var client = btn.dataset.client;
