@@ -1210,12 +1210,23 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
         </div>
       </div>
 
-      <!-- Summary metrics -->
-      <div class="mrow" id="auroraSummaryRow">
-        <div class="met"><div class="ml">Active projects</div><div class="mv" id="aur-active" style="color:var(--b)">—</div><div class="ms">in delivery</div></div>
-        <div class="met"><div class="ml">Outstanding invoices</div><div class="mv" id="aur-outstanding" style="color:var(--a)">—</div><div class="ms">unpaid</div></div>
-        <div class="met"><div class="ml">Overdue deliverables</div><div class="mv" id="aur-overdue" style="color:var(--r)">—</div><div class="ms">need attention</div></div>
-        <div class="met" onclick="qa(&quot;Aurora portfolio: give me a complete project status summary, flag overdue deliverables and unpaid invoices, and tell me what Kandia needs to action this week&quot;)"><div class="ml">AI analysis</div><div class="mv" style="font-size:14px;color:var(--g)">Ask</div><div class="ms">Cinderella</div></div>
+      <!-- Summary metrics — compact bar -->
+      <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;align-items:center;background:var(--bg2);border-radius:var(--rm);padding:10px 14px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:22px;font-weight:500;color:var(--b)" id="aur-active">—</span>
+          <span style="font-size:11px;color:var(--t2)">active projects</span>
+        </div>
+        <div style="width:1px;height:24px;background:var(--bl);flex-shrink:0"></div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:22px;font-weight:500;color:var(--a)" id="aur-outstanding">—</span>
+          <span style="font-size:11px;color:var(--t2)">outstanding</span>
+        </div>
+        <div style="width:1px;height:24px;background:var(--bl);flex-shrink:0"></div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:22px;font-weight:500;color:var(--r)" id="aur-overdue">—</span>
+          <span style="font-size:11px;color:var(--t2)">overdue deliverables</span>
+        </div>
+        <button onclick="qa(&quot;Aurora portfolio summary: active projects, overdue deliverables, outstanding invoices — what should Kandia action this week?&quot;)" style="margin-left:auto;font-size:11px;padding:5px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Ask Cinderella</button>
       </div>
 
       <div class="two">
@@ -6502,7 +6513,8 @@ function renderAuroraTab(d) {
     var allOverdue = [];
     projects.forEach(function(p) {
       (p.overdueDeliverables||[]).forEach(function(d) {
-        allOverdue.push({ client: p.client, deliverable: d.deliverable||d, dueDate: d.dueDate, assignedTo: d.assignedTo });
+        var dname = d.deliverable || d.Deliverable || d.name || d.title || d.description || d.task || (typeof d === 'string' ? d : 'Deliverable');
+        allOverdue.push({ client: p.client, deliverable: dname, dueDate: d.dueDate || d.due_date || d['Due Date'], assignedTo: d.assignedTo || d.assigned_to || d['Assigned To'] });
       });
     });
     if (allOverdue.length === 0) {
