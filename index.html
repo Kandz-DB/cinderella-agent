@@ -1196,6 +1196,20 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
     </div>
 
+      <!-- AURORA PROJECTS PANEL -->
+      <div class="card" style="margin-top:12px" id="auroraCard">
+        <div class="ct">
+          Aurora — active projects &amp; invoicing
+          <span style="display:flex;gap:8px;align-items:center">
+            <span class="ct-action" onclick="loadAuroraProjects(true)">↻ Refresh</span>
+            <span class="ct-action" style="color:var(--b)" onclick="openAuroraApp()">Open Aurora ↗</span>
+          </span>
+        </div>
+        <div id="auroraProjectsList"><div style="font-size:11px;color:var(--t2);padding:8px 0">Loading Aurora projects...</div></div>
+      </div>
+
+    </div>
+
     <!-- AUTOMATION -->
 
     <div class="pnl" id="pnl-auto">
@@ -4690,6 +4704,7 @@ function show(id,btn){
     loadOpenActions(false);
     loadR2SMetrics();
     loadBoardReportStatus();
+    loadAuroraProjects(false);
   }
   if(id==='tracker') loadTracker();
 
