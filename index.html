@@ -4178,6 +4178,12 @@ function buildCharts(){
 
   }
 
+  // Aurora project context
+  if (window._auroraCache) {
+    var auroraText = window._auroraCache.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').substring(0,800);
+    liveCtx += '\n\nAURORA ACTIVE PROJECTS (summary): ' + auroraText;
+  }
+
   if(SD.length>0){
 
     const labels=SD.map(s=>s.name.split(' ')[0]);
@@ -6291,6 +6297,166 @@ function renderOpenActions(actions) {
 }
 
 // ── R2S METRICS ──
+// ── AURORA INTEGRATION ──
+var _auroraCache = null;
+var _auroraTime  = 0;
+var AURORA_TTL   = 15 * 60 * 1000; // 15 min cache
+
+async function loadAuroraProjects(force) {
+  var el = document.getElementById('auroraProjectsList');
+  if (!el) return;
+
+  // Use cache if fresh
+  if (_auroraCache && !force && (Date.now() - _auroraTime) < AURORA_TTL) {
+    el.innerHTML = _auroraCache;
+    return;
+  }
+
+  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Loading from Aurora...</div>';
+
+  try {
+    var r = await fetch('/aurora/summary');
+    if (r.status === 500) {
+      var err = await r.json();
+      if (err.error && err.error.includes('AURORA_PASSWORD')) {
+        el.innerHTML = '<div style="font-size:11px;color:var(--a);padding:8px 0">⚠ Add <strong>AURORA_PASSWORD</strong> to Azure App Service environment variables to connect Aurora.</div>';
+        return;
+      }
+      throw new Error(err.error || 'Aurora error');
+    }
+    var d = await r.json();
+    var projects = d.projects || [];
+
+    if (projects.length === 0) {
+      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">No active projects in Aurora.</div>';
+      return;
+    }
+
+    // Summary metrics row
+    var activeProjs = projects.filter(function(p){ return p.phaseNum >= 1 && p.phaseNum <= 3; });
+    var totalOutstanding = d.totalOutstandingAll || 0;
+    var totalOverdue = d.totalOverdue || 0;
+
+    var html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">' +
+      '<div class="met" style="cursor:default"><div class="ml">Active projects</div><div class="mv" style="font-size:18px">' + activeProjs.length + '</div></div>' +
+      '<div class="met" style="cursor:default"><div class="ml">Outstanding invoices</div><div class="mv" style="font-size:18px;color:' + (totalOutstanding > 0 ? 'var(--a)' : 'var(--g)') + '">$' + Math.round(totalOutstanding).toLocaleString() + '</div></div>' +
+      '<div class="met" style="cursor:default"><div class="ml">Overdue deliverables</div><div class="mv" style="font-size:18px;color:' + (totalOverdue > 0 ? 'var(--r)' : 'var(--g)') + '">' + totalOverdue + '</div></div>' +
+    '</div>';
+
+    // Project rows
+    projects.forEach(function(p) {
+      var phaseCol = p.phaseNum === 4 ? 'var(--t3)' : p.phaseNum >= 2 ? 'var(--b)' : 'var(--a)';
+      var overdueHtml = p.overdueDeliverables && p.overdueDeliverables.length > 0
+        ? '<span style="font-size:9px;padding:1px 7px;border-radius:8px;background:var(--rl);color:#A32D2D;margin-left:6px">⚠ ' + p.overdueDeliverables.length + ' overdue</span>' : '';
+      var outstandingHtml = p.totalOutstanding > 0
+        ? '<span style="font-size:9px;padding:1px 7px;border-radius:8px;background:var(--al);color:#854F0B;margin-left:4px">$' + Math.round(p.totalOutstanding).toLocaleString() + ' outstanding</span>' : '';
+      var consultantHtml = p.consultant ? '<span style="font-size:10px;color:var(--t3);margin-left:8px">' + p.consultant + '</span>' : '';
+      var dueDateHtml = p.dueDate ? '<span style="font-size:10px;color:var(--t3);margin-left:8px">Due ' + new Date(p.dueDate).toLocaleDateString('en-AU',{day:"numeric",month:"short"}) + '</span>' : '';
+
+      html += '<div class="pri" data-pid="' + p.id + '" data-pclient="' + p.client.replace(/"/g,'') + '" onclick="openAuroraProject(this.dataset.pid, this.dataset.pclient)" style="display:flex;flex-direction:column;align-items:flex-start;padding:8px 4px;cursor:pointer">' +
+        '<div style="display:flex;align-items:center;width:100%;gap:6px">' +
+          '<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--bg2);color:' + phaseCol + ';font-weight:600;white-space:nowrap">' + p.phase + '</span>' +
+          '<span style="font-size:12px;font-weight:500;color:var(--t1);flex:1">' + p.client + '</span>' +
+          consultantHtml + dueDateHtml +
+          overdueHtml + outstandingHtml +
+        '</div>' +
+        (p.project !== p.client ? '<div style="font-size:10px;color:var(--t2);margin-top:2px;padding-left:4px">' + p.project + '</div>' : '') +
+      '</div>';
+    });
+
+    // Outstanding invoices detail
+    var withInvoices = projects.filter(function(p){ return p.unpaidInvoices && p.unpaidInvoices.length > 0; });
+    if (withInvoices.length > 0) {
+      html += '<div style="margin-top:10px;border-top:0.5px solid var(--bl);padding-top:10px">';
+      html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Unpaid invoices</div>';
+      withInvoices.forEach(function(p) {
+        p.unpaidInvoices.forEach(function(inv) {
+          html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:0.5px solid var(--bl)">' +
+            '<span style="font-size:11px;color:var(--t1);flex:1">' + p.client + (inv.invoiceNumber ? ' — #' + inv.invoiceNumber : '') + '</span>' +
+            '<span style="font-size:11px;font-weight:500;color:var(--a)">$' + parseFloat(inv.amount||0).toLocaleString() + '</span>' +
+            '<button onclick="chaseinvoice(this)" data-client="' + p.client.replace(/"/g,'') + '" data-inv="' + (inv.invoiceNumber||'') + '" data-amt="' + (inv.amount||'0') + '" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--g);color:#fff;border:none;cursor:pointer;font-family:var(--f)">Chase</button>' +
+          '</div>';
+        });
+      });
+      html += '</div>';
+    }
+
+    _auroraCache = html;
+    _auroraTime = Date.now();
+    el.innerHTML = html;
+
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:8px 0">Aurora error: ' + e.message + ' — check AURORA_PASSWORD env var and re-deploy.</div>';
+  }
+}
+
+async function openAuroraProject(id, clientName) {
+  openModal('Aurora — ' + clientName, 'Loading project detail...', '<div class="think"><span></span><span></span><span></span></div>');
+  try {
+    var r = await fetch('/aurora/projects/' + id);
+    var d = await r.json();
+    var p = d.project || {};
+    var invoices = d.invoices || [];
+    var deliverables = d.deliverables || [];
+    var PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
+
+    var paid = invoices.filter(function(i){return i.paid;}).reduce(function(s,i){return s+parseFloat(i.amount||0);},0);
+    var unpaid = invoices.filter(function(i){return !i.paid;}).reduce(function(s,i){return s+parseFloat(i.amount||0);},0);
+    var overdue = deliverables.filter(function(d){return d.status==='Overdue'||(d.dueDate&&new Date(d.dueDate)<new Date()&&d.status!=='Complete');});
+    var inProgress = deliverables.filter(function(d){return d.status==='In Progress';});
+    var complete = deliverables.filter(function(d){return d.status==='Complete';});
+
+    var body = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">' +
+      '<div class="met" style="cursor:default"><div class="ml">Phase</div><div class="mv" style="font-size:14px">' + (PHASES[p.phase]||'?') + '</div></div>' +
+      '<div class="met" style="cursor:default"><div class="ml">Consultant</div><div class="mv" style="font-size:14px">' + (p.consultant||'TBC') + '</div></div>' +
+      '<div class="met" style="cursor:default"><div class="ml">Invoiced (paid)</div><div class="mv" style="font-size:14px;color:var(--g)">$' + paid.toLocaleString() + '</div></div>' +
+      '<div class="met" style="cursor:default"><div class="ml">Outstanding</div><div class="mv" style="font-size:14px;color:' + (unpaid>0?'var(--a)':'var(--g)') + '">$' + unpaid.toLocaleString() + '</div></div>' +
+    '</div>';
+
+    if (deliverables.length > 0) {
+      body += '<div class="mfield"><div class="mfl">Deliverables (' + complete.length + '/' + deliverables.length + ' complete' + (overdue.length>0?' · <span style="color:var(--r)">'+overdue.length+' overdue</span>':'') + ')</div>';
+      body += '<div style="margin-top:4px">';
+      deliverables.forEach(function(d) {
+        var statCol = d.status==='Complete'?'var(--g)':d.status==='Overdue'?'var(--r)':'var(--b)';
+        body += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:0.5px solid var(--bl)">' +
+          '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--bg2);color:'+statCol+';white-space:nowrap">'+d.status+'</span>' +
+          '<span style="font-size:11px;color:var(--t1);flex:1">'+d.deliverable+'</span>' +
+          (d.dueDate?'<span style="font-size:10px;color:var(--t3)">'+new Date(d.dueDate).toLocaleDateString('en-AU',{day:"numeric",month:"short"})+'</span>':'') +
+        '</div>';
+      });
+      body += '</div></div>';
+    }
+
+    body += '<hr class="m-divider">';
+    body += '<button class="m-btn" onclick="askAboutAuroraProject()">Ask Cinderella for analysis</button> ';
+    body += '<button class="m-btn sec" onclick="openAuroraApp()">Open in Aurora</button>';
+
+    document.getElementById('m-title').textContent = 'Aurora — ' + clientName;
+    document.getElementById('m-sub').textContent = (p.projectName||clientName) + ' · ' + (PHASES[p.phase]||'Active');
+    document.getElementById('m-body').innerHTML = body;
+
+  } catch(e) {
+    document.getElementById('m-body').innerHTML = '<div style="color:var(--r)">Error loading project: ' + e.message + '</div>';
+  }
+}
+
+function openAuroraApp() {
+  window.open('https://aurora-agent-b6f3b2fcd3a9gqct.australiaeast-01.azurewebsites.net','_blank');
+}
+
+function askAboutAuroraProject() {
+  var title = document.getElementById('m-title').textContent.replace('Aurora - ','').replace('Aurora — ','');
+  closeModal();
+  qa('Give me a full status update on the ' + title + ' project from Aurora — open deliverables, outstanding invoices, what does Kandia need to action?');
+}
+
+function chaseinvoice(btn) {
+  var client = btn.dataset.client;
+  var inv = btn.dataset.inv;
+  var amt = btn.dataset.amt;
+  qa('Draft a professional payment follow-up email to ' + client + ' for invoice ' + (inv||'') + ' of $' + amt + '. Be polite but firm.');
+}
+
 async function loadR2SMetrics() {
   var el = document.getElementById('r2sMetricsList');
   if (!el) return;
