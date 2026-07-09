@@ -1353,126 +1353,57 @@ async function sendBoardReportNotification(meetingSubject, meetingDate, daysUnti
     'DATE: ' + meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'}) + '\n' +
     'DAYS UNTIL MEETING: ' + daysUntil + '\n\n' +
     'TO DOWNLOAD YOUR REPORT:\n' +
-    'Log into Cinderella → COO Duties tab → Board Report section\n' +
+    'Log into Cinderella → COO Duties tab → Board Report section → Download Report\n' +
     'Direct link: https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net\n\n' +
     'The report has been auto-generated using:\n' +
-    '• Staff check-ins and capacity data for ' + monthName + '\n' +
-    '• Key emails received and sent during the month\n' +
+    '• Staff check-ins and capacity data\n' +
+    '• Key emails received during the month\n' +
     '• Client project status from Monday.com\n' +
-    '• Open action items from your tracker\n' +
-    '• Document library and past board reports\n\n' +
-    'Please review and add any additional context before the board meeting. The report is a starting point — your judgment and any verbal updates will be essential.\n\n' +
+    '• Open action items from your tracker\n\n' +
+    'Please review the report and add any additional context before the board meeting.\n\n' +
     'Cinderella\nExecutive Assistant to Kandia Robertson, COO\nRisk 2 Solution';
 
   const token = await getValidToken();
   const recipientEmail = await getKandiaEmail();
-  const subject = '📋 Board Report Ready — '+monthName+' '+yr+' (Meeting in '+daysUntil+' days)';
+  const subject = '📋 Board Report Ready — ' + monthName + ' ' + yr + ' (Meeting in ' + daysUntil + ' days)';
 
-  // Try 1: Create draft then send immediately (Mail.ReadWrite — works with existing permissions)
+  // Create a draft in Outlook (Mail.ReadWrite — confirmed working)
+  const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+    method:'POST',
+    headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+    body:JSON.stringify({
+      subject,
+      body:{contentType:'Text', content:emailBody},
+      toRecipients:[{emailAddress:{address:recipientEmail}}],
+      importance:'high'
+    })
+  });
+  const draft = await draftRes.json();
+  if (!draft.id) {
+    throw new Error('Draft creation failed: ' + JSON.stringify(draft.error||draft).substring(0,200));
+  }
+  console.log('[BoardReport] ✅ Draft created in Outlook Drafts — id:', draft.id.substring(0,30)+'...');
+  console.log('[BoardReport] Recipient:', recipientEmail, '| Subject:', subject);
+
+  // Try to send it directly (requires Mail.Send — may fail, that is OK)
   try {
-    const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
-      method:'POST',
-      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
-      body:JSON.stringify({
-        subject,
-        body:{contentType:'Text', content:emailBody},
-        toRecipients:[{emailAddress:{address:recipientEmail}}],
-        importance:'high'
-      })
+    const sendRes = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send', {
+      method:'POST', headers:{Authorization:'Bearer '+token}
     });
-    const draft = await draftRes.json();
-    if (draft.id) {
-      const sendDraftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send', {
-        method:'POST', headers:{Authorization:'Bearer '+token}
-      });
-      if (sendDraftRes.status === 202) {
-        console.log('[BoardReport] ✅ Email sent via draft+send to', recipientEmail);
-        return;
+    if (sendRes.status === 202) {
+      console.log('[BoardReport] ✅ Draft sent successfully from Outlook');
+    } else {
+      const err = await sendRes.json().catch(()=>({}));
+      if ((err.error||{}).code === 'ErrorAccessDenied') {
+        console.log('[BoardReport] ℹ Mail.Send not granted — draft saved to Outlook Drafts. Kandia can open and send from there.');
+      } else {
+        console.warn('[BoardReport] Send attempt returned', sendRes.status, JSON.stringify(err).substring(0,200));
       }
-      const sendErr = await sendDraftRes.text().catch(()=>'');
-      console.warn('[BoardReport] draft/send returned', sendDraftRes.status, sendErr.substring(0,200));
-    } else {
-      console.warn('[BoardReport] Draft creation failed:', JSON.stringify(draft.error||draft).substring(0,200));
-    }
-  } catch(e) { console.warn('[BoardReport] draft+send error:', e.message); }
-
-  // Try 2: Send directly via sendMail (requires Mail.Send scope)
-  try {
-    const sendRes = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
-      method:'POST',
-      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
-      body:JSON.stringify({
-        message:{
-          subject,
-          body:{contentType:'Text', content:emailBody},
-          toRecipients:[{emailAddress:{address:recipientEmail}}],
-          importance:'high'
-        },
-        saveToSentItems:true
-      })
-    });
-    if (sendRes.status === 202 || sendRes.status === 200) {
-      console.log('[BoardReport] ✅ Email sent directly to', recipientEmail);
-      return;
-    }
-    const errBody = await sendRes.json().catch(()=>({}));
-    console.warn('[BoardReport] sendMail failed ('+sendRes.status+'):', JSON.stringify(errBody.error||errBody).substring(0,200));
-  } catch(e) {
-    console.warn('[BoardReport] sendMail error:', e.message);
-  }
-
-  // Try 2: Create draft + send (works with Mail.ReadWrite)
-  try {
-    const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
-      method:'POST',
-      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
-      body:JSON.stringify({
-        subject,
-        body:{contentType:'Text', content:emailBody},
-        toRecipients:[{emailAddress:{address:recipientEmail}}],
-        importance:'high'
-      })
-    });
-    const draft = await draftRes.json();
-    if (draft.id) {
-      const sendRes2 = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send', {
-        method:'POST',
-        headers:{Authorization:'Bearer '+token}
-      });
-      if (sendRes2.status === 202 || sendRes2.status === 200) {
-        console.log('[BoardReport] ✅ Email sent via draft+send to', recipientEmail);
-        return;
-      }
-      console.warn('[BoardReport] draft/send status:', sendRes2.status);
-    } else {
-      console.warn('[BoardReport] Draft creation failed:', JSON.stringify(draft.error||draft).substring(0,200));
     }
   } catch(e) {
-    console.warn('[BoardReport] draft+send error:', e.message);
+    console.warn('[BoardReport] Send attempt failed (draft still saved):', e.message);
   }
-
-  // Try 3: Save to Drafts only — at least Kandia can find it
-  try {
-    const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
-      method:'POST',
-      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
-      body:JSON.stringify({
-        subject:'[DRAFT - PLEASE SEND] '+subject,
-        body:{contentType:'Text', content:emailBody},
-        toRecipients:[{emailAddress:{address:recipientEmail}}],
-        importance:'high'
-      })
-    });
-    const draft = await draftRes.json();
-    if (draft.id) {
-      console.log('[BoardReport] ⚠ Saved to Drafts (could not send directly) — id:', draft.id);
-      console.log('[BoardReport] To fix: re-authenticate at /auth/login to grant Mail.Send permission');
-    } else {
-      console.error('[BoardReport] All email methods failed. Error:', JSON.stringify(draft.error||draft).substring(0,300));
-    }
-  } catch(e) {
-    console.error('[BoardReport] All email attempts failed:', e.message);
-  }
+  return draft.id;
 }
 
 // Manual trigger endpoint
