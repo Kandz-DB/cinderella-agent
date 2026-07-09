@@ -480,6 +480,24 @@ app.get('/graph/teams', async (req, res) => {
 // ── MONDAY.COM: Get approved boards only ──
 const MONDAY_BOARD_IDS = [2031906973, 2005758439]; // Project/Client Feedback + Client Projects ONLY
 
+// ── AURORA INTEGRATION ──
+const AURORA_URL      = process.env.AURORA_URL      || 'https://aurora-agent-b6f3b2fcd3a9gqct.australiaeast-01.azurewebsites.net';
+const AURORA_PASSWORD = process.env.AURORA_PASSWORD || '';
+
+function getAuroraToken() {
+  if (!AURORA_PASSWORD) throw new Error('AURORA_PASSWORD not set in environment variables');
+  return Buffer.from('aurora:' + AURORA_PASSWORD + ':' + Date.now()).toString('base64');
+}
+
+async function callAurora(path) {
+  const token = getAuroraToken();
+  const res = await fetch(AURORA_URL + path, {
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
+  });
+  if (!res.ok) throw new Error('Aurora ' + path + ' returned ' + res.status);
+  return res.json();
+}
+
 app.get('/monday/projects', async (req, res) => {
   const apiKey = process.env.MONDAY_API_KEY;
   if (!apiKey) return res.status(400).json({ error: 'MONDAY_API_KEY not configured in Render environment variables' });
@@ -1182,19 +1200,90 @@ CINDERELLA FINANCIAL ANALYSIS REQUIRED:
     }
   } catch(e) { console.warn('[BoardReport] Email fetch:', e.message); }
 
-  // 3. Document library - templates and past reports
+  // 3. Document library - read actual content of past board reports + list other docs
   try {
     const cc = await getBlobContainer();
     if (cc) {
-      const docs = []; const pastReports = [];
+      const docs = [];
+      const pastReports = [];
+
       for await (const b of cc.listBlobsFlat()) {
-        if (b.name.toLowerCase().match(/board.?report|board.?pack/)) pastReports.push(b.name);
-        else docs.push(b.name);
+        if (b.name.toLowerCase().match(/board.?report|board.?pack/)) {
+          pastReports.push({ name: b.name, size: b.properties.contentLength });
+        } else {
+          docs.push(b.name);
+        }
       }
-      if (pastReports.length > 0) context += 'PAST BOARD REPORTS IN LIBRARY: '+pastReports.join(', ')+'\n\n';
-      if (docs.length > 0) context += 'OTHER DOCUMENTS: '+docs.join(', ')+'\n\n';
+
+      // Read the actual content of up to 3 most recent past board reports
+      if (pastReports.length > 0) {
+        // Sort by name descending (filenames include year-month so newest sorts last alphabetically)
+        pastReports.sort((a, b) => b.name.localeCompare(a.name));
+        const reportsToRead = pastReports.slice(0, 3);
+        context += 'PREVIOUS BOARD REPORTS (content extracted for carry-forward review):\n';
+        context += 'Reports found: ' + pastReports.map(r => r.name).join(', ') + '\n\n';
+
+        for (const report of reportsToRead) {
+          try {
+            const bc = cc.getBlockBlobClient(report.name);
+            const buf = await bc.downloadToBuffer();
+            // Strip HTML tags to extract plain text
+            const raw = buf.toString('utf8');
+            const text = raw
+              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/&nbsp;/g, ' ')
+              .replace(/&amp;/g, '&')
+              .replace(/&lt;/g, '<')
+              .replace(/&gt;/g, '>')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .substring(0, 3000); // Cap at 3000 chars per report to manage token usage
+            context += 'REPORT: ' + report.name + '\n';
+            context += text + '\n\n';
+            console.log('[BoardReport] Read past report:', report.name, '(' + text.length + ' chars extracted)');
+          } catch(readErr) {
+            context += 'REPORT: ' + report.name + ' — could not read content: ' + readErr.message + '\n\n';
+            console.warn('[BoardReport] Could not read', report.name, ':', readErr.message);
+          }
+        }
+      } else {
+        context += 'PAST BOARD REPORTS: None found in document library.\n\n';
+      }
+
+      if (docs.length > 0) context += 'OTHER DOCUMENTS IN LIBRARY: ' + docs.join(', ') + '\n\n';
     }
-  } catch(e) {}
+  } catch(e) { console.warn('[BoardReport] Doc library read error:', e.message); }
+
+  // 3b. Aurora project data
+  try {
+    const aurData = await callAurora('/api/projects');
+    const projects = aurData.projects || [];
+    const PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
+    const active = projects.filter(p => p.phase >= 1 && p.phase <= 3);
+    if (active.length > 0) {
+      context += 'ACTIVE PROJECTS (from Aurora):\n';
+      for (const p of active.slice(0, 10)) {
+        let invTotal = 0, invPaid = 0;
+        try {
+          const inv = await callAurora('/api/projects/' + p.id + '/invoices');
+          (inv.invoices||[]).forEach(i => { invTotal += parseFloat(i.amount||0); if(i.paid) invPaid += parseFloat(i.amount||0); });
+        } catch(e) {}
+        let overdueCount = 0;
+        try {
+          const del = await callAurora('/api/projects/' + p.id + '/deliverables');
+          overdueCount = (del.deliverables||[]).filter(d => d.status==='Overdue' || (d.dueDate && new Date(d.dueDate)<new Date() && d.status!=='Complete')).length;
+        } catch(e) {}
+        context += '- ' + p.clientName + ' | Phase: ' + (PHASES[p.phase]||'?') + ' | Consultant: ' + (p.consultant||'TBC');
+        if (invTotal > 0) context += ' | Invoiced: $' + invTotal.toFixed(2) + ' Paid: $' + invPaid.toFixed(2) + ' Outstanding: $' + (invTotal-invPaid).toFixed(2);
+        if (overdueCount > 0) context += ' | ⚠ ' + overdueCount + ' overdue deliverable(s)';
+        if (p.dueDate) context += ' | Due: ' + p.dueDate;
+        context += '\n';
+      }
+      context += '\n';
+    }
+  } catch(e) { console.warn('[BoardReport] Aurora data:', e.message); }
 
   // 4. Monday.com client projects
   try {
@@ -1239,6 +1328,7 @@ CRITICAL REQUIREMENTS:
 - Professional board paper format — not a dashboard
 - Use EXACT financial figures provided in context — never invent numbers
 - Every financial claim must reference its source (e.g. "per Diane Kruger, Corporate Operations Lead")
+- PAST BOARD REPORTS: You are provided with content from previous board reports. Review them and extract any open items, carry-forward actions, or unresolved matters. Include a "Carry-Forward Items" section if anything is outstanding. If all previous items are resolved or not applicable, state this clearly.
 - Include Cinderella's intelligent analysis and recommendations — not just data reporting
 - Flag risks with specific recommended actions
 - Keep language tight and executive — no waffle, no placeholders
@@ -1255,7 +1345,10 @@ Write the full board paper in HTML. Maximum 4 printed pages. 9 sections as below
 SECTION 1 — EXECUTIVE SUMMARY (half page max)
 3-4 sentences: what happened this month, key wins, key risks. Include the FYE financial result prominently.
 
-SECTION 2 — FINANCIAL OVERVIEW (one page)
+SECTION 2 — CARRY-FORWARD FROM PREVIOUS REPORTS (quarter page)
+Review the previous board report content provided. List any items that were flagged as pending, unresolved, or requiring follow-up. For each: state the item, original report it came from, and current status if known. If nothing is outstanding, write "All items from previous reports have been resolved or addressed."
+
+SECTION 3 — FINANCIAL OVERVIEW (one page)
 - FY 2025/26 Final Result: use EXACT figure from context
 - Key driver of the result: EPS invoicing — explain what happened and why it mattered
 - FY 2026/27 Outlook: July-August forecast — use EXACT figure from context
@@ -1545,6 +1638,75 @@ app.get('/board-report/download', requireAuth, async (req, res) => {
     res.setHeader('Content-Type','application/msword');
     res.send(content);
   } catch(e) { res.status(404).json({error:e.message}); }
+});
+
+// ── AURORA PROXY ROUTES ──
+
+// Summary: all projects + invoice totals + overdue deliverables
+app.get('/aurora/summary', requireAuth, async (req, res) => {
+  try {
+    const { projects } = await callAurora('/api/projects');
+    const PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
+
+    const summary = await Promise.all((projects || []).map(async p => {
+      let invoices = [], deliverables = [];
+      try { ({ invoices } = await callAurora('/api/projects/' + p.id + '/invoices')); } catch(e) {}
+      try { ({ deliverables } = await callAurora('/api/projects/' + p.id + '/deliverables')); } catch(e) {}
+
+      const totalInvoiced  = invoices.reduce((s, i) => s + parseFloat(i.amount||0), 0);
+      const totalPaid      = invoices.filter(i => i.paid).reduce((s, i) => s + parseFloat(i.amount||0), 0);
+      const totalOutstanding = totalInvoiced - totalPaid;
+      const overdueDelivs  = deliverables.filter(d => d.status === 'Overdue' || (d.dueDate && new Date(d.dueDate) < new Date() && d.status !== 'Complete'));
+      const inProgressDelivs = deliverables.filter(d => d.status === 'In Progress');
+
+      return {
+        id: p.id,
+        client: p.clientName,
+        project: p.projectName || p.clientName,
+        phase: PHASES[p.phase] || 'Unknown',
+        phaseNum: p.phase,
+        status: p.status || 'Active',
+        consultant: p.consultant,
+        dueDate: p.dueDate,
+        totalInvoiced,
+        totalPaid,
+        totalOutstanding,
+        unpaidInvoices: invoices.filter(i => !i.paid),
+        overdueDeliverables: overdueDelivs,
+        inProgressDeliverables: inProgressDelivs,
+        deliverableCount: deliverables.length
+      };
+    }));
+
+    const totalOutstandingAll = summary.reduce((s, p) => s + p.totalOutstanding, 0);
+    const totalOverdue        = summary.reduce((s, p) => s + p.overdueDeliverables.length, 0);
+    const activeProjects      = summary.filter(p => p.phaseNum >= 1 && p.phaseNum <= 3);
+
+    res.json({ projects: summary, totalOutstandingAll, totalOverdue, activeProjects: activeProjects.length });
+  } catch(e) {
+    console.error('[Aurora] Summary error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Raw projects list
+app.get('/aurora/projects', requireAuth, async (req, res) => {
+  try {
+    const data = await callAurora('/api/projects');
+    res.json(data);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Single project detail with invoices + deliverables
+app.get('/aurora/projects/:id', requireAuth, async (req, res) => {
+  try {
+    const [proj, inv, del] = await Promise.all([
+      callAurora('/api/projects/' + req.params.id),
+      callAurora('/api/projects/' + req.params.id + '/invoices').catch(() => ({ invoices: [] })),
+      callAurora('/api/projects/' + req.params.id + '/deliverables').catch(() => ({ deliverables: [] }))
+    ]);
+    res.json({ project: proj.project || proj, invoices: inv.invoices, deliverables: del.deliverables });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── SERVE DASHBOARD ──
