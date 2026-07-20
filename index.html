@@ -777,6 +777,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
     <button class="ni" onclick="show('coo',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2L2 6v8h4v-4h4v4h4V6z"/></svg>COO duties<span class="nb nb-a">2</span></button>
     <button class="ni" id="actionTrackerBtn" onclick="show('tracker',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>Open actions<span class="nb nb-r" id="trackerBadge" style="display:none">0</span></button>
     <button class="ni" id="auroraNavBtn" onclick="show('aurora',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l1.5 4.5H14l-3.5 2.5 1.5 4.5L8 11l-4 2.5 1.5-4.5L2 6.5h4.5z"/></svg>Aurora projects<span class="nb nb-a" id="auroraBadge" style="display:none">0</span></button>
+    <button class="ni" id="clockifyNavBtn" onclick="show('clockify',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg>Clockify<span class="nb nb-r" id="clockifyBadge" style="display:none">0</span></button>
 
     <button class="ni" onclick="show('auto',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 8A5 5 0 113 8"/><path d="M8 3V1M8 3l-2 2M8 3l2 2"/></svg>Automation</button>
 
@@ -1249,6 +1250,66 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
           <div class="card">
             <div class="ct">Cinderella insights <span class="ct-action" onclick="generateAuroraInsights()">Generate</span></div>
             <div id="auroraInsightsList"><div style="font-size:11px;color:var(--t3);padding:8px 0">Click Generate for AI analysis of your Aurora portfolio.</div></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- CLOCKIFY TAB -->
+    <div class="pnl" id="pnl-clockify">
+
+      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Clockify — time tracking vs capacity check-in</span>
+        <div style="display:flex;gap:6px">
+          <button onclick="loadClockify()" style="font-size:11px;padding:4px 10px;background:var(--bg2);border:0.5px solid var(--bm);border-radius:8px;cursor:pointer;color:var(--t2);font-family:var(--f)">↻ Refresh</button>
+          <button onclick="analyseClockify()" style="font-size:11px;padding:4px 10px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Ask Cinderella</button>
+          <a href="https://app.clockify.me" target="_blank" style="font-size:11px;padding:4px 10px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;text-decoration:none">Open Clockify ↗</a>
+        </div>
+      </div>
+
+      <div id="clockifyAlert" style="display:none;margin-bottom:12px"></div>
+
+      <!-- Summary bar -->
+      <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;align-items:center;background:var(--bg2);border-radius:var(--rm);padding:10px 14px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:22px;font-weight:500;color:var(--b)" id="cf-total-hours">—</span>
+          <span style="font-size:11px;color:var(--t2)">hours logged this week</span>
+        </div>
+        <div style="width:1px;height:24px;background:var(--bl);flex-shrink:0"></div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:22px;font-weight:500;color:var(--r)" id="cf-flags">—</span>
+          <span style="font-size:11px;color:var(--t2)">mismatches flagged</span>
+        </div>
+        <div style="width:1px;height:24px;background:var(--bl);flex-shrink:0"></div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:22px;font-weight:500;color:var(--g)" id="cf-staff-count">—</span>
+          <span style="font-size:11px;color:var(--t2)">staff tracked</span>
+        </div>
+        <span id="clockifyConnStatus" style="margin-left:auto;font-size:11px;color:var(--t3)">Checking...</span>
+      </div>
+
+      <div class="two">
+        <div>
+          <div class="card">
+            <div class="ct">Hours logged vs capacity this week</div>
+            <div id="clockifyStaffList"><div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Loading Clockify data...</div></div>
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <div class="ct">Flags &amp; mismatches <span class="ct-action" onclick="analyseClockify()">Ask Cinderella</span></div>
+            <div id="clockifyFlagsList"><div style="font-size:11px;color:var(--t3);padding:8px 0">Loading...</div></div>
+          </div>
+          <div class="card">
+            <div class="ct">How to read this</div>
+            <div style="font-size:11px;color:var(--t2);line-height:1.6">
+              <div style="margin-bottom:6px"><strong>Implied hours</strong> = capacity slider % × 37.5hr week</div>
+              <div style="margin-bottom:6px"><span style="color:var(--b)">Blue bar</span> = Clockify hours actually logged</div>
+              <div style="margin-bottom:6px"><span style="color:var(--g)">Green bar</span> = implied from check-in slider</div>
+              <div style="margin-bottom:6px"><span style="color:var(--r)">Red flag</span> = logging far more than capacity implies (burnout risk)</div>
+              <div><span style="color:var(--a)">Amber flag</span> = logging far fewer hours than capacity implies (not tracking time or overstating capacity)</div>
+            </div>
           </div>
         </div>
       </div>
@@ -4100,9 +4161,22 @@ async function syncNow(){
 
     const r=await fetch(`/checkins/latest`);
 
+    if(r.status===401){
+      btn.textContent='Session expired';btn.className='sync-btn warn';
+      setSyncUI('warn','Session expired — <a href="/login" style="color:var(--b)">click here to log in again</a>');
+      return;
+    }
+
     if(!r.ok)throw new Error(`HTTP ${r.status}`);
 
-    const d=await r.json();
+    // Guard against HTML response (login page redirect)
+    const text=await r.text();
+    if(text.trim().startsWith('<')){
+      btn.textContent='Session expired';btn.className='sync-btn warn';
+      setSyncUI('warn','Session expired — please refresh and log in again');
+      return;
+    }
+    const d=JSON.parse(text);
 
     const allRaw=(Array.isArray(d.record)?d.record:[]).filter(e=>e&&e.name);
 
