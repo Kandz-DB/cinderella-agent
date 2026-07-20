@@ -118,7 +118,7 @@ function requireAuth(req, res, next) {
   const match = cookie.match(/cin_session=([^;]+)/);
   if (match && activeSessions.has(match[1])) return next();
   // API routes get JSON 401 (not HTML redirect) so the dashboard handles it gracefully
-  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status') || req.path.startsWith('/openactions') || req.path.startsWith('/generate') || req.path.startsWith('/docs')) {
+  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status') || req.path.startsWith('/openactions') || req.path.startsWith('/generate') || req.path.startsWith('/docs') || req.path.startsWith('/checkins') || req.path.startsWith('/aurora') || req.path.startsWith('/board-report')) {
     return res.status(401).json({ error: { message: 'Session expired — please refresh the page and log in again.' } });
   }
   res.redirect('/login');
@@ -1713,6 +1713,255 @@ app.get('/aurora/projects/:id', requireAuth, async (req, res) => {
     ]);
     res.json({ project: proj.project || proj, invoices: inv.invoices, deliverables: del.deliverables });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ── CLOCKIFY INTEGRATION ──
+const CLOCKIFY_API_KEY = process.env.CLOCKIFY_API_KEY || '';
+const CLOCKIFY_BASE    = 'https://api.clockify.me/api/v1';
+const FULL_WEEK_HOURS  = 37.5; // Standard Australian working week
+
+// Map Clockify display names → check-in names
+const CLOCKIFY_STAFF_MAP = [
+  { clockify: 'Janita',      checkIn: 'Janita Zhang'     },
+  { clockify: 'diane.k',     checkIn: 'Diane Kruger'     },
+  { clockify: 'garima.a',    checkIn: 'Garima Arora'     },
+  { clockify: 'reinette.k',  checkIn: 'Reinette Kruger'  },
+  { clockify: 'dani.s',      checkIn: 'Dani Stevenson'   },
+  { clockify: 'ross.m',      checkIn: 'Ross Mackenzie'   },
+  { clockify: 'cherry.a',    checkIn: 'Cherry Abadeza'   },
+  // Paul Johnston not in Clockify
+];
+
+async function callClockify(path) {
+  if (!CLOCKIFY_API_KEY) throw new Error('CLOCKIFY_API_KEY not set in environment variables');
+  const res = await fetch(CLOCKIFY_BASE + path, {
+    headers: { 'X-Api-Key': CLOCKIFY_API_KEY, 'Content-Type': 'application/json' }
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    throw new Error('Clockify ' + res.status + ': ' + err.substring(0, 200));
+  }
+  return res.json();
+}
+
+// Get the current week Mon-Sun in Brisbane time (UTC+10, no DST)
+function getBrisbaneWeekRange() {
+  const OFFSET_MS = 10 * 60 * 60 * 1000; // UTC+10
+  const nowUTC = new Date();
+  const brisbaneNow = new Date(nowUTC.getTime() + OFFSET_MS);
+  const dow = brisbaneNow.getUTCDay(); // 0=Sun,1=Mon,...,6=Sat
+  const daysFromMon = dow === 0 ? 6 : dow - 1;
+
+  // Monday 00:00 Brisbane
+  const monday = new Date(brisbaneNow);
+  monday.setUTCDate(brisbaneNow.getUTCDate() - daysFromMon);
+  monday.setUTCHours(0, 0, 0, 0);
+
+  // Sunday 23:59:59 Brisbane
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  sunday.setUTCHours(23, 59, 59, 999);
+
+  // Convert Brisbane local → UTC for Clockify API
+  return {
+    start: new Date(monday.getTime() - OFFSET_MS).toISOString(),
+    end:   new Date(sunday.getTime() - OFFSET_MS).toISOString(),
+    weekLabel: monday.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'Australia/Brisbane' })
+      + ' – ' + sunday.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'Australia/Brisbane' })
+  };
+}
+
+// Parse ISO 8601 duration (PT8H30M15S) → decimal hours
+function parseDuration(iso) {
+  if (!iso) return 0;
+  const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return 0;
+  return (parseInt(match[1] || 0)) + (parseInt(match[2] || 0) / 60) + (parseInt(match[3] || 0) / 3600);
+}
+
+// Match Clockify user to our staff map
+function matchClockifyUser(user) {
+  const name = (user.name || '').toLowerCase();
+  const email = (user.email || '').toLowerCase();
+  return CLOCKIFY_STAFF_MAP.find(m => {
+    const c = m.clockify.toLowerCase();
+    return name.includes(c) || email.includes(c) || email.startsWith(c);
+  });
+}
+
+// Generate intelligence flags comparing Clockify hours to check-in capacity
+function generateFlags(staffName, actualHours, checkIn) {
+  const flags = [];
+
+  if (!checkIn) {
+    if (actualHours > 0) {
+      flags.push({
+        message: actualHours.toFixed(1) + 'h logged in Clockify but no check-in submitted — ask them to complete their weekly check-in',
+        severity: 'medium'
+      });
+    }
+    return flags;
+  }
+
+  const capacity = checkIn.capacity || 0;
+  const impliedHours = (capacity / 100) * FULL_WEEK_HOURS;
+  const diff = actualHours - impliedHours;
+  const pctVariance = impliedHours > 0 ? Math.abs(diff) / impliedHours : 0;
+
+  if (actualHours === 0 && capacity > 30) {
+    flags.push({
+      message: 'Reported ' + capacity + '% capacity but zero hours logged in Clockify — time tracking missing or not using Clockify this week',
+      severity: 'high'
+    });
+  } else if (diff > FULL_WEEK_HOURS * 0.25) {
+    // Logging significantly more than capacity implies → burnout underreporting
+    flags.push({
+      message: 'Logged ' + actualHours.toFixed(1) + 'h but check-in says ' + capacity + '% (' + impliedHours.toFixed(1) + 'h implied) — working more than they reported. Burnout risk.',
+      severity: 'high'
+    });
+  } else if (pctVariance > 0.35 && diff < 0 && capacity > 50) {
+    // Significantly fewer hours than capacity implies → overreporting capacity
+    flags.push({
+      message: 'Reported ' + capacity + '% capacity (' + impliedHours.toFixed(1) + 'h implied) but only logged ' + actualHours.toFixed(1) + 'h — overstating capacity or not tracking all time',
+      severity: 'medium'
+    });
+  } else if (pctVariance > 0.2 && diff < 0) {
+    flags.push({
+      message: actualHours.toFixed(1) + 'h logged vs ' + impliedHours.toFixed(1) + 'h implied (' + capacity + '% capacity) — ' + Math.round(pctVariance * 100) + '% gap. Check time is being tracked fully.',
+      severity: 'low'
+    });
+  }
+
+  return flags;
+}
+
+// ── CLOCKIFY STATUS ──
+app.get('/clockify/status', requireAuth, async (req, res) => {
+  if (!CLOCKIFY_API_KEY) return res.json({ connected: false, reason: 'CLOCKIFY_API_KEY not set' });
+  try {
+    const workspaces = await callClockify('/workspaces');
+    const ws = (workspaces || []).find(w => w.name === 'Risk 2 Solution') || workspaces[0];
+    if (!ws) return res.json({ connected: false, reason: 'Workspace "Risk 2 Solution" not found' });
+    res.json({ connected: true, workspace: ws.name, workspaceId: ws.id });
+  } catch(e) {
+    res.json({ connected: false, reason: e.message });
+  }
+});
+
+// ── CLOCKIFY SUMMARY — cross-reference hours vs check-in capacity ──
+app.get('/clockify/summary', requireAuth, async (req, res) => {
+  try {
+    // 1. Get workspace
+    const workspaces = await callClockify('/workspaces');
+    const ws = (workspaces || []).find(w => w.name === 'Risk 2 Solution') || workspaces[0];
+    if (!ws) throw new Error('Workspace "Risk 2 Solution" not found in your Clockify account');
+    const wsId = ws.id;
+
+    // 2. Get all workspace users
+    const users = await callClockify('/workspaces/' + wsId + '/users?page-size=50');
+
+    // 3. Get this week's date range (Brisbane time)
+    const { start, end, weekLabel } = getBrisbaneWeekRange();
+
+    // 4. Load this week's check-in data for cross-reference
+    let checkIns = [];
+    try {
+      const raw = JSON.parse(readFileSync('/home/checkins.json', 'utf8') || '[]');
+      const weekStart = new Date(start);
+      const weekEnd   = new Date(end);
+      // Get most recent check-in per person this week
+      const byName = {};
+      raw.forEach(c => {
+        if (!c.submitted) return;
+        const d = new Date(c.submitted);
+        if (d >= weekStart && d <= weekEnd) {
+          const key = (c.name || '').toLowerCase();
+          if (!byName[key] || new Date(c.submitted) > new Date(byName[key].submitted)) {
+            byName[key] = c;
+          }
+        }
+      });
+      checkIns = Object.values(byName);
+    } catch(e) { console.warn('[Clockify] Could not load check-ins:', e.message); }
+
+    function findCheckIn(staffName) {
+      if (!staffName) return null;
+      const target = staffName.toLowerCase();
+      return checkIns.find(c => {
+        const name = (c.name || '').toLowerCase();
+        return name === target || name.includes(target.split(' ')[0]) || target.includes(name.split(' ')[0]);
+      }) || null;
+    }
+
+    // 5. For each matched user, get their time entries for the week
+    const summary = [];
+    for (const user of users) {
+      const match = matchClockifyUser(user);
+      if (!match) continue; // Skip unrecognised users
+
+      let totalHours = 0;
+      const projectBreakdown = {};
+
+      try {
+        const entries = await callClockify(
+          '/workspaces/' + wsId + '/user/' + user.id +
+          '/time-entries?start=' + encodeURIComponent(start) + '&end=' + encodeURIComponent(end) + '&page-size=500'
+        );
+        (entries || []).forEach(entry => {
+          let hrs = 0;
+          if (entry.timeInterval) {
+            if (entry.timeInterval.duration) {
+              hrs = parseDuration(entry.timeInterval.duration);
+            } else if (entry.timeInterval.start && entry.timeInterval.end) {
+              hrs = (new Date(entry.timeInterval.end) - new Date(entry.timeInterval.start)) / 3600000;
+            }
+          }
+          totalHours += hrs;
+          const proj = entry.projectName || 'No project';
+          projectBreakdown[proj] = (projectBreakdown[proj] || 0) + hrs;
+        });
+      } catch(e) {
+        console.warn('[Clockify] Could not get entries for', user.name, ':', e.message);
+      }
+
+      totalHours = Math.round(totalHours * 10) / 10;
+
+      // Round project hours
+      Object.keys(projectBreakdown).forEach(k => {
+        projectBreakdown[k] = Math.round(projectBreakdown[k] * 10) / 10;
+      });
+
+      const checkIn = findCheckIn(match.checkIn);
+      const capacity = checkIn ? (checkIn.capacity || 0) : null;
+      const impliedHours = capacity !== null ? Math.round((capacity / 100) * FULL_WEEK_HOURS * 10) / 10 : null;
+      const flags = generateFlags(match.checkIn, totalHours, checkIn);
+
+      summary.push({
+        name: match.checkIn,
+        clockifyName: user.name,
+        totalHours,
+        impliedHours,
+        capacity,
+        variance: impliedHours !== null ? Math.round((totalHours - impliedHours) * 10) / 10 : null,
+        projects: projectBreakdown,
+        flags,
+        checkIn: checkIn ? { capacity, projects: checkIn.projects, blockers: checkIn.blockers } : null
+      });
+    }
+
+    // Sort: highest flags first, then by variance
+    summary.sort((a, b) => b.flags.length - a.flags.length || Math.abs(b.variance||0) - Math.abs(a.variance||0));
+
+    const totalFlags = summary.reduce((n, s) => n + s.flags.length, 0);
+    const totalHoursLogged = Math.round(summary.reduce((n, s) => n + s.totalHours, 0) * 10) / 10;
+
+    res.json({ summary, totalFlags, totalHoursLogged, weekLabel, weekStart: start, weekEnd: end });
+
+  } catch(e) {
+    console.error('[Clockify] Summary error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── SERVE DASHBOARD ──
