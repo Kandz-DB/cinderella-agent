@@ -926,8 +926,8 @@ app.post('/generate/report', requireAuth, async (req, res) => {
     } catch(e) {}
 
     const sysPrompt = type==='board'
-      ? `You are Cinderella, executive assistant to Kandia Robertson (COO) of Risk 2 Solution. Write a complete professional COO board report for ${monthName} ${yr}. Use all data provided. Be specific. No placeholder text. Format with HTML headings and bullet lists. Write every section fully.`
-      : `You are Cinderella, executive assistant to Kandia Robertson (COO) of Risk 2 Solution Group. Risk 2 Solution Group is Australia's most awarded integrated risk management company, providing professional services in:
+      ? `You are Cinderella, executive assistant to Kandia Du Bruyn (COO) of Risk 2 Solution. Write a complete professional COO board report for ${monthName} ${yr}. Use all data provided. Be specific. No placeholder text. Format with HTML headings and bullet lists. Write every section fully.`
+      : `You are Cinderella, executive assistant to Kandia Du Bruyn (COO) of Risk 2 Solution Group. Risk 2 Solution Group is Australia's most awarded integrated risk management company, providing professional services in:
 - Risk Management (Presilience® programs, Business Continuity, CRO-as-a-Service, Risk Assessments)
 - Security (SoCI compliance, OVA prevention, Security consulting, CSO-as-a-Service)
 - Technology & Cybersecurity (Maturity Assessments, vCISO, SOC monitoring, Vulnerability Remediation)
@@ -969,7 +969,7 @@ th{background:#EEF3F9;font-weight:bold}
 <div class="cover">
 <h1>${label||type}</h1>
 <p style="font-size:13pt;color:#555">Risk 2 Solution</p>
-<p style="font-size:10pt;color:#888">Prepared by Cinderella AI &nbsp;|&nbsp; Kandia Robertson, COO &nbsp;|&nbsp; ${monthName} ${yr}</p>
+<p style="font-size:10pt;color:#888">Prepared by Kandia Du Bruyn, COO &nbsp;|&nbsp; ${monthName} ${yr}</p>
 </div>
 ${reportContent}
 </body></html>`;
@@ -1078,21 +1078,32 @@ async function checkBoardMeetingSchedule() {
 
   console.log('[BoardReport] Thursday — scanning calendar for board meetings...');
   try {
-    // Look ahead 10 days for a board meeting (catches next-week meetings from Thursday)
+    // Look ahead 7 days only — Thursday trigger catches next week's meeting, NOT the week after
+    // e.g. Thursday 7 Aug catches Tuesday 11 Aug (4 days away). Thursday 31 Jul does NOT catch Tue 11 Aug (11 days away).
     const from = now.toISOString();
-    const to = new Date(now.getTime() + 10*24*60*60*1000).toISOString();
+    const to = new Date(now.getTime() + 7*24*60*60*1000).toISOString();
     const cal = await graphGet(`/me/calendarView?startDateTime=${from}&endDateTime=${to}&$select=subject,start,end&$top=20`);
     const boardMeeting = (cal.value||[]).find(e => {
       if (!e.subject) return false;
       const s = e.subject.toLowerCase();
       return s.includes('board');  // Simple: any calendar event with "board" in the title
     });
-    if (!boardMeeting) { console.log('[BoardReport] No board meeting found in next 10 days'); return; }
+    if (!boardMeeting) { console.log('[BoardReport] No board meeting found in next 7 days (correct — will check again next Thursday)'); return; }
 
     const meetingDate = new Date(boardMeeting.start.dateTime || boardMeeting.start.date);
     const daysUntil = Math.round((meetingDate - now) / (24*60*60*1000));
     const monthKey = meetingDate.toISOString().substring(0,7);
     console.log('[BoardReport] Found:', boardMeeting.subject, '— in', daysUntil, 'days');
+
+    // Safety check — meeting must be within 7 days (next week from Thursday)
+    if (daysUntil > 7) {
+      console.log('[BoardReport] Meeting is', daysUntil, 'days out — too far ahead. Will trigger on the Thursday closer to the meeting.');
+      return;
+    }
+    if (daysUntil < 1) {
+      console.log('[BoardReport] Meeting has already passed — skipping');
+      return;
+    }
 
     // Don't re-send if already notified for this exact month's meeting
     if (state.notifiedMonth === monthKey) {
@@ -1319,67 +1330,128 @@ CINDERELLA FINANCIAL ANALYSIS REQUIRED:
   } catch(e) {}
 
   // Generate comprehensive report with AI
-  const systemPrompt = `You are Cinderella, elite executive assistant and intelligence analyst for Kandia Robertson (COO) at Risk 2 Solution Group — Australia's most awarded integrated risk management company. Services: Risk Management (Presilience®), Security, Cybersecurity, Training & Education (RTO #4785), Emergency Planning Services. ISO certified: 9001, 45001, 14001, 18788. 20+ years, 800+ clients, 150,000+ trained. Medical division DIVESTED — never mention. Head Office: Murrarie QLD.
+  const systemPrompt = `You are Cinderella, executive assistant to Kandia Du Bruyn, COO at Risk 2 Solution Group. Generate a monthly COO Board Paper in HTML.
 
-You are generating a COO Board Paper for the ${monthName} ${yr} board meeting. This is a formal document presented to the board of directors.
+STRICT RULES - MUST FOLLOW EXACTLY:
+- Output valid HTML only, no markdown, no backticks
+- NO underlines anywhere (no <u> tags, no text-decoration:underline)
+- NO em dashes or long dashes. Use a regular hyphen (-) or reword instead
+- Exactly 6 sections numbered 1-6 in the order specified
+- Maximum 4 printed pages - be concise, no filler
+- Use EXACT financial figures from context - never invent numbers
+- R2S brand teal for headings and table headers: #1A7F64
+- Positive financial figures: colour #1A7F64. Negative: colour #C0392B
+- COO Analysis box uses background #E8F5F1 with left border #1A7F64
+- Classification line: Confidential - Board Only (hyphen not dash)
+- Tables use thin 0.5px borders and alternating row colours #fff and #F9F9F9
+- No bold text except key financial figures and status labels
+- Company: Risk 2 Solution Group - Risk Management (Presilience), Security, Cybersecurity, Training RTO 4785, Emergency Planning. ISO certified. Medical division DIVESTED - never mention.`;
 
-CRITICAL REQUIREMENTS:
-- Maximum 4 pages when printed
-- Professional board paper format — not a dashboard
-- Use EXACT financial figures provided in context — never invent numbers
-- Every financial claim must reference its source (e.g. "per Diane Kruger, Corporate Operations Lead")
-- PAST BOARD REPORTS: You are provided with content from previous board reports. Review them and extract any open items, carry-forward actions, or unresolved matters. Include a "Carry-Forward Items" section if anything is outstanding. If all previous items are resolved or not applicable, state this clearly.
-- Include Cinderella's intelligent analysis and recommendations — not just data reporting
-- Flag risks with specific recommended actions
-- Keep language tight and executive — no waffle, no placeholders
-- Use HTML formatting: h2 for sections, tables for data, bold for key figures
-- Visuals and key stats in a highlighted box are encouraged (keep from original)`;
+  const userMsg = `Generate the COO Board Paper for ${monthName} ${yr} as HTML. Replace every [bracketed instruction] with real content from the data below.
 
-  const userMsg = `BOARD PAPER — COO REPORT
-Period: ${monthName} ${yr}
-Prepared by: Kandia Robertson, Chief Operating Officer
-Meeting: ${meetingSubject} — ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
+<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#222;max-width:800px;margin:0 auto;padding:20px">
 
-Write the full board paper in HTML. Maximum 4 printed pages. 9 sections as below. Be specific and concise.
+<div style="border-bottom:3px solid #1A7F64;padding-bottom:16px;margin-bottom:20px">
+<div style="color:#1A7F64;font-size:22pt;font-weight:700">COO Board Report</div>
+<div style="font-size:13pt;color:#444;margin-top:4px">Risk 2 Solution</div>
+<div style="font-size:11pt;color:#666;margin-top:2px">${monthName} ${yr}</div>
+<div style="margin-top:10px;font-size:10pt;color:#444">Kandia Du Bruyn, COO<br>For: Board Meeting<br>Meeting date: ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
+</div>
 
-SECTION 1 — EXECUTIVE SUMMARY (half page max)
-3-4 sentences: what happened this month, key wins, key risks. Include the FYE financial result prominently.
+<table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:9.5pt;background:#F5FAF8">
+<tr>
+<td style="padding:6px 10px;border:0.5px solid #B2D8CE"><strong>Period:</strong> ${monthName} ${yr}</td>
+<td style="padding:6px 10px;border:0.5px solid #B2D8CE"><strong>Prepared by:</strong> Kandia Du Bruyn, Chief Operating Officer</td>
+<td style="padding:6px 10px;border:0.5px solid #B2D8CE"><strong>Meeting:</strong> ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</td>
+<td style="padding:6px 10px;border:0.5px solid #B2D8CE"><strong>Classification:</strong> Confidential - Board Only</td>
+</tr>
+</table>
 
-SECTION 2 — CARRY-FORWARD FROM PREVIOUS REPORTS (quarter page)
-Review the previous board report content provided. List any items that were flagged as pending, unresolved, or requiring follow-up. For each: state the item, original report it came from, and current status if known. If nothing is outstanding, write "All items from previous reports have been resolved or addressed."
+<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px;margin-top:0">1. Executive Summary</h2>
+<div style="display:flex;gap:12px;margin-bottom:14px">
+<div style="flex:1;border:1px solid #B2D8CE;border-radius:4px;padding:12px;text-align:center">
+<div style="font-size:9pt;color:#666;margin-bottom:4px">FY 2025/26 Final Result</div>
+<div style="font-size:18pt;font-weight:700;color:#1A7F64">+$37,038.11</div>
+<div style="font-size:9pt;color:#888">Year ended positive</div>
+</div>
+<div style="flex:1;border:1px solid #EDBBBB;border-radius:4px;padding:12px;text-align:center">
+<div style="font-size:9pt;color:#666;margin-bottom:4px">FY 2026/27 Forecast (Jul-Aug)</div>
+<div style="font-size:18pt;font-weight:700;color:#C0392B">-$62,000</div>
+<div style="font-size:9pt;color:#888">Immediate cash flow risk - BD action required</div>
+</div>
+</div>
+<p style="font-size:10pt;line-height:1.6;margin-bottom:16px">[Write a concise 3-4 sentence executive summary covering the FYE result achievement, July-August cash flow risk, and 1-2 key operational highlights from the data. No em dashes, no underlines.]</p>
 
-SECTION 3 — FINANCIAL OVERVIEW (one page)
-- FY 2025/26 Final Result: use EXACT figure from context
-- Key driver of the result: EPS invoicing — explain what happened and why it mattered
-- FY 2026/27 Outlook: July-August forecast — use EXACT figure from context
-- CINDERELLA ANALYSIS: Write 3-4 sentences of intelligent analysis. The year ended positively but the July-August forecast is concerning. Business development is critical to ensure months are in the black rather than the red. Flag the PSG Conference as a Q4 revenue event but note that venue expenses arrive before the revenue. Recommend the board ensure a BD action plan is in place for July-August.
-- Present as a simple HTML table: | Period | Result | Key Driver |
+<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">2. Financial Overview</h2>
+<table style="width:100%;border-collapse:collapse;font-size:9.5pt;margin-bottom:12px">
+<thead><tr style="background:#1A7F64;color:#fff">
+<th style="padding:7px 10px;text-align:left">Period</th>
+<th style="padding:7px 10px;text-align:left">Result</th>
+<th style="padding:7px 10px;text-align:left">Key Driver</th>
+</tr></thead>
+<tbody>
+<tr style="background:#fff"><td style="padding:7px 10px;border:0.5px solid #ddd">FY 2025/26 - Full Year</td><td style="padding:7px 10px;border:0.5px solid #ddd;color:#1A7F64;font-weight:700">+$37,038.11</td><td style="padding:7px 10px;border:0.5px solid #ddd">EPS June invoicing: $89,966.48 ($44,966.46 above target). Diane Kruger and Reinette Kruger maximised end-of-year invoicing to push the year into positive territory.</td></tr>
+<tr style="background:#F9F9F9"><td style="padding:7px 10px;border:0.5px solid #ddd">July-August 2026 Forecast</td><td style="padding:7px 10px;border:0.5px solid #ddd;color:#C0392B;font-weight:700">-$62,000</td><td style="padding:7px 10px;border:0.5px solid #ddd">Pipeline effect from June EPS push; lower July EPS volume expected. PSG venue costs (July and September) add pressure ahead of October revenue.</td></tr>
+<tr style="background:#fff"><td style="padding:7px 10px;border:0.5px solid #ddd">Q2 FY26/27 (October)</td><td style="padding:7px 10px;border:0.5px solid #ddd">TBC</td><td style="padding:7px 10px;border:0.5px solid #ddd">PSG Conference revenue expected Q2. Venue expense obligations in July and September precede realisation. Net contribution to be confirmed.</td></tr>
+</tbody>
+</table>
+<p style="font-size:9pt;color:#555;margin-bottom:10px">Note: EPS monthly targets increased by $5,000/month from FY 2026/27. July volume forecast lower than June given the large end-of-year push.</p>
+<div style="background:#E8F5F1;border-left:3px solid #1A7F64;padding:10px 14px;margin-bottom:16px;font-size:9.5pt;line-height:1.6">
+<strong>COO Assessment</strong><br>
+[Write 3-4 sentences of intelligent COO financial analysis. Acknowledge the positive FYE result but flag that it was driven by an extraordinary invoicing effort not organic monthly trading. Flag the -$62,000 deficit as a structural BD gap. Note PSG cost-before-revenue timing. Recommend CEO present a formal BD action plan with specific targets. No em dashes.]
+</div>
 
-SECTION 3 — PEOPLE & CULTURE (half page)
-Staff capacity from check-ins. Flag anyone overloaded or with blockers. Highlight skills utilised.
+<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">3. People and Culture</h2>
+<p style="font-size:10pt;margin-bottom:8px">[1-2 sentences: total check-ins received this period, overall capacity observation from check-in data.]</p>
+<table style="width:100%;border-collapse:collapse;font-size:9pt;margin-bottom:16px">
+<thead><tr style="background:#1A7F64;color:#fff">
+<th style="padding:6px 8px;text-align:left">Team Member</th>
+<th style="padding:6px 8px;text-align:left">Role</th>
+<th style="padding:6px 8px;text-align:left">Avg Capacity</th>
+<th style="padding:6px 8px;text-align:left">Status</th>
+<th style="padding:6px 8px;text-align:left">Key Note</th>
+</tr></thead>
+<tbody>
+[For each staff member from check-in data generate a <tr> with alternating background #fff and #F9F9F9. Status badge options: Stable / Monitor / At Limit / Blocker. Include Paul Johnston (Consultant, no check-in data). Use actual blockers and notes from check-in context. Each td has padding:6px 8px;border:0.5px solid #ddd]
+</tbody>
+</table>
 
-SECTION 4 — CLIENT DELIVERY & OPERATIONS (half page)
-Active projects, delivery status, any risks. Use Monday.com data if available.
+<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">4. Client Delivery and Operations</h2>
+<p style="font-size:10pt;margin-bottom:8px">[1-2 sentences on Aurora project management and delivery status.]</p>
+<p style="font-weight:600;margin-bottom:4px;font-size:10pt">Active and Ongoing Delivery</p>
+<table style="width:100%;border-collapse:collapse;font-size:9pt;margin-bottom:12px">
+<thead><tr style="background:#1A7F64;color:#fff">
+<th style="padding:6px 10px;text-align:left">Client</th>
+<th style="padding:6px 10px;text-align:left">Status</th>
+</tr></thead>
+<tbody>
+[List active projects from Aurora data or context as table rows with alternating #fff and #F9F9F9 backgrounds. Each td has padding:6px 10px;border:0.5px solid #ddd]
+</tbody>
+</table>
+[If new business items exist in context, add: <p style="font-weight:600;margin-bottom:6px;font-size:10pt">New Business Activity</p><ul style="margin:0;padding-left:18px;font-size:9.5pt;line-height:1.8">[<li> items]</ul>]
 
-SECTION 5 — EMERGENCY PLANNING SERVICES (quarter page)
-EPS is the key revenue driver. Note the June invoicing achievement. Flag July volume expectations.
+<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">5. Compliance and Risk</h2>
+<p style="font-weight:600;margin-bottom:6px;font-size:10pt">Open Compliance Items</p>
+<ul style="margin:0;padding-left:18px;font-size:9.5pt;line-height:1.8">
+[List open compliance items as <li> items from context. Include ASQA/RTO status, certifications, legal matters, any carry-forward compliance items from previous reports. If nothing, write <li>No open compliance items identified this period.</li>]
+</ul>
 
-SECTION 6 — COMPLIANCE & RISK (quarter page)
-ISO certifications, RTO obligations, any open compliance items. Flag anything needing board awareness.
+<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">6. Items for Board Decision or Awareness</h2>
+<table style="width:100%;border-collapse:collapse;font-size:9pt">
+<thead><tr style="background:#1A7F64;color:#fff">
+<th style="padding:6px 10px;text-align:left">Item</th>
+<th style="padding:6px 10px;text-align:left">Type</th>
+<th style="padding:6px 10px;text-align:left">Recommended Action</th>
+</tr></thead>
+<tbody>
+[Generate 4-7 rows for items requiring board attention. Type: For Noting / For Awareness / For Decision. Always include: financial result, forecast deficit, any compliance matters, any HR matters. Alternating row colours. Each td has padding:6px 10px;border:0.5px solid #ddd]
+</tbody>
+</table>
 
-SECTION 7 — STRATEGIC PRIORITIES — NEXT MONTH (quarter page)
-Top 3 priorities for the COO in the coming month. Must include Business Development as #1 given the -$62k forecast.
+</div>
 
-SECTION 8 — ITEMS FOR BOARD DECISION OR AWARENESS
-Bullet list of anything requiring board input, approval or noting.
-
-SECTION 9 — KEY METRICS SUMMARY
-HTML table with key numbers: FYE result, July-Aug forecast, staff headcount, check-ins received, EPS revenue June.
-
-DATA:
-${context}
-
-USE THE EXACT FINANCIAL FIGURES FROM THE DATA. Do not invent numbers. Where data is missing write "Data not available for this period".`;
+DATA FOR THIS REPORT:
+${context}`;
 
   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
@@ -1411,7 +1483,7 @@ ul,ol{margin:4pt 0;padding-left:20pt}li{margin-bottom:3pt}
 <h1>COO Board Report</h1>
 <p style="font-size:15pt;color:#2E75B6;margin:6pt 0">Risk 2 Solution</p>
 <p style="font-size:12pt;color:#555">${monthName} ${yr}</p>
-<p style="font-size:10pt;color:#888;margin-top:8pt">Prepared by Cinderella AI on behalf of Kandia Robertson, COO<br>
+<p style="font-size:10pt;color:#888;margin-top:8pt">Prepared by Kandia Du Bruyn, COO<br>
 For: ${meetingSubject}<br>
 Meeting date: ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</p>
 </div>
@@ -1454,7 +1526,7 @@ async function sendBoardReportNotification(meetingSubject, meetingDate, daysUnti
     '• Client project status from Monday.com\n' +
     '• Open action items from your tracker\n\n' +
     'Please review the report and add any additional context before the board meeting.\n\n' +
-    'Cinderella\nExecutive Assistant to Kandia Robertson, COO\nRisk 2 Solution';
+    'Cinderella\nExecutive Assistant to Kandia Du Bruyn, COO\nRisk 2 Solution';
 
   const token = await getValidToken();
   const recipientEmail = await getKandiaEmail();
