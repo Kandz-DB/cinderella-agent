@@ -1193,20 +1193,46 @@ async function generateBoardReport(meetingDate, meetingSubject) {
       return !!subj.match(/payroll|month.?end|year.?end|p&l|profit.?loss|revenue|budget|reconcil|fy2|fy 2|year to date|ytd|cash flow|forecast/i);
     });
     console.log('[BoardReport] Finance emails found:', financeEmails.length, financeEmails.map(e=>e.subject).join(' | '));
+
+    // Extract dollar figures from finance email previews as a quick-capture fallback
+    const financeFigures = [];
+    financeEmails.forEach(e => {
+      const text = (e.bodyPreview || '') + ' ' + (e.subject || '');
+      const dollarMatches = text.match(/\$[\d,]+\.?\d{0,2}/g) || [];
+      const positiveMatch = text.match(/positive[^$]*\$[\d,]+|closed.*\$[\d,]+|result.*\$[\d,]+/i);
+      if (dollarMatches.length > 0 || positiveMatch) {
+        financeFigures.push({
+          from: e.from?.emailAddress?.name,
+          subject: e.subject,
+          date: e.receivedDateTime?.substring(0,10),
+          figures: dollarMatches.slice(0,5),
+          preview: e.bodyPreview?.substring(0,300)
+        });
+      }
+    });
+    if (financeFigures.length > 0) {
+      context += 'KEY FINANCIAL FIGURES EXTRACTED FROM EMAILS:\n';
+      financeFigures.forEach(f => {
+        context += `${f.date} — ${f.from}: "${f.subject}" | Figures: ${f.figures.join(', ')}\n`;
+        context += `  Preview: ${f.preview}\n\n`;
+      });
+    }
+
     if (financeEmails.length > 0) {
-      context += 'FINANCE EMAILS — ' + monthName + ' (use these figures for financial overview):\n';
+      context += 'FINANCE EMAILS — ' + monthName + ' (primary source for financial overview):\n';
       financeEmails.slice(0,15).forEach(e => {
+        // Use bodyPreview first (clean text), then fall back to stripping body HTML
+        const cleanPreview = e.bodyPreview || '';
         const htmlBody = e.body?.content || '';
-        // Strip HTML thoroughly to get actual content
         const bodyText = htmlBody
           .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
           .replace(/<[^>]+>/g, ' ')
           .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
           .replace(/\s+/g, ' ').trim();
-        // Take up to 800 chars of body for finance emails
-        const bodyPreview = bodyText.substring(0, 800);
+        // Combine preview + body — preview is cleaner, body may have more detail
+        const combined = (cleanPreview + ' ' + bodyText.substring(0, 600)).trim().substring(0, 900);
         const date = e.receivedDateTime ? new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) : '';
-        context += `FROM: ${e.from?.emailAddress?.name||'?'} (${date})\nSUBJECT: ${e.subject}\nCONTENT: ${bodyPreview}\n\n`;
+        context += `FROM: ${e.from?.emailAddress?.name||'?'} (${date})\nSUBJECT: ${e.subject}\nCONTENT: ${combined}\n\n`;
       });
     }
 
@@ -1531,42 +1557,45 @@ async function generateBoardReport(meetingDate, meetingSubject) {
   const sysP = `You are Cinderella, executive assistant to Kandia Du Bruyn, COO at Risk 2 Solution Group.
 Generate a COO Board Paper for ${monthName} ${yr}. Output ONLY valid JSON - no markdown, no backticks, no extra text.
 
-The JSON must have exactly these keys:
-{
-  "executiveSummary": "2-3 sentence strategic overview of the month",
-  "financialTableRows": [{"period":"...","result":"...","resultClass":"pos or neg","keyDriver":"..."}],
-  "financeNote": "one line note on EPS targets or other financial context",
-  "financialAnalysis": "3-4 sentence COO assessment. No em dashes. Hyphens only.",
-  "peopleIntro": "1-2 sentences on check-in engagement and overall team load",
-  "peopleRows": [{"name":"...","role":"...","capacity":"e.g. 84%","hours":"e.g. 127h or No data","status":"stable or monitor or at-limit or blocker","note":"1-2 sentences max"}],
-  "clientIntro": "1 sentence on Aurora project management",
-  "clientRows": [{"client":"...","status":"..."}],
-  "newBusiness": ["bullet 1","bullet 2"],
-  "complianceItems": ["full sentence item 1","full sentence item 2"],
-  "boardItems": [{"item":"...","type":"For Noting or For Awareness or For Decision","action":"..."}]
-}
+JSON structure required:
+{"executiveSummary":"string","financialTableRows":[{"period":"","result":"","resultClass":"pos or neg","keyDriver":""}],"financeNote":"string","financialAnalysis":"string","peopleIntro":"string","peopleRows":[{"name":"","role":"","capacity":"","hours":"","status":"stable or monitor or at-limit or blocker","note":""}],"clientIntro":"string","clientRows":[{"client":"","status":""}],"newBusiness":["string"],"complianceItems":["string"],"boardItems":[{"item":"","type":"For Noting or For Awareness or For Decision","action":""}]}
 
-RULES:
-- Use ONLY data from the context provided - never invent figures or names
-- EMAILS ARE PRIMARY SOURCE: Read ALL email content in context carefully before generating any section
-- financialTableRows: CRITICAL — use ONLY figures from FINANCE EMAILS section in context. STRICT RULES:
-  * The report period is ${monthName} ${yr}. Financial rows must show ${monthName} results — NOT prior month or FYE data.
-  * $37,038.11 was the FY2025/26 YEAR-END result. Do NOT put it in a July or August board report financial table. It may appear as background context ONLY if an email explicitly references it.
-  * -$62,000 was a July-August FORECAST from July. Do not repeat it unless Diane's current email confirms it is still accurate.
-  * Look in FINANCE EMAILS for Diane Kruger's ${monthName} P&L email (usually sent first week of following month). Use THOSE exact figures.
-  * If the finance email shows e.g. "July result: +$15,000" then put that. If it shows a loss, put that.
-  * Diane Kruger sent "P&L July 2026" on 3 Aug 2026 stating July closed positive at $17,209.41 - if this appears in FINANCE EMAILS, use that exact figure.
-  * If no current-month finance email exists in context, output: [{"period":"${monthName} ${yr}","result":"Awaiting P&L from Diane Kruger","resultClass":"","keyDriver":"Finance report not yet available for this period"}]
-  * Generate 2-3 rows: current month actual, YTD if available, forecast if available.
-- DISP application, EMDG grant, staff conference, ASQA/RTO renewals, legal matters, tenders: if emails mention these, they MUST appear in compliance, board items, or executive summary sections
-- boardItems: include EVERY significant matter from emails - DISP status, EMDG grant decisions, legal proceedings, staff welfare, conference planning, pending CEO approvals
-- peopleRows: cross-reference check-in capacity % with Clockify hours. Flag if hours logged significantly exceed or undercut implied hours (capacity% x 37.5h per week x weeks in month). Include Paul Johnston with "No data" for hours.
-- boardItems: 4-6 items. Always include financial result, any significant compliance items, any HR or staffing matters.
-- No em dashes anywhere. Use hyphen (-) instead.
-- No underlines.
-- complianceItems and newBusiness: plain sentences, no bullets or dashes at the start.`;
+DEPTH AND SPECIFICITY - CRITICAL. Every field must contain specific facts, names, figures, and dates. Generic filler is not acceptable.
 
-  const usrP = `Generate the board paper JSON for ${monthName} ${yr}. Meeting: ${meetingSubject} on ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}.
+FINANCIAL:
+- Use ONLY figures from FINANCE EMAILS and KEY FINANCIAL FIGURES EXTRACTED in context
+- July 2026: Diane Kruger confirmed in "P&L July 2026" (3 Aug 2026): July closed positive at $17,209.41 - use this exact figure
+- Do NOT use $37,038.11 (FY25/26 year-end) or -$62,000 (old forecast) for July results
+- Show July 2026 actual, FY26/27 YTD if available, and forward outlook
+- Note: Dave Cohen requested Diane prepare a mini P&L per project (cost and opex vs revenue to calculate net profit per project) - in progress, figures in Excel attachment; board should be aware this reporting framework is being developed
+- financialAnalysis: specific commentary on the July result vs the -$62,000 forecast, what drove it, BD pipeline status
+
+PEOPLE:
+- Cross-reference check-in capacity % with monthly Clockify hours (capacity% x 37.5h x 4.3 weeks = implied monthly hours)
+- Be specific: use actual project names from check-ins, actual blocker details
+- Note: Dylan Finigan accepted offer as Business Development Associate (5 Aug 2026), onboarding in progress via Diane Kruger and Janita Zhang
+- Do not write generic notes
+
+COMPLIANCE - include ALL of:
+- DISP Application: Kandia submitted documents to Auruba/Defence 5 Aug 2026, Paul Johnston provided SRA Template (37 risk exposures), Dave Cohen baseline clearance application via myClearance - 10 business day deadline or Defence may withdraw
+- EMDG Grant: MR-001-EMDG-10019821 - CEO action required from Dave Cohen
+- ISO Audit 2026: underway with external auditor Craig (Global ISO Services), Diane and team preparing documentation
+- Any ASQA/RTO matters if in context
+
+CLIENT DELIVERY:
+- Use actual project names from Aurora, BHP project update forwarded via info@
+- Charters Towers Regional Council VendorPanel tender PR000135 (Training Services)
+- Note any overdue deliverables specifically
+
+BOARD ITEMS - genuinely board-level only (strategic, governance, financial, compliance):
+- July financial result, EMDG CEO action, DISP clearance progress, new BD hire, mini P&L framework, ISO audit
+- NOT: individual invoice queries, routine payables, scheduling
+
+EXECUTIVE SUMMARY: 3-4 sentences covering July result ($17,209.41), DISP progress, new BD hire, primary challenge/decision.
+
+No em dashes. No underlines. Use hyphen (-) instead of dash.`;
+
+  const usrP = `Generate the board paper JSON for ${monthName} ${yr}. Meeting: ${meetingSubject} on ${meetingDate.toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}.
 
 DATA:
 ${context}`;
