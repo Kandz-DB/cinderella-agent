@@ -1064,15 +1064,34 @@ async function checkBoardMeetingSchedule() {
   if (!tokenStore.access_token) return;
 
   const now = new Date();
-  const dayOfWeek = now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
-  if (dayOfWeek !== 'Thursday') return; // Only act on Thursdays
 
+  // AUTO-CLEAR: if the last notified meeting has passed by more than 2 days, clear state
+  // so the display resets and next month's cycle can begin
   const state = loadBoardState();
+  if (state.lastMeetingDate) {
+    const lastMeeting = new Date(state.lastMeetingDate);
+    const daysSinceMeeting = (now - lastMeeting) / (24*60*60*1000);
+    if (daysSinceMeeting > 2) {
+      console.log('[BoardReport] Last meeting was', Math.round(daysSinceMeeting), 'days ago — clearing state for next cycle');
+      state.notifiedMonth = null;
+      state.lastReportPath = null;
+      state.lastReportMeeting = null;
+      state.lastReportDate = null;
+      state.lastSentDate = null;
+      state.lastMeetingDate = null;
+      saveBoardState(state);
+    }
+  }
 
-  // Only run once per day — but ONLY block if we already SUCCESSFULLY sent this month
-  // Don't block on lastCheck alone — if it failed last time, retry
-  const alreadySentToday = state.lastSentDate &&
-    new Date(state.lastSentDate).toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane'}) ===
+  const dayOfWeek = now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
+  if (dayOfWeek !== 'Thursday') return;
+
+  // Reload state after potential clear above
+  const freshState = loadBoardState();
+
+  // Block only if sent successfully TODAY
+  const alreadySentToday = freshState.lastSentDate &&
+    new Date(freshState.lastSentDate).toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane'}) ===
     now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane'});
   if (alreadySentToday) { console.log('[BoardReport] Already sent successfully today, skipping'); return; }
 
@@ -1105,10 +1124,17 @@ async function checkBoardMeetingSchedule() {
       return;
     }
 
-    // Don't re-send if already notified for this exact month's meeting
-    if (state.notifiedMonth === monthKey) {
-      console.log('[BoardReport] Already notified for', monthKey, '— skipping');
-      return;
+    // Don't re-send if already notified — UNLESS the last send was premature (sent >7 days before meeting)
+    if (freshState.notifiedMonth === monthKey) {
+      const lastSent = freshState.lastSentDate ? new Date(freshState.lastSentDate) : null;
+      const daysBetweenSendAndMeeting = lastSent ? (meetingDate - lastSent) / (24*60*60*1000) : 0;
+      if (daysBetweenSendAndMeeting > 7) {
+        console.log('[BoardReport] Previous send was premature (' + Math.round(daysBetweenSendAndMeeting) + ' days before meeting) — re-sending on correct Thursday');
+        // Allow re-send — fall through
+      } else {
+        console.log('[BoardReport] Already notified for', monthKey, '— skipping');
+        return;
+      }
     }
 
     // Generate and send
@@ -1117,12 +1143,14 @@ async function checkBoardMeetingSchedule() {
     await sendBoardReportNotification(boardMeeting.subject, meetingDate, daysUntil, reportPath);
 
     // Only save state after successful send
-    state.notifiedMonth = monthKey;
-    state.lastReportPath = reportPath;
-    state.lastReportMeeting = boardMeeting.subject;
-    state.lastReportDate = now.toISOString();
-    state.lastSentDate = now.toISOString();  // Track successful send date separately
-    saveBoardState(state);
+    const newState = loadBoardState();
+    newState.notifiedMonth = monthKey;
+    newState.lastReportPath = reportPath;
+    newState.lastReportMeeting = boardMeeting.subject;
+    newState.lastReportDate = now.toISOString();
+    newState.lastSentDate = now.toISOString();
+    newState.lastMeetingDate = meetingDate.toISOString(); // Save meeting date for auto-clear
+    saveBoardState(newState);
     console.log('[BoardReport] ✅ Done — report generated and emailed to Kandia');
   } catch(e) {
     console.error('[BoardReport] Error (will retry next think loop):', e.message);
@@ -1329,6 +1357,113 @@ CINDERELLA FINANCIAL ANALYSIS REQUIRED:
     }
   } catch(e) {}
 
+  // 6. CALENDAR EVENTS — significant items from Kandia's calendar (past 45 days + upcoming 60 days)
+  try {
+    const calFrom = new Date(now.getFullYear(), now.getMonth()-1, 1).toISOString();
+    const calTo   = new Date(now.getFullYear(), now.getMonth()+2, 0).toISOString();
+    const calData = await graphGet(`/me/calendarView?startDateTime=${calFrom}&endDateTime=${calTo}&$select=subject,start,end,bodyPreview&$top=100&$orderby=start/dateTime`);
+    const SIG_KEYWORDS = ['ospa','asqa','disp','tender','board','submission','renewal','audit','review','accreditation','training','client','meeting','grant','emdg','compliance','certification','psg','payroll','clearance','hr','legal','court','tribunal','application','deadline','milestone'];
+    const significant = (calData.value||[]).filter(e => {
+      const s = (e.subject||'').toLowerCase();
+      return SIG_KEYWORDS.some(k => s.includes(k));
+    });
+    if (significant.length > 0) {
+      context += 'CALENDAR — SIGNIFICANT EVENTS (past month to next 2 months):\n';
+      significant.forEach(e => {
+        const d = new Date(e.start.dateTime||e.start.date);
+        const isPast = d < now;
+        context += (isPast ? '[PAST] ' : '[UPCOMING] ') + d.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ' — ' + e.subject + '\n';
+        if (e.bodyPreview && e.bodyPreview.length > 20) context += '  ' + e.bodyPreview.substring(0,120).replace(/\n/g,' ') + '\n';
+      });
+      context += '\n';
+    }
+  } catch(e) { console.warn('[BoardReport] Calendar fetch:', e.message); }
+
+  // 7. CLOCKIFY — staff hours vs capacity for the current month
+  try {
+    if (CLOCKIFY_API_KEY) {
+      const workspaces = await callClockify('/workspaces');
+      const ws = (workspaces||[]).find(w => w.name === 'Risk 2 Solution') || workspaces[0];
+      if (ws) {
+        const users = await callClockify('/workspaces/' + ws.id + '/users?page-size=50');
+        const monthStart = new Date(yy, mm, 1).toISOString();
+        const monthEndDt = new Date(yy, mm+1, 0, 23, 59, 59).toISOString();
+        let clockifyCtx = 'CLOCKIFY — TIME TRACKING VS CAPACITY ('+monthName+'):\n';
+        let hasData = false;
+
+        // Load check-ins for cross-reference
+        let allCheckIns = [];
+        try { allCheckIns = JSON.parse(readFileSync('/home/checkins.json','utf8')||'[]'); } catch(e) {}
+        const monthCheckIns = allCheckIns.filter(c => {
+          if (!c.submitted) return false;
+          const d = new Date(c.submitted);
+          return d.getFullYear() === yy && d.getMonth() === mm;
+        });
+
+        for (const user of users) {
+          const match = CLOCKIFY_STAFF_MAP.find(m => {
+            const name = (user.name||'').toLowerCase();
+            const email = (user.email||'').toLowerCase();
+            return name.includes(m.clockify.toLowerCase()) || email.includes(m.clockify.toLowerCase());
+          });
+          if (!match) continue;
+          try {
+            const entries = await callClockify('/workspaces/'+ws.id+'/user/'+user.id+'/time-entries?start='+encodeURIComponent(monthStart)+'&end='+encodeURIComponent(monthEndDt)+'&page-size=500');
+            let totalHrs = 0;
+            (entries||[]).forEach(e => {
+              if (e.timeInterval?.duration) totalHrs += parseDuration(e.timeInterval.duration);
+              else if (e.timeInterval?.start && e.timeInterval?.end)
+                totalHrs += (new Date(e.timeInterval.end) - new Date(e.timeInterval.start)) / 3600000;
+            });
+            totalHrs = Math.round(totalHrs * 10) / 10;
+            // Find their avg capacity from check-ins this month
+            const personCheckIns = monthCheckIns.filter(c => (c.name||'').toLowerCase().includes(match.checkIn.split(' ')[0].toLowerCase()));
+            const avgCap = personCheckIns.length > 0 ? Math.round(personCheckIns.reduce((s,c) => s + (c.capacity||0), 0) / personCheckIns.length) : null;
+            const impliedHrs = avgCap !== null ? Math.round((avgCap/100)*37.5*4.3*10)/10 : null; // monthly
+            clockifyCtx += '- ' + match.checkIn + ': ' + totalHrs + 'h logged this month';
+            if (avgCap !== null) clockifyCtx += ' | avg check-in capacity: ' + avgCap + '%' + (impliedHrs ? ' (~' + impliedHrs + 'h implied)' : '');
+            if (impliedHrs && totalHrs > 0) {
+              const gap = totalHrs - impliedHrs;
+              if (gap > 20) clockifyCtx += ' | ⚠ OVER capacity (possible burnout)';
+              else if (gap < -20 && avgCap > 50) clockifyCtx += ' | ⚠ Under hours vs reported capacity';
+            }
+            clockifyCtx += '\n';
+            hasData = true;
+          } catch(e) {}
+        }
+        if (hasData) { context += clockifyCtx + '\n'; }
+      }
+    }
+  } catch(e) { console.warn('[BoardReport] Clockify context:', e.message); }
+
+  // 8. TEAMS MESSAGES — recent significant discussions
+  try {
+    const chats = await graphGet('/me/chats?$top=20&$expand=members');
+    let teamsCtx = '';
+    let chatCount = 0;
+    for (const chat of (chats.value||[]).slice(0, 10)) {
+      try {
+        const msgs = await graphGet('/me/chats/'+chat.id+'/messages?$top=10&$orderby=createdDateTime desc');
+        const recent = (msgs.value||[]).filter(m => {
+          if (!m.createdDateTime) return false;
+          const d = new Date(m.createdDateTime);
+          const cutoff = new Date(now.getTime() - 45*24*60*60*1000);
+          return d >= cutoff;
+        });
+        if (recent.length > 0) {
+          const chatName = chat.topic || (chat.members||[]).filter(m => !(m.displayName||'').includes('Kandia')).map(m => m.displayName).join(', ');
+          recent.slice(0,3).forEach(m => {
+            const body = (m.body?.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().substring(0,150);
+            if (body.length > 20) teamsCtx += '- ['+chatName+'] '+(m.from?.user?.displayName||'?')+': '+body+'\n';
+          });
+          chatCount++;
+        }
+      } catch(e) {}
+      if (chatCount >= 5) break;
+    }
+    if (teamsCtx) context += 'TEAMS MESSAGES (recent):\n' + teamsCtx + '\n';
+  } catch(e) { console.warn('[BoardReport] Teams context:', e.message); }
+
   // Generate comprehensive report with AI
   const systemPrompt = `You are Cinderella, executive assistant to Kandia Du Bruyn, COO at Risk 2 Solution Group. Generate a monthly COO Board Paper in HTML.
 
@@ -1402,17 +1537,37 @@ STRICT RULES - MUST FOLLOW EXACTLY:
 </div>
 
 <h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">3. People and Culture</h2>
-<p style="font-size:10pt;margin-bottom:8px">[1-2 sentences: total check-ins received this period, overall capacity observation from check-in data.]</p>
+<p style="font-size:10pt;margin-bottom:8px">[1-2 sentences: total check-ins received, overall team utilisation observation. If Clockify shows a significant team-wide pattern, note it here.]</p>
+
+CROSS-REFERENCE INSTRUCTIONS FOR THIS TABLE:
+For each person, look up BOTH their check-in data AND their Clockify hours from the CLOCKIFY context above.
+- "Reported Cap" = average capacity % from their check-ins this month
+- "Hrs Logged" = actual hours from Clockify for this month (from CLOCKIFY context)
+- "Variance" = compare the two: if Clockify hours are much higher than capacity implies = burnout risk. If much lower = not tracking time or overstating capacity.
+- "Status" = your assessment based on BOTH data sources together, not just one
+- "Key Note" = the most important thing Kandia needs to know about this person — include any blockers, HR matters, workload concerns, achievements. Keep it to 1-2 sentences max.
+- Paul Johnston has no Clockify data (not in system) — note this
+- If someone has no check-in data, note it and use Clockify alone
+
 <table style="width:100%;border-collapse:collapse;font-size:9pt;margin-bottom:16px">
 <thead><tr style="background:#1A7F64;color:#fff">
 <th style="padding:6px 8px;text-align:left">Team Member</th>
 <th style="padding:6px 8px;text-align:left">Role</th>
-<th style="padding:6px 8px;text-align:left">Avg Capacity</th>
+<th style="padding:6px 8px;text-align:left">Reported Cap</th>
+<th style="padding:6px 8px;text-align:left">Hrs Logged</th>
 <th style="padding:6px 8px;text-align:left">Status</th>
 <th style="padding:6px 8px;text-align:left">Key Note</th>
 </tr></thead>
 <tbody>
-[For each staff member from check-in data generate a <tr> with alternating background #fff and #F9F9F9. Status badge options: Stable / Monitor / At Limit / Blocker. Include Paul Johnston (Consultant, no check-in data). Use actual blockers and notes from check-in context. Each td has padding:6px 8px;border:0.5px solid #ddd]
+[For each staff member generate a <tr> with alternating background #fff and #F9F9F9. Each td has padding:6px 8px;border:0.5px solid #ddd.
+- "Reported Cap" cell: show the avg capacity % in bold, e.g. "84%" — colour red if 95%+ (at limit), amber if 85-94%, green if under 85%
+- "Hrs Logged" cell: show Clockify hours for the month, e.g. "127h" — if no Clockify data write "No data"
+- "Status" cell: one of these coloured badges based on your assessment of BOTH data sources:
+  * Stable = green background #E8F5F1, text #1A7F64
+  * Monitor = amber background #FFF3E0, text #E65100
+  * At Limit = red background #FFEBEE, text #C62828
+  * Blocker = dark red background #FFCDD2, text #B71C1C
+- "Key Note" cell: 1-2 sentences covering the most important thing — blockers, achievements, concerns, Clockify vs capacity discrepancy if significant]
 </tbody>
 </table>
 
@@ -1622,6 +1777,8 @@ app.post('/board-report/force-send', requireAuth, async (req, res) => {
     newState.lastReportPath = reportPath;
     newState.lastReportMeeting = meetingSubject;
     newState.lastReportDate = now.toISOString();
+    newState.lastSentDate = now.toISOString();
+    newState.lastMeetingDate = meetingDate.toISOString();
     saveBoardState(newState);
 
     res.json({ success: true, meeting: meetingSubject, daysUntil, reportPath, emailNote: 'Email sent — check your inbox. If not received within 2 minutes, check Outlook Drafts (re-authenticate at /auth/login if needed to grant Mail.Send permission).' });
@@ -1629,6 +1786,18 @@ app.post('/board-report/force-send', requireAuth, async (req, res) => {
     console.error('[BoardReport] Force-send error:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// Reset state — clears notifiedMonth so Thursday trigger fires again
+app.post('/board-report/reset-state', requireAuth, (req, res) => {
+  const state = loadBoardState();
+  const prev = { notifiedMonth: state.notifiedMonth, lastSentDate: state.lastSentDate };
+  state.notifiedMonth = null;
+  state.lastSentDate = null;
+  state.lastMeetingDate = null;
+  saveBoardState(state);
+  console.log('[BoardReport] State reset manually. Previous:', JSON.stringify(prev));
+  res.json({ success: true, cleared: prev, message: 'State cleared — Thursday scheduler will now run and generate the report' });
 });
 
 // Debug: show current board state
