@@ -1464,188 +1464,185 @@ CINDERELLA FINANCIAL ANALYSIS REQUIRED:
     if (teamsCtx) context += 'TEAMS MESSAGES (recent):\n' + teamsCtx + '\n';
   } catch(e) { console.warn('[BoardReport] Teams context:', e.message); }
 
-  // Generate comprehensive report with AI
-  const systemPrompt = `You are Cinderella, executive assistant to Kandia Du Bruyn, COO at Risk 2 Solution Group. Generate a monthly COO Board Paper in HTML.
+  // Generate comprehensive report — AI returns JSON, server builds HTML
+  const NAVY  = '#1B3A6B';
+  const GREEN = '#1E8449';
+  const RED   = '#C0392B';
+  const AMBER = '#D68910';
 
-STRICT RULES - MUST FOLLOW EXACTLY:
-- Output valid HTML only, no markdown, no backticks
-- NO underlines anywhere (no <u> tags, no text-decoration:underline)
-- NO em dashes or long dashes. Use a regular hyphen (-) or reword instead
-- Exactly 6 sections numbered 1-6 in the order specified
-- Maximum 4 printed pages - be concise, no filler
-- Use EXACT financial figures from context - never invent numbers
-- R2S brand teal for headings and table headers: #1A7F64
-- Positive financial figures: colour #1A7F64. Negative: colour #C0392B
-- COO Analysis box uses background #E8F5F1 with left border #1A7F64
-- Classification line: Confidential - Board Only (hyphen not dash)
-- Tables use thin 0.5px borders and alternating row colours #fff and #F9F9F9
-- No bold text except key financial figures and status labels
-- Company: Risk 2 Solution Group - Risk Management (Presilience), Security, Cybersecurity, Training RTO 4785, Emergency Planning. ISO certified. Medical division DIVESTED - never mention.`;
+  const sysP = `You are Cinderella, executive assistant to Kandia Du Bruyn, COO at Risk 2 Solution Group.
+Generate a COO Board Paper for ${monthName} ${yr}. Output ONLY valid JSON - no markdown, no backticks, no extra text.
 
-  const userMsg = `Generate the COO Board Paper for ${monthName} ${yr} as HTML. Replace every [bracketed instruction] with real content from the data below.
+The JSON must have exactly these keys:
+{
+  "executiveSummary": "2-3 sentence strategic overview of the month",
+  "financialTableRows": [{"period":"...","result":"...","resultClass":"pos or neg","keyDriver":"..."}],
+  "financeNote": "one line note on EPS targets or other financial context",
+  "financialAnalysis": "3-4 sentence COO assessment. No em dashes. Hyphens only.",
+  "peopleIntro": "1-2 sentences on check-in engagement and overall team load",
+  "peopleRows": [{"name":"...","role":"...","capacity":"e.g. 84%","hours":"e.g. 127h or No data","status":"stable or monitor or at-limit or blocker","note":"1-2 sentences max"}],
+  "clientIntro": "1 sentence on Aurora project management",
+  "clientRows": [{"client":"...","status":"..."}],
+  "newBusiness": ["bullet 1","bullet 2"],
+  "complianceItems": ["full sentence item 1","full sentence item 2"],
+  "boardItems": [{"item":"...","type":"For Noting or For Awareness or For Decision","action":"..."}]
+}
 
-<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#222;max-width:800px;margin:0 auto;padding:20px">
+RULES:
+- Use ONLY data from the context provided - never invent figures or names
+- financialTableRows: derive from current month finance emails in context. If Diane sent a month-end email for ${monthName}, use those figures. resultClass is "pos" if positive result, "neg" if negative.
+- peopleRows: cross-reference check-in capacity % with Clockify hours. Flag if hours logged significantly exceed or undercut implied hours (capacity% x 37.5h per week x weeks in month). Include Paul Johnston with "No data" for hours.
+- boardItems: 4-6 items. Always include financial result, any significant compliance items, any HR or staffing matters.
+- No em dashes anywhere. Use hyphen (-) instead.
+- No underlines.
+- complianceItems and newBusiness: plain sentences, no bullets or dashes at the start.`;
 
-<div style="border-bottom:3px solid #1A7F64;padding-bottom:16px;margin-bottom:20px">
-<div style="color:#1A7F64;font-size:22pt;font-weight:700">COO Board Report</div>
-<div style="font-size:13pt;color:#444;margin-top:4px">Risk 2 Solution</div>
-<div style="font-size:11pt;color:#666;margin-top:2px">${monthName} ${yr}</div>
-<div style="margin-top:10px;font-size:10pt;color:#444">Kandia Du Bruyn, COO<br>For: Board Meeting<br>Meeting date: ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
-</div>
+  const usrP = `Generate the board paper JSON for ${monthName} ${yr}. Meeting: ${meetingSubject} on ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}.
 
-<table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:9.5pt;background:#F5FAF8">
-<tr>
-<td style="padding:6px 10px;border:0.5px solid #B2D8CE"><strong>Period:</strong> ${monthName} ${yr}</td>
-<td style="padding:6px 10px;border:0.5px solid #B2D8CE"><strong>Prepared by:</strong> Kandia Du Bruyn, Chief Operating Officer</td>
-<td style="padding:6px 10px;border:0.5px solid #B2D8CE"><strong>Meeting:</strong> ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</td>
-<td style="padding:6px 10px;border:0.5px solid #B2D8CE"><strong>Classification:</strong> Confidential - Board Only</td>
-</tr>
-</table>
-
-<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px;margin-top:0">1. Executive Summary</h2>
-<div style="display:flex;gap:12px;margin-bottom:14px">
-<div style="flex:1;border:1px solid #B2D8CE;border-radius:4px;padding:12px;text-align:center">
-<div style="font-size:9pt;color:#666;margin-bottom:4px">FY 2025/26 Final Result</div>
-<div style="font-size:18pt;font-weight:700;color:#1A7F64">+$37,038.11</div>
-<div style="font-size:9pt;color:#888">Year ended positive</div>
-</div>
-<div style="flex:1;border:1px solid #EDBBBB;border-radius:4px;padding:12px;text-align:center">
-<div style="font-size:9pt;color:#666;margin-bottom:4px">FY 2026/27 Forecast (Jul-Aug)</div>
-<div style="font-size:18pt;font-weight:700;color:#C0392B">-$62,000</div>
-<div style="font-size:9pt;color:#888">Immediate cash flow risk - BD action required</div>
-</div>
-</div>
-<p style="font-size:10pt;line-height:1.6;margin-bottom:16px">[Write a concise 3-4 sentence executive summary covering the FYE result achievement, July-August cash flow risk, and 1-2 key operational highlights from the data. No em dashes, no underlines.]</p>
-
-<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">2. Financial Overview</h2>
-<table style="width:100%;border-collapse:collapse;font-size:9.5pt;margin-bottom:12px">
-<thead><tr style="background:#1A7F64;color:#fff">
-<th style="padding:7px 10px;text-align:left">Period</th>
-<th style="padding:7px 10px;text-align:left">Result</th>
-<th style="padding:7px 10px;text-align:left">Key Driver</th>
-</tr></thead>
-<tbody>
-<tr style="background:#fff"><td style="padding:7px 10px;border:0.5px solid #ddd">FY 2025/26 - Full Year</td><td style="padding:7px 10px;border:0.5px solid #ddd;color:#1A7F64;font-weight:700">+$37,038.11</td><td style="padding:7px 10px;border:0.5px solid #ddd">EPS June invoicing: $89,966.48 ($44,966.46 above target). Diane Kruger and Reinette Kruger maximised end-of-year invoicing to push the year into positive territory.</td></tr>
-<tr style="background:#F9F9F9"><td style="padding:7px 10px;border:0.5px solid #ddd">July-August 2026 Forecast</td><td style="padding:7px 10px;border:0.5px solid #ddd;color:#C0392B;font-weight:700">-$62,000</td><td style="padding:7px 10px;border:0.5px solid #ddd">Pipeline effect from June EPS push; lower July EPS volume expected. PSG venue costs (July and September) add pressure ahead of October revenue.</td></tr>
-<tr style="background:#fff"><td style="padding:7px 10px;border:0.5px solid #ddd">Q2 FY26/27 (October)</td><td style="padding:7px 10px;border:0.5px solid #ddd">TBC</td><td style="padding:7px 10px;border:0.5px solid #ddd">PSG Conference revenue expected Q2. Venue expense obligations in July and September precede realisation. Net contribution to be confirmed.</td></tr>
-</tbody>
-</table>
-<p style="font-size:9pt;color:#555;margin-bottom:10px">Note: EPS monthly targets increased by $5,000/month from FY 2026/27. July volume forecast lower than June given the large end-of-year push.</p>
-<div style="background:#E8F5F1;border-left:3px solid #1A7F64;padding:10px 14px;margin-bottom:16px;font-size:9.5pt;line-height:1.6">
-<strong>COO Assessment</strong><br>
-[Write 3-4 sentences of intelligent COO financial analysis. Acknowledge the positive FYE result but flag that it was driven by an extraordinary invoicing effort not organic monthly trading. Flag the -$62,000 deficit as a structural BD gap. Note PSG cost-before-revenue timing. Recommend CEO present a formal BD action plan with specific targets. No em dashes.]
-</div>
-
-<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">3. People and Culture</h2>
-<p style="font-size:10pt;margin-bottom:8px">[1-2 sentences: total check-ins received, overall team utilisation observation. If Clockify shows a significant team-wide pattern, note it here.]</p>
-
-CROSS-REFERENCE INSTRUCTIONS FOR THIS TABLE:
-For each person, look up BOTH their check-in data AND their Clockify hours from the CLOCKIFY context above.
-- "Reported Cap" = average capacity % from their check-ins this month
-- "Hrs Logged" = actual hours from Clockify for this month (from CLOCKIFY context)
-- "Variance" = compare the two: if Clockify hours are much higher than capacity implies = burnout risk. If much lower = not tracking time or overstating capacity.
-- "Status" = your assessment based on BOTH data sources together, not just one
-- "Key Note" = the most important thing Kandia needs to know about this person — include any blockers, HR matters, workload concerns, achievements. Keep it to 1-2 sentences max.
-- Paul Johnston has no Clockify data (not in system) — note this
-- If someone has no check-in data, note it and use Clockify alone
-
-<table style="width:100%;border-collapse:collapse;font-size:9pt;margin-bottom:16px">
-<thead><tr style="background:#1A7F64;color:#fff">
-<th style="padding:6px 8px;text-align:left">Team Member</th>
-<th style="padding:6px 8px;text-align:left">Role</th>
-<th style="padding:6px 8px;text-align:left">Reported Cap</th>
-<th style="padding:6px 8px;text-align:left">Hrs Logged</th>
-<th style="padding:6px 8px;text-align:left">Status</th>
-<th style="padding:6px 8px;text-align:left">Key Note</th>
-</tr></thead>
-<tbody>
-[For each staff member generate a <tr> with alternating background #fff and #F9F9F9. Each td has padding:6px 8px;border:0.5px solid #ddd.
-- "Reported Cap" cell: show the avg capacity % in bold, e.g. "84%" — colour red if 95%+ (at limit), amber if 85-94%, green if under 85%
-- "Hrs Logged" cell: show Clockify hours for the month, e.g. "127h" — if no Clockify data write "No data"
-- "Status" cell: one of these coloured badges based on your assessment of BOTH data sources:
-  * Stable = green background #E8F5F1, text #1A7F64
-  * Monitor = amber background #FFF3E0, text #E65100
-  * At Limit = red background #FFEBEE, text #C62828
-  * Blocker = dark red background #FFCDD2, text #B71C1C
-- "Key Note" cell: 1-2 sentences covering the most important thing — blockers, achievements, concerns, Clockify vs capacity discrepancy if significant]
-</tbody>
-</table>
-
-<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">4. Client Delivery and Operations</h2>
-<p style="font-size:10pt;margin-bottom:8px">[1-2 sentences on Aurora project management and delivery status.]</p>
-<p style="font-weight:600;margin-bottom:4px;font-size:10pt">Active and Ongoing Delivery</p>
-<table style="width:100%;border-collapse:collapse;font-size:9pt;margin-bottom:12px">
-<thead><tr style="background:#1A7F64;color:#fff">
-<th style="padding:6px 10px;text-align:left">Client</th>
-<th style="padding:6px 10px;text-align:left">Status</th>
-</tr></thead>
-<tbody>
-[List active projects from Aurora data or context as table rows with alternating #fff and #F9F9F9 backgrounds. Each td has padding:6px 10px;border:0.5px solid #ddd]
-</tbody>
-</table>
-[If new business items exist in context, add: <p style="font-weight:600;margin-bottom:6px;font-size:10pt">New Business Activity</p><ul style="margin:0;padding-left:18px;font-size:9.5pt;line-height:1.8">[<li> items]</ul>]
-
-<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">5. Compliance and Risk</h2>
-<p style="font-weight:600;margin-bottom:6px;font-size:10pt">Open Compliance Items</p>
-<ul style="margin:0;padding-left:18px;font-size:9.5pt;line-height:1.8">
-[List open compliance items as <li> items from context. Include ASQA/RTO status, certifications, legal matters, any carry-forward compliance items from previous reports. If nothing, write <li>No open compliance items identified this period.</li>]
-</ul>
-
-<h2 style="color:#1A7F64;font-size:13pt;border-bottom:1px solid #B2D8CE;padding-bottom:4px">6. Items for Board Decision or Awareness</h2>
-<table style="width:100%;border-collapse:collapse;font-size:9pt">
-<thead><tr style="background:#1A7F64;color:#fff">
-<th style="padding:6px 10px;text-align:left">Item</th>
-<th style="padding:6px 10px;text-align:left">Type</th>
-<th style="padding:6px 10px;text-align:left">Recommended Action</th>
-</tr></thead>
-<tbody>
-[Generate 4-7 rows for items requiring board attention. Type: For Noting / For Awareness / For Decision. Always include: financial result, forecast deficit, any compliance matters, any HR matters. Alternating row colours. Each td has padding:6px 10px;border:0.5px solid #ddd]
-</tbody>
-</table>
-
-</div>
-
-DATA FOR THIS REPORT:
+DATA:
 ${context}`;
 
   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
     headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
-    body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:8000, system:systemPrompt, messages:[{role:'user',content:userMsg}] })
+    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:4000,system:sysP,messages:[{role:'user',content:usrP}]})
   });
   const aiData = await aiRes.json();
-  const reportContent = aiData.content?.[0]?.text || 'Report generation failed — please generate manually.';
+  let sections = {};
+  try {
+    let raw = (aiData.content||[]).map(c=>c.text||'').join('');
+    raw = raw.replace(/```json|```/g,'').trim();
+    sections = JSON.parse(raw);
+  } catch(e) {
+    console.error('[BoardReport] JSON parse failed:', e.message);
+    sections = {
+      executiveSummary:'Report generation encountered an error. Please regenerate.',
+      financialTableRows:[],financialAnalysis:'',financeNote:'',
+      peopleIntro:'',peopleRows:[],clientIntro:'',clientRows:[],
+      newBusiness:[],complianceItems:[],boardItems:[]
+    };
+  }
 
-  // Build Word-compatible HTML
-  const docHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-<head><meta charset="utf-8"><title>COO Board Report — ${monthName} ${yr}</title>
-<style>
-body{font-family:Arial,sans-serif;font-size:11pt;margin:2cm 2.5cm;line-height:1.5;color:#111}
-h1{font-size:20pt;color:#1F4E79;border-bottom:2pt solid #1F4E79;padding-bottom:6pt;margin-top:0}
-h2{font-size:14pt;color:#2E75B6;margin-top:20pt;margin-bottom:6pt;border-left:4pt solid #2E75B6;padding-left:8pt}
-h3{font-size:12pt;color:#2E75B6;margin-top:12pt}
-.cover{text-align:center;margin-bottom:40pt;padding:24pt;border:1pt solid #2E75B6;background:#F5F9FF}
-table{border-collapse:collapse;width:100%;margin:8pt 0}
-td,th{border:.5pt solid #CCC;padding:5pt 8pt;font-size:10pt}
-th{background:#EEF3F9;font-weight:bold;text-align:left}
-ul,ol{margin:4pt 0;padding-left:20pt}li{margin-bottom:3pt}
-.highlight{background:#FFF9E6;border-left:3pt solid #F6C90E;padding:6pt 10pt;margin:8pt 0}
-.risk{background:#FFF5F5;border-left:3pt solid #FC8181;padding:6pt 10pt;margin:8pt 0}
-.good{background:#F0FFF4;border-left:3pt solid #68D391;padding:6pt 10pt;margin:8pt 0}
-</style></head>
-<body>
-<div class="cover">
-<h1>COO Board Report</h1>
-<p style="font-size:15pt;color:#2E75B6;margin:6pt 0">Risk 2 Solution</p>
-<p style="font-size:12pt;color:#555">${monthName} ${yr}</p>
-<p style="font-size:10pt;color:#888;margin-top:8pt">Prepared by Kandia Du Bruyn, COO<br>
-For: ${meetingSubject}<br>
-Meeting date: ${meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</p>
-</div>
-${reportContent}
-</body></html>`;
+  // ── BUILD HTML SERVER-SIDE WITH CORRECT TEMPLATE COLORS ──
+  const STYLE = `<style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1A1A1A;background:#fff;line-height:1.5}
+    .page{max-width:800px;margin:0 auto;padding:28px 32px}
+    h2{color:${NAVY};font-size:13pt;border-bottom:1.5px solid #C7D8E8;padding-bottom:5px;margin:20px 0 10px;font-weight:600}
+    table{width:100%;border-collapse:collapse;font-size:9.5pt;margin-bottom:12px}
+    th{background:${NAVY};color:#fff;padding:7px 10px;text-align:left;font-weight:600}
+    td{padding:7px 10px;border:0.5px solid #d0d0d0;vertical-align:top}
+    tr.alt{background:#F5F8FC}
+    .pos{color:${GREEN};font-weight:700}
+    .neg{color:${RED};font-weight:700}
+    .amb{color:${AMBER};font-weight:700}
+    .coo-box{background:#EEF3FB;border-left:3px solid ${NAVY};padding:10px 14px;margin:10px 0 16px;font-size:9.5pt;line-height:1.6}
+    .badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:8.5pt;font-weight:600;white-space:nowrap}
+    .stable{background:#E8F5F1;color:#1E5C3A}
+    .monitor{background:#FFF3E0;color:#7A3D00}
+    .at-limit{background:#FFEBEE;color:#8F0000}
+    .blocker{background:#FFCDD2;color:#6B0000}
+    ul{padding-left:18px;font-size:9.5pt;line-height:1.8}
+    p{font-size:10pt;line-height:1.6;margin-bottom:10px}
+    .meta td{border:0.5px solid #C7D8E8;background:#F5F8FC;font-size:9.5pt;padding:6px 10px}
+    .kpi-row{display:flex;gap:12px;margin-bottom:14px}
+    .kpi{flex:1;border-radius:4px;padding:12px;text-align:center}
+    .kpi-p{border:1.5px solid #B2D4C0}
+    .kpi-n{border:1.5px solid #E8BBBB}
+    .kpi-label{font-size:9pt;color:#666;margin-bottom:4px}
+    .kpi-val-p{font-size:18pt;font-weight:700;color:${GREEN}}
+    .kpi-val-n{font-size:18pt;font-weight:700;color:${RED}}
+    .kpi-sub{font-size:9pt;color:#888}
+  </style>`;
 
-  // Save to blob storage
+  const meetDateStr = meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  // Cover
+  const COVER = `
+  <div style="border-bottom:2.5px solid ${NAVY};padding-bottom:16px;margin-bottom:18px">
+    <div style="font-size:22pt;font-weight:700;color:${NAVY}">COO Board Report</div>
+    <div style="font-size:13pt;color:#444;margin-top:4px">Risk 2 Solution</div>
+    <div style="font-size:11pt;color:#666;margin-top:2px">${monthName} ${yr}</div>
+    <div style="margin-top:10px;font-size:10pt;color:#444">Kandia Du Bruyn, COO<br>For: Board Meeting<br>Meeting date: ${meetDateStr}</div>
+  </div>
+  <table class="meta"><tr>
+    <td><strong>Period:</strong> ${monthName} ${yr}</td>
+    <td><strong>Prepared by:</strong> Kandia Du Bruyn, Chief Operating Officer</td>
+    <td><strong>Meeting:</strong> ${meetDateStr}</td>
+    <td><strong>Classification:</strong> Confidential - Board Only</td>
+  </tr></table>`;
+
+  // Section 1 — Executive Summary
+  const kpiRows = (sections.financialTableRows||[]).slice(0,2);
+  const kpi1 = kpiRows[0]||{};
+  const kpi2 = kpiRows[1]||{};
+  const S1 = `<h2>1. Executive Summary</h2>
+  <div class="kpi-row">
+    <div class="kpi ${kpi1.resultClass==='neg'?'kpi-n':'kpi-p'}">
+      <div class="kpi-label">${kpi1.period||'Current Period'}</div>
+      <div class="${kpi1.resultClass==='neg'?'kpi-val-n':'kpi-val-p'}">${kpi1.result||'—'}</div>
+      <div class="kpi-sub">${kpi1.keyDriver?kpi1.keyDriver.substring(0,60)+'...':''}</div>
+    </div>
+    ${kpi2.period?`<div class="kpi ${kpi2.resultClass==='neg'?'kpi-n':'kpi-p'}">
+      <div class="kpi-label">${kpi2.period}</div>
+      <div class="${kpi2.resultClass==='neg'?'kpi-val-n':'kpi-val-p'}">${kpi2.result}</div>
+      <div class="kpi-sub">${(kpi2.keyDriver||'').substring(0,60)+'...'}</div>
+    </div>`:''}
+  </div>
+  <p>${sections.executiveSummary||''}</p>`;
+
+  // Section 2 — Financial Overview
+  const finRows = (sections.financialTableRows||[]).map((r,i) =>
+    `<tr ${i%2?'class="alt"':''}><td>${r.period||''}</td><td class="${r.resultClass==='neg'?'neg':r.resultClass==='pos'?'pos':''}">${r.result||''}</td><td>${r.keyDriver||''}</td></tr>`
+  ).join('');
+  const S2 = `<h2>2. Financial Overview</h2>
+  <table><thead><tr><th>Period</th><th>Result</th><th>Key Driver</th></tr></thead>
+  <tbody>${finRows||'<tr><td colspan="3">No financial data available - check Diane\'s finance emails are in scope.</td></tr>'}</tbody></table>
+  ${sections.financeNote?`<p style="font-size:9pt;color:#555">Note: ${sections.financeNote}</p>`:''}
+  <div class="coo-box"><strong>COO Assessment</strong><br>${sections.financialAnalysis||''}</div>`;
+
+  // Section 3 — People & Culture
+  const pRows = (sections.peopleRows||[]).map((p,i) => {
+    const badge = p.status==='at-limit'?'at-limit':p.status==='blocker'?'blocker':p.status==='monitor'?'monitor':'stable';
+    return `<tr ${i%2?'class="alt"':''}><td><strong>${p.name||''}</strong></td><td>${p.role||''}</td><td style="text-align:center">${p.capacity||'-'}</td><td style="text-align:center">${p.hours||'No data'}</td><td><span class="badge ${badge}">${(p.status||'stable').charAt(0).toUpperCase()+(p.status||'stable').slice(1).replace('-',' ')}</span></td><td>${p.note||''}</td></tr>`;
+  }).join('');
+  const S3 = `<h2>3. People and Culture</h2>
+  <p>${sections.peopleIntro||''}</p>
+  <table><thead><tr><th>Team Member</th><th>Role</th><th>Reported Capacity</th><th>Hrs Logged (Clockify)</th><th>Status</th><th>Key Note</th></tr></thead>
+  <tbody>${pRows||'<tr><td colspan="6">No check-in data available.</td></tr>'}</tbody></table>`;
+
+  // Section 4 — Client Delivery
+  const clRows = (sections.clientRows||[]).map((r,i) =>
+    `<tr ${i%2?'class="alt"':''}><td>${r.client||''}</td><td>${r.status||''}</td></tr>`
+  ).join('');
+  const nbItems = (sections.newBusiness||[]).map(b=>`<li>${b}</li>`).join('');
+  const S4 = `<h2>4. Client Delivery and Operations</h2>
+  <p>${sections.clientIntro||''}</p>
+  <p style="font-weight:600;margin-bottom:4px">Active and Ongoing Delivery</p>
+  <table><thead><tr><th>Client</th><th>Status</th></tr></thead>
+  <tbody>${clRows||'<tr><td colspan="2">No active project data.</td></tr>'}</tbody></table>
+  ${nbItems?`<p style="font-weight:600;margin:10px 0 4px">New Business Activity</p><ul>${nbItems}</ul>`:''}`
+
+  // Section 5 — Compliance
+  const compItems = (sections.complianceItems||[]).map(c=>`<li>${c}</li>`).join('');
+  const S5 = `<h2>5. Compliance and Risk</h2>
+  <p style="font-weight:600;margin-bottom:6px">Open Compliance Items</p>
+  <ul>${compItems||'<li>No open compliance items identified this period.</li>'}</ul>`;
+
+  // Section 6 — Board Items
+  const bRows = (sections.boardItems||[]).map((b,i) => {
+    const typeCol = b.type==='For Decision'?`color:${RED};font-weight:600`:b.type==='For Awareness'?`color:${AMBER};font-weight:600`:'';
+    return `<tr ${i%2?'class="alt"':''}><td>${b.item||''}</td><td style="${typeCol}">${b.type||''}</td><td>${b.action||''}</td></tr>`;
+  }).join('');
+  const S6 = `<h2>6. Items for Board Decision or Awareness</h2>
+  <table><thead><tr><th>Item</th><th>Type</th><th>Recommended Action</th></tr></thead>
+  <tbody>${bRows||'<tr><td colspan="3">No items for board this period.</td></tr>'}</tbody></table>`;
+
+  const reportHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset="utf-8"><title>COO Board Report - ${monthName} ${yr}</title>${STYLE}</head>
+<body><div class="page">${COVER}${S1}${S2}${S3}${S4}${S5}${S6}</div></body></html>`;
+
+  const docHtml = reportHtml; // built server-side above
   const filename = 'board-report-'+yr+'-'+String(mm+1).padStart(2,'0')+'.doc';
   try {
     const cc = await getBlobContainer();
