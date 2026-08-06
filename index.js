@@ -1189,7 +1189,6 @@ async function generateBoardReport(meetingDate, meetingSubject) {
         subj.match(/payroll|month.?end|year.?end|finance|financial|invoice|budget|reconcil|p.?l|profit|revenue|fy2|fy 2|year to date|ytd|cash flow|forecast|update|report|monthly|july|august|june|may|april|march|quarter/i);
     });
     console.log('[BoardReport] Finance emails found:', financeEmails.length, financeEmails.map(e=>e.subject).join(' | '));
-    console.log('[BoardReport] Strategic emails found:', strategicEmails.length);
     if (financeEmails.length > 0) {
       context += 'FINANCE EMAILS — ' + monthName + ' (use these figures for financial overview):\n';
       financeEmails.slice(0,15).forEach(e => {
