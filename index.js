@@ -1560,7 +1560,7 @@ Generate a COO Board Paper for ${monthName} ${yr}. Output ONLY valid JSON - no m
 JSON structure required:
 {"executiveSummary":"string","financialTableRows":[{"period":"","result":"","resultClass":"pos or neg","keyDriver":""}],"financeNote":"string","financialAnalysis":"string","peopleIntro":"string","peopleRows":[{"name":"","role":"","capacity":"","hours":"","status":"stable or monitor or at-limit or blocker","note":""}],"clientIntro":"string","clientRows":[{"client":"","status":""}],"newBusiness":["string"],"complianceItems":["string"],"boardItems":[{"item":"","type":"For Noting or For Awareness or For Decision","action":""}]}
 
-DEPTH AND SPECIFICITY - CRITICAL. Every field must contain specific facts, names, figures, and dates. Generic filler is not acceptable.
+DEPTH AND SPECIFICITY - CRITICAL. Every field must contain specific facts, names, figures, and dates. Generic filler is not acceptable. Keep each field concise - 1-3 sentences max per field. The entire JSON response must stay under 6000 tokens.
 
 FINANCIAL:
 - Use ONLY figures from FINANCE EMAILS and KEY FINANCIAL FIGURES EXTRACTED in context
@@ -1604,7 +1604,7 @@ ${context}`;
   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
     headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
-    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:6000,system:sysP,messages:[{role:'user',content:usrP}]})
+    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:8000,system:sysP,messages:[{role:'user',content:usrP}]})
   });
   if (!aiRes.ok) {
     const errText = await aiRes.text();
@@ -1617,19 +1617,38 @@ ${context}`;
   let sections = {};
   try {
     let raw = (aiData.content||[]).map(c=>c.text||'').join('');
-    console.log('[BoardReport] Raw AI response (first 500):', raw.substring(0,500));
-    // Strip any markdown wrappers
+    console.log('[BoardReport] Raw AI response length:', raw.length, '| stop_reason:', aiData.stop_reason);
     raw = raw.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'').trim();
-    // Find JSON object if there's extra text around it
     const jsonMatch = raw.match(/(\{[\s\S]*\})/);
     if (jsonMatch) raw = jsonMatch[1];
-    sections = JSON.parse(raw);
-    console.log('[BoardReport] JSON parsed successfully — sections:', Object.keys(sections).join(', '));
+
+    try {
+      sections = JSON.parse(raw);
+    } catch(parseErr) {
+      console.warn('[BoardReport] Direct parse failed, attempting repair:', parseErr.message);
+      let repaired = raw;
+      let openBrackets = 0, openBraces = 0, inString = false, escaped = false;
+      for (const ch of repaired) {
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\\\') { escaped = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === '[') openBrackets++;
+        else if (ch === ']') openBrackets = Math.max(0, openBrackets-1);
+        else if (ch === '{') openBraces++;
+        else if (ch === '}') openBraces = Math.max(0, openBraces-1);
+      }
+      if (inString) repaired += '"';
+      while (openBrackets > 0) { repaired += ']'; openBrackets--; }
+      while (openBraces > 0) { repaired += '}'; openBraces--; }
+      sections = JSON.parse(repaired);
+      console.log('[BoardReport] JSON repaired and parsed successfully');
+    }
+    console.log('[BoardReport] Sections:', Object.keys(sections).join(', '));
   } catch(e) {
-    const rawContent = (aiData.content||[]).map(c=>c.text||'').join('').substring(0,1000);
-    console.error('[BoardReport] JSON parse failed:', e.message, '\nRaw content:', rawContent);
-    // Re-throw so the outer catch in checkBoardMeetingSchedule logs it and retries
-    throw new Error('Board report JSON parse failed — check Azure logs for raw AI response. Error: ' + e.message);
+    const rawContent = (aiData.content||[]).map(c=>c.text||'').join('').substring(0,1500);
+    console.error('[BoardReport] JSON parse failed:', e.message, '\nRaw:', rawContent);
+    throw new Error('Board report JSON parse failed — check Azure logs. Error: ' + e.message);
   }
 
   // ── BUILD HTML SERVER-SIDE WITH CORRECT TEMPLATE COLORS ──
