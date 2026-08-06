@@ -1297,27 +1297,40 @@ async function generateBoardReport(meetingDate, meetingSubject) {
         context += 'Reports found: ' + pastReports.map(r => r.name).join(', ') + '\n\n';
 
         for (const report of reportsToRead) {
+          // Skip the current month's report to avoid circular reference
+          const reportMonth = report.name.match(/(\d{4}-\d{2})/)?.[1];
+          const currentMonthKey = yr + '-' + String(mm+1).padStart(2,'0');
+          if (reportMonth === currentMonthKey) {
+            console.log('[BoardReport] Skipping current month report:', report.name);
+            continue;
+          }
           try {
             const bc = cc.getBlockBlobClient(report.name);
             const buf = await bc.downloadToBuffer();
-            // Strip HTML tags to extract plain text
             const raw = buf.toString('utf8');
-            const text = raw
+            let text = raw
               .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
               .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
               .replace(/<[^>]+>/g, ' ')
-              .replace(/&nbsp;/g, ' ')
-              .replace(/&amp;/g, '&')
-              .replace(/&lt;/g, '<')
-              .replace(/&gt;/g, '>')
-              .replace(/\s+/g, ' ')
-              .trim()
-              .substring(0, 3000); // Cap at 3000 chars per report to manage token usage
-            context += 'REPORT: ' + report.name + '\n';
-            context += text + '\n\n';
-            console.log('[BoardReport] Read past report:', report.name, '(' + text.length + ' chars extracted)');
+              .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+              .replace(/\s+/g, ' ').trim();
+            // Extract only carry-forward sections — items for board, compliance, open actions
+            // Do NOT pass financial figures from old reports — they poison the current report
+            const carryForwardMarkers = [
+              'items for board', 'board decision', 'board awareness', 'carry forward',
+              'compliance', 'open action', 'outstanding', 'pending', 'follow up',
+              'disp', 'emdg', 'asqa', 'rto', 'workers comp', 'legal', 'tender'
+            ];
+            const sentences = text.split(/\.\s+/);
+            const relevant = sentences.filter(s => {
+              const sl = s.toLowerCase();
+              return carryForwardMarkers.some(m => sl.includes(m));
+            }).join('. ');
+            const carryText = (relevant || text).substring(0, 1500);
+            context += 'CARRY-FORWARD FROM ' + report.name + ' (open items only — do NOT reuse financial figures from this report):\n';
+            context += carryText + '\n\n';
+            console.log('[BoardReport] Read past report for carry-forward:', report.name, '(' + carryText.length + ' chars)');
           } catch(readErr) {
-            context += 'REPORT: ' + report.name + ' — could not read content: ' + readErr.message + '\n\n';
             console.warn('[BoardReport] Could not read', report.name, ':', readErr.message);
           }
         }
@@ -1533,7 +1546,14 @@ The JSON must have exactly these keys:
 RULES:
 - Use ONLY data from the context provided - never invent figures or names
 - EMAILS ARE PRIMARY SOURCE: Read ALL email content in context carefully before generating any section
-- financialTableRows: USE ONLY figures from FINANCE EMAILS in the context. IMPORTANT: Diane Kruger (Corporate Operations Lead) sends the monthly P&L/finance update in the first week of the FOLLOWING month. So for a July report, look for an email from Diane in early August (around 1-7 Aug) with subject containing P&L, July results, finance update, or monthly report. Use her EXACT dollar figures. Do NOT use any June or historical figures unless the current month emails confirm they are still relevant. resultClass "pos" if positive, "neg" if negative. If no finance email found in context, write "Awaiting month-end finance report from Diane Kruger" in the result column.
+- financialTableRows: CRITICAL — use ONLY figures from FINANCE EMAILS section in context. STRICT RULES:
+  * The report period is ${monthName} ${yr}. Financial rows must show ${monthName} results — NOT prior month or FYE data.
+  * $37,038.11 was the FY2025/26 YEAR-END result. Do NOT put it in a July or August board report financial table. It may appear as background context ONLY if an email explicitly references it.
+  * -$62,000 was a July-August FORECAST from July. Do not repeat it unless Diane's current email confirms it is still accurate.
+  * Look in FINANCE EMAILS for Diane Kruger's ${monthName} P&L email (usually sent first week of following month). Use THOSE exact figures.
+  * If the finance email shows e.g. "July result: +$15,000" then put that. If it shows a loss, put that.
+  * If no current-month finance email exists in context, output: [{"period":"${monthName} ${yr}","result":"Awaiting P&L from Diane Kruger","resultClass":"","keyDriver":"Finance report not yet available for this period"}]
+  * Generate 2-3 rows: current month actual, YTD if available, forecast if available.
 - DISP application, EMDG grant, staff conference, ASQA/RTO renewals, legal matters, tenders: if emails mention these, they MUST appear in compliance, board items, or executive summary sections
 - boardItems: include EVERY significant matter from emails - DISP status, EMDG grant decisions, legal proceedings, staff welfare, conference planning, pending CEO approvals
 - peopleRows: cross-reference check-in capacity % with Clockify hours. Flag if hours logged significantly exceed or undercut implied hours (capacity% x 37.5h per week x weeks in month). Include Paul Johnston with "No data" for hours.
@@ -1859,6 +1879,53 @@ app.get('/board-report/debug', requireAuth, (req, res) => {
   const now = new Date();
   const dayOfWeek = now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
   res.json({ state, dayOfWeek, serverTime: now.toISOString(), brisbaneTime: now.toLocaleString('en-AU',{timeZone:'Australia/Brisbane'}) });
+});
+
+// Debug emails — shows exactly what emails the board report would capture
+app.get('/board-report/debug-emails', requireAuth, async (req, res) => {
+  try {
+    // Default to current report month (last month)
+    const now = new Date();
+    const reportDate = new Date(now); reportDate.setMonth(reportDate.getMonth() - 1);
+    const mm = reportDate.getMonth();
+    const yy = reportDate.getFullYear();
+    const monthName = reportDate.toLocaleString('en-AU',{month:'long'});
+
+    const since = new Date(yy, mm, 1).toISOString();
+    const nowStr = now.toISOString();
+
+    const emailData = await graphGet(
+      `/me/messages?$top=150&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${nowStr}` +
+      `&$select=subject,from,bodyPreview,importance,receivedDateTime&$orderby=receivedDateTime desc`
+    );
+    const emails = emailData.value || [];
+
+    const financeEmails = emails.filter(e => {
+      const from = (e.from?.emailAddress?.name||'').toLowerCase();
+      const subj = (e.subject||'').toLowerCase();
+      return from.includes('diane') || from.includes('kruger') ||
+        subj.match(/payroll|month.?end|year.?end|finance|financial|invoice|budget|reconcil|p.?l|profit|revenue|fy2|fy 2|year to date|ytd|cash flow|forecast|update|report|monthly|july|august|june|may|april|march|quarter/i);
+    });
+
+    res.json({
+      period: monthName + ' ' + yy,
+      since, nowStr,
+      totalEmails: emails.length,
+      financeEmails: financeEmails.map(e => ({
+        from: e.from?.emailAddress?.name,
+        subject: e.subject,
+        date: e.receivedDateTime,
+        preview: e.bodyPreview?.substring(0,200)
+      })),
+      allSubjects: emails.map(e => ({
+        from: e.from?.emailAddress?.name,
+        subject: e.subject,
+        date: e.receivedDateTime?.substring(0,10)
+      }))
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Test email — sends a simple test to Kandia and returns the exact API response
