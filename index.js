@@ -1168,7 +1168,84 @@ async function generateBoardReport(meetingDate, meetingSubject) {
 
   let context = 'BOARD REPORT CONTEXT\n===================\n\n';
 
-  // 1. Staff check-ins for the month
+  // 1. ALL EMAILS — PRIORITY FIRST — broad fetch, rich content, prioritised first in context
+  try {
+    // Fetch from start of report month to now (catches Diane's month-end emails sent after month close)
+    const since = new Date(yy, mm, 1).toISOString();
+    const nowStr = new Date().toISOString();
+    // Use bodyPreview (clean 255-char text, no HTML stripping needed) + full body for key emails
+    const emailData = await graphGet(
+      `/me/messages?$top=150&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${nowStr}` +
+      `&$select=subject,from,bodyPreview,body,importance,receivedDateTime&$orderby=receivedDateTime desc`
+    );
+    const emails = emailData.value || [];
+    console.log('[BoardReport] Fetched', emails.length, 'emails from', monthName);
+
+    // CATEGORY 1 — Finance emails (Diane or finance keywords) — get full body content
+    const financeEmails = emails.filter(e => {
+      const from = (e.from?.emailAddress?.name||'').toLowerCase();
+      const subj = (e.subject||'').toLowerCase();
+      return from.includes('diane') || from.includes('kruger') ||
+        subj.match(/payroll|month.?end|year.?end|finance|financial|invoice|budget|reconcil|p&l|profit|revenue|fy2|fy 2|year to date|ytd|cash flow|forecast/);
+    });
+    if (financeEmails.length > 0) {
+      context += 'FINANCE EMAILS — ' + monthName + ' (use these figures for financial overview):\n';
+      financeEmails.slice(0,15).forEach(e => {
+        const htmlBody = e.body?.content || '';
+        // Strip HTML thoroughly to get actual content
+        const bodyText = htmlBody
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+          .replace(/\s+/g, ' ').trim();
+        // Take up to 800 chars of body for finance emails
+        const bodyPreview = bodyText.substring(0, 800);
+        const date = e.receivedDateTime ? new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) : '';
+        context += `FROM: ${e.from?.emailAddress?.name||'?'} (${date})\nSUBJECT: ${e.subject}\nCONTENT: ${bodyPreview}\n\n`;
+      });
+    }
+
+    // CATEGORY 2 — Strategic/operational emails (DISP, EMDG, grants, compliance, legal, staff events, conference, tenders)
+    const STRATEGIC_KEYWORDS = [
+      'disp','clearance','security clearance','emdg','grant','tender','conference','staff event',
+      'asqa','rto','accreditation','renewal','compliance','audit','legal','court','tribunal',
+      'auruba','immigration','visa','contract','partnership','proposal','onboarding',
+      'workers comp','payroll tax','bas','gst','annual leave','recruitment','hiring',
+      'resign','termination','performance','incident','injury','welfare',
+      'psg','pss','iop','eps','presilience','risk management','emergency planning'
+    ];
+    const strategicEmails = emails.filter(e => {
+      if (financeEmails.includes(e)) return false;
+      const subj = (e.subject||'').toLowerCase();
+      const preview = (e.bodyPreview||'').toLowerCase();
+      return STRATEGIC_KEYWORDS.some(k => subj.includes(k) || preview.includes(k)) || e.importance === 'high';
+    });
+    if (strategicEmails.length > 0) {
+      context += 'STRATEGIC & OPERATIONAL EMAILS — ' + monthName + ':\n';
+      strategicEmails.slice(0,30).forEach(e => {
+        const htmlBody = e.body?.content || '';
+        const bodyText = htmlBody
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ').trim();
+        const bodyPreview = bodyText.substring(0, 400);
+        const date = e.receivedDateTime ? new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) : '';
+        context += `FROM: ${e.from?.emailAddress?.name||'?'} (${date}) — ${e.subject}\n${bodyPreview}\n\n`;
+      });
+    }
+
+    // CATEGORY 3 — All other emails (subjects only for breadth)
+    const otherEmails = emails.filter(e => !financeEmails.includes(e) && !strategicEmails.includes(e)).slice(0,30);
+    if (otherEmails.length > 0) {
+      context += 'OTHER EMAILS — ' + monthName + ' (subjects):\n';
+      otherEmails.forEach(e => {
+        context += `- ${e.from?.emailAddress?.name||'?'}: ${e.subject}${e.importance==='high'?' [HIGH]':''}\n`;
+      });
+      context += '\n';
+    }
+  } catch(e) { console.warn('[BoardReport] Email fetch:', e.message); }
+
+  // 2. Staff check-ins for the month
   try {
     const raw = JSON.parse(readFileSync('/home/checkins.json','utf8')||'[]');
     const monthly = raw.filter(c => {
@@ -1207,37 +1284,6 @@ CINDERELLA FINANCIAL ANALYSIS REQUIRED:
 - Recommend Business Development focus: months need to be in the black. The EPS push model is not sustainable without consistent BD pipeline. The board should consider what BD activities and targets are in place for July-August to close this gap.
 - Note the PSG Conference as a positive revenue event in October but flag that venue costs in July/September will increase the short-term deficit before PSG revenue is realised.
 - Recommend Kandia present a BD action plan at next month's board meeting.\n\n`;
-
-  // 2. Emails from the report month AND current month (finance updates often arrive after month close)
-  try {
-    const since = new Date(yy, mm, 1).toISOString();
-    const nowStr = new Date().toISOString();
-    const emailData = await graphGet(`/me/messages?$top=80&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${nowStr}&$select=subject,from,body,importance,receivedDateTime&$orderby=receivedDateTime desc`);
-    const emails = emailData.value || [];
-    // Finance emails (from Diane or about finance/payroll/month end)
-    const financeEmails = emails.filter(e => {
-      const from = (e.from?.emailAddress?.name||'').toLowerCase();
-      const subj = (e.subject||'').toLowerCase();
-      return from.includes('diane') || subj.match(/payroll|month.?end|year.?end|finance|financial|invoice|budget|reconcil|p&l|profit|revenue/);
-    });
-    if (financeEmails.length > 0) {
-      context += 'FINANCE & OPERATIONS EMAILS ('+monthName+'):\n';
-      financeEmails.slice(0,10).forEach(e => {
-        const preview = (e.body?.content||'').replace(/<[^>]*>/g,'').replace(/\s+/g,' ').substring(0,200);
-        context += '- From '+( e.from?.emailAddress?.name||'?')+': '+e.subject+'\n  '+preview+'\n';
-      });
-      context += '\n';
-    }
-    // Other key emails
-    const otherEmails = emails.filter(e => !financeEmails.includes(e)).slice(0,20);
-    if (otherEmails.length > 0) {
-      context += 'OTHER KEY EMAILS ('+monthName+'):\n';
-      otherEmails.forEach(e => {
-        context += '- '+(e.from?.emailAddress?.name||'?')+': '+e.subject+(e.importance==='high'?' [HIGH PRIORITY]':'')+'\n';
-      });
-      context += '\n';
-    }
-  } catch(e) { console.warn('[BoardReport] Email fetch:', e.message); }
 
   // 3. Document library - read actual content of past board reports + list other docs
   try {
@@ -1471,7 +1517,7 @@ CINDERELLA FINANCIAL ANALYSIS REQUIRED:
   const AMBER = '#D68910';
 
   // Truncate context before building prompt to avoid token limit
-  const MAX_CTX = 22000;
+  const MAX_CTX = 40000;
   if (context.length > MAX_CTX) {
     console.warn('[BoardReport] Context truncated from', context.length, 'to', MAX_CTX, 'chars');
     context = context.substring(0, MAX_CTX) + '\n[Context truncated]';
@@ -1498,7 +1544,10 @@ The JSON must have exactly these keys:
 
 RULES:
 - Use ONLY data from the context provided - never invent figures or names
-- financialTableRows: derive from current month finance emails in context. If Diane sent a month-end email for ${monthName}, use those figures. resultClass is "pos" if positive result, "neg" if negative.
+- EMAILS ARE PRIMARY SOURCE: Read ALL email content in context carefully before generating any section
+- financialTableRows: use figures from FINANCE EMAILS section in context. Diane Kruger (Corporate Operations Lead) sends monthly finance updates - use her exact figures. resultClass "pos" if positive, "neg" if negative.
+- DISP application, EMDG grant, staff conference, ASQA/RTO renewals, legal matters, tenders: if emails mention these, they MUST appear in compliance, board items, or executive summary sections
+- boardItems: include EVERY significant matter from emails - DISP status, EMDG grant decisions, legal proceedings, staff welfare, conference planning, pending CEO approvals
 - peopleRows: cross-reference check-in capacity % with Clockify hours. Flag if hours logged significantly exceed or undercut implied hours (capacity% x 37.5h per week x weeks in month). Include Paul Johnston with "No data" for hours.
 - boardItems: 4-6 items. Always include financial result, any significant compliance items, any HR or staffing matters.
 - No em dashes anywhere. Use hyphen (-) instead.
