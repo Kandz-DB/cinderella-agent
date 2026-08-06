@@ -1185,8 +1185,12 @@ async function generateBoardReport(meetingDate, meetingSubject) {
     const financeEmails = emails.filter(e => {
       const from = (e.from?.emailAddress?.name||'').toLowerCase();
       const subj = (e.subject||'').toLowerCase();
-      return from.includes('diane') || from.includes('kruger') ||
-        subj.match(/payroll|month.?end|year.?end|finance|financial|invoice|budget|reconcil|p.?l|profit|revenue|fy2|fy 2|year to date|ytd|cash flow|forecast|update|report|monthly|july|august|june|may|april|march|quarter/i);
+      // Exclude Cinderella's own board report notification emails
+      if (subj.includes('board report ready')) return false;
+      // Prioritise emails FROM Diane/Kruger - she sends the monthly P&L
+      if (from.includes('diane') || from.includes('kruger')) return true;
+      // Tight subject keywords only - avoid noise like 'report' or 'monthly'
+      return !!subj.match(/payroll|month.?end|year.?end|p&l|profit.?loss|revenue|budget|reconcil|fy2|fy 2|year to date|ytd|cash flow|forecast/i);
     });
     console.log('[BoardReport] Finance emails found:', financeEmails.length, financeEmails.map(e=>e.subject).join(' | '));
     if (financeEmails.length > 0) {
@@ -1551,6 +1555,7 @@ RULES:
   * -$62,000 was a July-August FORECAST from July. Do not repeat it unless Diane's current email confirms it is still accurate.
   * Look in FINANCE EMAILS for Diane Kruger's ${monthName} P&L email (usually sent first week of following month). Use THOSE exact figures.
   * If the finance email shows e.g. "July result: +$15,000" then put that. If it shows a loss, put that.
+  * Diane Kruger sent "P&L July 2026" on 3 Aug 2026 stating July closed positive at $17,209.41 - if this appears in FINANCE EMAILS, use that exact figure.
   * If no current-month finance email exists in context, output: [{"period":"${monthName} ${yr}","result":"Awaiting P&L from Diane Kruger","resultClass":"","keyDriver":"Finance report not yet available for this period"}]
   * Generate 2-3 rows: current month actual, YTD if available, forecast if available.
 - DISP application, EMDG grant, staff conference, ASQA/RTO renewals, legal matters, tenders: if emails mention these, they MUST appear in compliance, board items, or executive summary sections
@@ -1902,8 +1907,12 @@ app.get('/board-report/debug-emails', requireAuth, async (req, res) => {
     const financeEmails = emails.filter(e => {
       const from = (e.from?.emailAddress?.name||'').toLowerCase();
       const subj = (e.subject||'').toLowerCase();
-      return from.includes('diane') || from.includes('kruger') ||
-        subj.match(/payroll|month.?end|year.?end|finance|financial|invoice|budget|reconcil|p.?l|profit|revenue|fy2|fy 2|year to date|ytd|cash flow|forecast|update|report|monthly|july|august|june|may|april|march|quarter/i);
+      // Exclude Cinderella's own board report notification emails
+      if (subj.includes('board report ready')) return false;
+      // Prioritise emails FROM Diane/Kruger - she sends the monthly P&L
+      if (from.includes('diane') || from.includes('kruger')) return true;
+      // Tight subject keywords only - avoid noise like 'report' or 'monthly'
+      return !!subj.match(/payroll|month.?end|year.?end|p&l|profit.?loss|revenue|budget|reconcil|fy2|fy 2|year to date|ytd|cash flow|forecast/i);
     });
 
     res.json({
