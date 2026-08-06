@@ -1586,6 +1586,18 @@ async function generateBoardReportManual() {
   }
 }
 
+async function resetBoardReportState() {
+  if (!confirm('This will clear the board report state so Cinderella can generate a fresh report. Continue?')) return;
+  try {
+    var r = await fetch('/board-report/reset-state', {method:'POST', headers:{'Content-Type':'application/json'}});
+    var d = await r.json();
+    if (d.success) {
+      await loadBoardReportStatus();
+      showToast('Board report state cleared — Cinderella will generate a fresh report on Thursday, or click Generate now.');
+    }
+  } catch(e) { showToast('Error: ' + e.message); }
+}
+
 async function forceSendBoardReport() {
   var el = document.getElementById('boardReportStatus');
   if (!confirm('This will generate the board report AND email it to you now. Continue?')) return;
@@ -5014,7 +5026,7 @@ function closeModal(){document.getElementById('modal').classList.remove('open');
 
 const SYS=[
 
-  'You are Cinderella, the personal executive assistant to Kandia Robertson, COO of Risk 2 Solution Group — Australia\'s most awarded integrated risk management company.',
+  'You are Cinderella, the personal executive assistant to Kandia Du Bruyn, COO of Risk 2 Solution Group — Australia\'s most awarded integrated risk management company.',
 
   '',
 
@@ -6371,7 +6383,7 @@ async function loadOpenActions(force) {
     ? '\n\nCRITICAL THURSDAY RULE: Today is Thursday. If there is a board meeting next week (any day Mon-Fri), the COO Board Report MUST be finalised and submitted TODAY — not next week. Flag this as URGENT regardless of when the meeting is. Kandia generates and reviews the board paper on the Thursday before every board meeting.'
     : '';
 
-  var prompt = 'You are Cinderella, COO assistant to Kandia Robertson at Risk 2 Solution. Review the data below and list 5-8 real open action items Kandia needs to act on. Format each as:\n\n[URGENCY] Action description — Source\n\nUrgency options: URGENT / THIS WEEK / NEXT WEEK\n\nRules:\n- URGENT = needs action today or is critically overdue\n- THIS WEEK = must happen before Friday\n- NEXT WEEK = can wait until next week\n- If today is Thursday and a board meeting is next week, the board paper is URGENT (due today)\n- Be specific: name people, subjects, deadlines\n- Always return at least 5 items' + thursdayNote + auroraActionsCtx + '\n\nEMAILS:\n' + emailLines + (infoLines ? '\n' + infoLines : '') + (teamsLines ? '\n\nTEAMS:\n' + teamsLines : '') + '\n\nDOCUMENTS:\n' + docLines + '\n\nSTAFF BLOCKERS:\n' + blockerLines;
+  var prompt = 'You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution. Review the data below and list 5-8 real open action items Kandia needs to act on. Format each as:\n\n[URGENCY] Action description — Source\n\nUrgency options: URGENT / THIS WEEK / NEXT WEEK\n\nRules:\n- URGENT = needs action today or is critically overdue\n- THIS WEEK = must happen before Friday\n- NEXT WEEK = can wait until next week\n- If today is Thursday and a board meeting is next week, the board paper is URGENT (due today)\n- Be specific: name people, subjects, deadlines\n- Always return at least 5 items' + thursdayNote + auroraActionsCtx + '\n\nEMAILS:\n' + emailLines + (infoLines ? '\n' + infoLines : '') + (teamsLines ? '\n\nTEAMS:\n' + teamsLines : '') + '\n\nDOCUMENTS:\n' + docLines + '\n\nSTAFF BLOCKERS:\n' + blockerLines;
 
     var r = await fetch('/proxy', {
       method: 'POST',
