@@ -1186,8 +1186,10 @@ async function generateBoardReport(meetingDate, meetingSubject) {
       const from = (e.from?.emailAddress?.name||'').toLowerCase();
       const subj = (e.subject||'').toLowerCase();
       return from.includes('diane') || from.includes('kruger') ||
-        subj.match(/payroll|month.?end|year.?end|finance|financial|invoice|budget|reconcil|p&l|profit|revenue|fy2|fy 2|year to date|ytd|cash flow|forecast/);
+        subj.match(/payroll|month.?end|year.?end|finance|financial|invoice|budget|reconcil|p.?l|profit|revenue|fy2|fy 2|year to date|ytd|cash flow|forecast|update|report|monthly|july|august|june|may|april|march|quarter/i);
     });
+    console.log('[BoardReport] Finance emails found:', financeEmails.length, financeEmails.map(e=>e.subject).join(' | '));
+    console.log('[BoardReport] Strategic emails found:', strategicEmails.length);
     if (financeEmails.length > 0) {
       context += 'FINANCE EMAILS — ' + monthName + ' (use these figures for financial overview):\n';
       financeEmails.slice(0,15).forEach(e => {
@@ -1268,22 +1270,8 @@ async function generateBoardReport(meetingDate, meetingSubject) {
     }
   } catch(e) {}
 
-  // HARDCODED FINANCIAL DATA from Diane's confirmed FYE email (6 July 2026)
-  context += `CONFIRMED FINANCIAL DATA — from Diane Kruger email (Corporate Operations Lead) dated 6 July 2026:
-- FY 2025/26 FINAL RESULT: Year ended POSITIVE at $37,038.11
-- KEY DRIVER: EPS (Emergency Planning Services) invoiced $89,966.48 in June — $44,966.46 above target. Diane and Reinette worked to maximise invoicing to push the year into positive.
-- FY26/27 FORECAST (July-August): Currently NEGATIVE $62,000. This is a cash flow risk requiring immediate attention.
-- EPS targets increased by $5,000/month from FY26/27.
-- July EPS volume expected to be lower than June (due to the large June push — pipeline effect).
-- Q2 FY26/27 (October): PSG Conference revenue expected. However PSG venue expenses fall into July and September payments — creating short-term cash pressure.
-- Diane attached: June P&L, FY25/26 Annual P&L, and FY Executive Summary (available in email attachments).
+  // Hardcoded financial data removed — report now uses live email data only
 
-CINDERELLA FINANCIAL ANALYSIS REQUIRED:
-- Highlight the positive FYE result as a win — but with context that it was achieved by a large June push that may impact July.
-- Flag the -$62k forecast as a significant risk requiring board awareness.
-- Recommend Business Development focus: months need to be in the black. The EPS push model is not sustainable without consistent BD pipeline. The board should consider what BD activities and targets are in place for July-August to close this gap.
-- Note the PSG Conference as a positive revenue event in October but flag that venue costs in July/September will increase the short-term deficit before PSG revenue is realised.
-- Recommend Kandia present a BD action plan at next month's board meeting.\n\n`;
 
   // 3. Document library - read actual content of past board reports + list other docs
   try {
@@ -1545,7 +1533,7 @@ The JSON must have exactly these keys:
 RULES:
 - Use ONLY data from the context provided - never invent figures or names
 - EMAILS ARE PRIMARY SOURCE: Read ALL email content in context carefully before generating any section
-- financialTableRows: use figures from FINANCE EMAILS section in context. Diane Kruger (Corporate Operations Lead) sends monthly finance updates - use her exact figures. resultClass "pos" if positive, "neg" if negative.
+- financialTableRows: USE ONLY figures from FINANCE EMAILS in the context. IMPORTANT: Diane Kruger (Corporate Operations Lead) sends the monthly P&L/finance update in the first week of the FOLLOWING month. So for a July report, look for an email from Diane in early August (around 1-7 Aug) with subject containing P&L, July results, finance update, or monthly report. Use her EXACT dollar figures. Do NOT use any June or historical figures unless the current month emails confirm they are still relevant. resultClass "pos" if positive, "neg" if negative. If no finance email found in context, write "Awaiting month-end finance report from Diane Kruger" in the result column.
 - DISP application, EMDG grant, staff conference, ASQA/RTO renewals, legal matters, tenders: if emails mention these, they MUST appear in compliance, board items, or executive summary sections
 - boardItems: include EVERY significant matter from emails - DISP status, EMDG grant decisions, legal proceedings, staff welfare, conference planning, pending CEO approvals
 - peopleRows: cross-reference check-in capacity % with Clockify hours. Flag if hours logged significantly exceed or undercut implied hours (capacity% x 37.5h per week x weeks in month). Include Paul Johnston with "No data" for hours.
