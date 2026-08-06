@@ -1470,6 +1470,14 @@ CINDERELLA FINANCIAL ANALYSIS REQUIRED:
   const RED   = '#C0392B';
   const AMBER = '#D68910';
 
+  // Truncate context before building prompt to avoid token limit
+  const MAX_CTX = 22000;
+  if (context.length > MAX_CTX) {
+    console.warn('[BoardReport] Context truncated from', context.length, 'to', MAX_CTX, 'chars');
+    context = context.substring(0, MAX_CTX) + '\n[Context truncated]';
+  }
+
+
   const sysP = `You are Cinderella, executive assistant to Kandia Du Bruyn, COO at Risk 2 Solution Group.
 Generate a COO Board Paper for ${monthName} ${yr}. Output ONLY valid JSON - no markdown, no backticks, no extra text.
 
@@ -1502,25 +1510,36 @@ RULES:
 DATA:
 ${context}`;
 
+  console.log('[BoardReport] Calling Claude API — context:', context.length, 'chars');
   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
     headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
-    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:4000,system:sysP,messages:[{role:'user',content:usrP}]})
+    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:6000,system:sysP,messages:[{role:'user',content:usrP}]})
   });
+  if (!aiRes.ok) {
+    const errText = await aiRes.text();
+    console.error('[BoardReport] API HTTP error', aiRes.status, ':', errText.substring(0,500));
+    throw new Error('Claude API returned ' + aiRes.status + ': ' + errText.substring(0,200));
+  }
   const aiData = await aiRes.json();
+  console.log('[BoardReport] API response stop_reason:', aiData.stop_reason, '| usage:', JSON.stringify(aiData.usage));
+
   let sections = {};
   try {
     let raw = (aiData.content||[]).map(c=>c.text||'').join('');
-    raw = raw.replace(/```json|```/g,'').trim();
+    console.log('[BoardReport] Raw AI response (first 500):', raw.substring(0,500));
+    // Strip any markdown wrappers
+    raw = raw.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'').trim();
+    // Find JSON object if there's extra text around it
+    const jsonMatch = raw.match(/(\{[\s\S]*\})/);
+    if (jsonMatch) raw = jsonMatch[1];
     sections = JSON.parse(raw);
+    console.log('[BoardReport] JSON parsed successfully — sections:', Object.keys(sections).join(', '));
   } catch(e) {
-    console.error('[BoardReport] JSON parse failed:', e.message);
-    sections = {
-      executiveSummary:'Report generation encountered an error. Please regenerate.',
-      financialTableRows:[],financialAnalysis:'',financeNote:'',
-      peopleIntro:'',peopleRows:[],clientIntro:'',clientRows:[],
-      newBusiness:[],complianceItems:[],boardItems:[]
-    };
+    const rawContent = (aiData.content||[]).map(c=>c.text||'').join('').substring(0,1000);
+    console.error('[BoardReport] JSON parse failed:', e.message, '\nRaw content:', rawContent);
+    // Re-throw so the outer catch in checkBoardMeetingSchedule logs it and retries
+    throw new Error('Board report JSON parse failed — check Azure logs for raw AI response. Error: ' + e.message);
   }
 
   // ── BUILD HTML SERVER-SIDE WITH CORRECT TEMPLATE COLORS ──
