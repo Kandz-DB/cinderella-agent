@@ -2384,6 +2384,974 @@ app.get('/clockify/summary', requireAuth, async (req, res) => {
 // ── SERVE DASHBOARD ──
 app.use(express.static('.'));
 
+
+// ════════════════════════════════════════════════════════════════
+// ── CINDERELLA PROACTIVE INTELLIGENCE SYSTEM ──
+// ════════════════════════════════════════════════════════════════
+
+const PROACTIVE_STATE_PATH = '/home/proactive-state.json';
+
+function loadProactiveState() {
+  try { return JSON.parse(readFileSync(PROACTIVE_STATE_PATH,'utf8')||'{}'); } catch(e) { return {}; }
+}
+function saveProactiveState(s) {
+  try { writeFileSync(PROACTIVE_STATE_PATH, JSON.stringify(s,null,2)); } catch(e) {} 
+}
+
+function getBrisbaneNow() {
+  const now = new Date();
+  const bris = new Date(now.toLocaleString('en-US', {timeZone:'Australia/Brisbane'}));
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const pad = n => String(n).padStart(2,'0');
+  const weekKey = `${bris.getFullYear()}-W${pad(Math.ceil((bris.getDate()-bris.getDay()+6)/7))}`;
+  const dateStr = `${bris.getFullYear()}-${pad(bris.getMonth()+1)}-${pad(bris.getDate())}`;
+  return {
+    hour: bris.getHours(), minute: bris.getMinutes(),
+    dayOfWeek: days[bris.getDay()], dateStr, weekKey,
+    monthKey: `${bris.getFullYear()}-${pad(bris.getMonth()+1)}`,
+    isWeekday: bris.getDay() >= 1 && bris.getDay() <= 5
+  };
+}
+
+async function draftToKandia(subject, body, highPriority) {
+  try {
+    const token = await getValidToken();
+    const recipientEmail = await getKandiaEmail();
+    const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        subject, body:{contentType:'Text',content:body},
+        toRecipients:[{emailAddress:{address:recipientEmail}}],
+        importance: highPriority ? 'high' : 'normal'
+      })
+    });
+    const draft = await draftRes.json();
+    if (!draft.id) throw new Error('Draft failed: ' + JSON.stringify(draft.error||draft).substring(0,100));
+    // Try to send it
+    const sendRes = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send', {
+      method:'POST', headers:{Authorization:'Bearer '+token}
+    });
+    if (sendRes.status === 202) {
+      console.log('[Proactive] ✅ Sent to Kandia:', subject);
+    } else {
+      console.log('[Proactive] ℹ Saved to Drafts:', subject);
+    }
+    return draft.id;
+  } catch(e) {
+    console.error('[Proactive] Email error:', e.message);
+  }
+}
+
+async function createOutlookDraftOnly(subject, body, toEmail, ccEmail) {
+  // Creates a DRAFT ONLY - does not send (for CEO brief etc)
+  try {
+    const token = await getValidToken();
+    const toRecipients = [{emailAddress:{address:toEmail}}];
+    const ccRecipients = ccEmail ? [{emailAddress:{address:ccEmail}}] : [];
+    const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        subject, body:{contentType:'Text',content:body},
+        toRecipients, ccRecipients, importance:'high'
+      })
+    });
+    const draft = await draftRes.json();
+    console.log('[Proactive] Draft created (NOT sent):', subject, '| ID:', (draft.id||'').substring(0,20));
+    return draft.id;
+  } catch(e) {
+    console.error('[Proactive] Draft creation error:', e.message);
+  }
+}
+
+// ── 1. MORNING BRIEF ──────────────────────────────────────────
+async function sendMorningBrief() {
+  if (!tokenStore.access_token) return;
+  const { dateStr, dayOfWeek } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.morningBriefDate === dateStr) { console.log('[MorningBrief] Already sent today'); return; }
+
+  console.log('[MorningBrief] Generating morning brief for', dateStr);
+  try {
+    const now = new Date();
+    const BRIS_MS = 10*60*60*1000;
+    const bris = new Date(now.getTime()+BRIS_MS);
+    const y=bris.getUTCFullYear(), m=bris.getUTCMonth(), d=bris.getUTCDate();
+    const startOfDay = new Date(Date.UTC(y,m,d,0,0,0)-BRIS_MS).toISOString();
+    const endOfDay   = new Date(Date.UTC(y,m,d,23,59,59)-BRIS_MS).toISOString();
+
+    // Today's calendar
+    let meetings = [];
+    try {
+      const cal = await graphGet(`/me/calendarView?startDateTime=${startOfDay}&endDateTime=${endOfDay}&$select=subject,start,end,attendees&$orderby=start/dateTime`);
+      meetings = (cal.value||[]).map(e => ({
+        time: new Date(e.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'}),
+        subject: e.subject,
+        attendees: (e.attendees||[]).map(a=>a.emailAddress?.name).filter(Boolean).slice(0,4).join(', ')
+      }));
+    } catch(e) {}
+
+    // Open actions (urgent)
+    const actions = loadActions().filter(a=>a.status==='open');
+    const urgent = actions.filter(a=>a.urgency==='Urgent' || a.urgency==='URGENT');
+    const thisWeek = actions.filter(a=>(a.urgency||'').toLowerCase().includes('week') && !urgent.includes(a));
+
+    // Aurora snapshot
+    let auroraOverdue = 0, auroraOutstanding = 0;
+    try {
+      const aur = await callAurora('/api/projects');
+      for (const p of (aur.projects||[]).slice(0,10)) {
+        try {
+          const del = await callAurora('/api/projects/'+p.id+'/deliverables');
+          auroraOverdue += (del.deliverables||[]).filter(d=>d.status==='Overdue'||(d.dueDate&&new Date(d.dueDate)<now&&d.status!=='Complete')).length;
+          const inv = await callAurora('/api/projects/'+p.id+'/invoices');
+          (inv.invoices||[]).filter(i=>!i.paid).forEach(i=>auroraOutstanding+=parseFloat(i.amount||0));
+        } catch(e) {}
+      }
+    } catch(e) {}
+
+    // Unanswered emails (48h+)
+    let unanswered = [];
+    try {
+      const cutoff = new Date(now.getTime()-48*60*60*1000).toISOString();
+      const inbox = await graphGet(`/me/mailFolders/inbox/messages?$filter=isRead eq false and receivedDateTime le ${cutoff}&$top=10&$select=subject,from,receivedDateTime`);
+      const sent = await graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${cutoff}&$select=conversationId&$top=50`);
+      const repliedConvs = new Set((sent.value||[]).map(m=>m.conversationId));
+      unanswered = (inbox.value||[]).filter(m=>!repliedConvs.has(m.conversationId) && !(m.from?.emailAddress?.address||'').includes('noreply'));
+    } catch(e) {}
+
+    // Check-ins this week
+    let checkInCount = 0;
+    try {
+      const raw = JSON.parse(readFileSync('/home/checkins.json','utf8')||'[]');
+      const weekAgo = new Date(now.getTime()-7*24*60*60*1000);
+      checkInCount = raw.filter(c=>c.submitted && new Date(c.submitted)>=weekAgo).length;
+    } catch(e) {}
+
+    // Compliance alerts (7 days)
+    const proState = loadProactiveState();
+    const compItems = (proState.complianceItems||[]).filter(c => {
+      if (!c.dueDate) return false;
+      const days = Math.ceil((new Date(c.dueDate)-now)/(24*60*60*1000));
+      return days >= 0 && days <= 7;
+    });
+
+    // Financial snapshot
+    const finSnap = proState.financialSnapshot||{};
+
+    // Build email
+    const d2 = n => String(n).padStart(2,'0');
+    const todayStr = `${dayOfWeek} ${d} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m]} ${y}`;
+
+    let body = `Good morning Kandia,\n\nHere is your briefing for ${todayStr}.\n\n`;
+
+    body += `TODAY'S CALENDAR (${meetings.length} meetings)\n${'─'.repeat(40)}\n`;
+    if (meetings.length === 0) body += 'No meetings scheduled today.\n';
+    else meetings.forEach(m => body += `  ${m.time}  ${m.subject}${m.attendees?' | '+m.attendees:''}\n`);
+
+    body += `\nPRIORITY ACTIONS\n${'─'.repeat(40)}\n`;
+    if (urgent.length > 0) {
+      body += `URGENT (${urgent.length}):\n`;
+      urgent.slice(0,5).forEach(a => body += `  ⚠ ${a.title}${a.source?' ('+a.source+')':''}\n`);
+    }
+    if (thisWeek.length > 0) {
+      body += `THIS WEEK (${thisWeek.length}):\n`;
+      thisWeek.slice(0,5).forEach(a => body += `  • ${a.title}\n`);
+    }
+    if (urgent.length===0&&thisWeek.length===0) body += '  No urgent items.\n';
+
+    body += `\nAURORA PROJECTS\n${'─'.repeat(40)}\n`;
+    body += `  Overdue deliverables: ${auroraOverdue}\n`;
+    body += `  Outstanding invoices: $${Math.round(auroraOutstanding).toLocaleString()}\n`;
+
+    body += `\nEMAILS NEEDING REPLY (48h+ unanswered)\n${'─'.repeat(40)}\n`;
+    if (unanswered.length === 0) body += '  Inbox clear — no unanswered emails over 48 hours.\n';
+    else unanswered.slice(0,5).forEach(e => body += `  • ${e.from?.emailAddress?.name||'?'}: ${e.subject}\n`);
+
+    body += `\nSTAFF CHECK-INS\n${'─'.repeat(40)}\n`;
+    body += `  ${checkInCount} check-ins received this week.\n`;
+
+    if (finSnap.lastResult) {
+      body += `\nFINANCIAL SNAPSHOT\n${'─'.repeat(40)}\n`;
+      body += `  Last P&L: ${finSnap.period} — ${finSnap.lastResult}\n`;
+      if (finSnap.outstanding) body += `  Outstanding receivables: $${finSnap.outstanding.toLocaleString()}\n`;
+    }
+
+    if (compItems.length > 0) {
+      body += `\nCOMPLIANCE ALERTS (due within 7 days)\n${'─'.repeat(40)}\n`;
+      compItems.forEach(c => body += `  ⚠ ${c.title} — due ${c.dueDate}\n`);
+    }
+
+    body += `\n${'─'.repeat(40)}\nCinderella — Executive Assistant to Kandia Du Bruyn, COO\nRisk 2 Solution`;
+
+    await draftToKandia(`🌅 Morning Brief — ${todayStr}`, body, false);
+
+    state.morningBriefDate = dateStr;
+    saveProactiveState(state);
+    console.log('[MorningBrief] ✅ Sent');
+  } catch(e) {
+    console.error('[MorningBrief] Error:', e.message);
+  }
+}
+
+// ── 2. PRE-MEETING BRIEF ──────────────────────────────────────
+async function checkPreMeetingBriefs() {
+  if (!tokenStore.access_token) return;
+  try {
+    const now = new Date();
+    const in35 = new Date(now.getTime()+35*60*1000).toISOString();
+    const in25 = new Date(now.getTime()+25*60*1000).toISOString();
+    const cal = await graphGet(`/me/calendarView?startDateTime=${in25}&endDateTime=${in35}&$select=subject,start,end,attendees,bodyPreview&$top=5`);
+    const meetings = cal.value||[];
+    if (meetings.length === 0) return;
+
+    const state = loadProactiveState();
+    if (!state.preMeetingBriefsSent) state.preMeetingBriefsSent = {};
+
+    for (const meeting of meetings) {
+      const meetId = meeting.id || meeting.subject+meeting.start?.dateTime;
+      if (state.preMeetingBriefsSent[meetId]) continue;
+
+      console.log('[PreMeeting] Generating brief for:', meeting.subject);
+      const attendeeNames = (meeting.attendees||[]).map(a=>a.emailAddress?.name||a.emailAddress?.address||'').filter(Boolean).join(', ');
+      const attendeeEmails = (meeting.attendees||[]).map(a=>a.emailAddress?.address||'').filter(Boolean);
+      const meetTime = new Date(meeting.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+
+      // Search emails for attendees
+      let emailContext = '';
+      for (const email of attendeeEmails.slice(0,3)) {
+        try {
+          const domain = email.split('@')[1];
+          if (domain && !domain.includes('risk2solution')) {
+            const recent = await graphGet(`/me/messages?$search="${email}"&$top=3&$select=subject,from,bodyPreview,receivedDateTime`);
+            (recent.value||[]).forEach(m => {
+              emailContext += `- ${m.from?.emailAddress?.name}: ${m.subject} | ${(m.bodyPreview||'').substring(0,100)}\n`;
+            });
+          }
+        } catch(e) {}
+      }
+
+      // Check Aurora for matching projects
+      let auroraContext = '';
+      try {
+        const aur = await callAurora('/api/projects');
+        const matchName = attendeeNames.toLowerCase();
+        const related = (aur.projects||[]).filter(p => {
+          const client = (p.clientName||'').toLowerCase();
+          return attendeeNames.split(',').some(n => client.includes(n.trim().toLowerCase().split(' ')[0]));
+        });
+        if (related.length > 0) {
+          auroraContext = 'Aurora projects: ' + related.map(p=>p.clientName+' ['+(['Enquiry','Proposal','Active','Review','Close-out'][p.phase]||'?')+']').join(', ');
+        }
+      } catch(e) {}
+
+      // Check open actions mentioning attendees
+      const actions = loadActions().filter(a => {
+        const title = (a.title||'').toLowerCase();
+        return attendeeNames.split(',').some(n => title.includes(n.trim().toLowerCase().split(' ')[0]));
+      });
+
+      // Generate brief with AI
+      const briefPrompt = `Generate a concise pre-meeting brief (max 200 words) for Kandia Du Bruyn (COO, Risk 2 Solution) who has a meeting in 30 minutes.
+
+Meeting: ${meeting.subject}
+Time: ${meetTime}
+Attendees: ${attendeeNames||'Unknown'}
+Meeting notes: ${meeting.bodyPreview||'No description'}
+
+Recent email context: ${emailContext||'No recent emails found'}
+${auroraContext ? 'Project context: '+auroraContext : ''}
+${actions.length > 0 ? 'Open actions related to these people: '+actions.map(a=>a.title).join(', ') : ''}
+
+Provide: 1) Key context about the attendees/topic, 2) 3 suggested talking points or questions, 3) Any relevant open actions to raise. Be specific and actionable. No generic filler.`;
+
+      try {
+        const ai = await fetch('https://api.anthropic.com/v1/messages', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+          body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:400,messages:[{role:'user',content:briefPrompt}]})
+        });
+        const aiData = await ai.json();
+        const briefText = (aiData.content||[]).map(c=>c.text||'').join('');
+
+        const body = `Hi Kandia,\n\nYou have a meeting starting in approximately 30 minutes:\n\n📅 ${meeting.subject}\n⏰ ${meetTime}\n👥 ${attendeeNames||'No external attendees'}\n\n${briefText}\n\n─────────────────\nCinderella — Pre-Meeting Brief`;
+
+        await draftToKandia(`📅 Pre-meeting brief: ${meeting.subject} (${meetTime})`, body, true);
+        state.preMeetingBriefsSent[meetId] = new Date().toISOString();
+        saveProactiveState(state);
+        console.log('[PreMeeting] ✅ Brief sent for:', meeting.subject);
+      } catch(e) {
+        console.error('[PreMeeting] AI error:', e.message);
+      }
+    }
+  } catch(e) {
+    console.error('[PreMeeting] Error:', e.message);
+  }
+}
+
+// ── 3. AURORA PROJECT ALERT (Monday weekly) ───────────────────
+async function sendAuroraProjectAlert() {
+  if (!tokenStore.access_token) return;
+  const { weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.auroraAlertWeek === weekKey) { console.log('[AuroraAlert] Already sent this week'); return; }
+
+  console.log('[AuroraAlert] Generating weekly Aurora project alert');
+  try {
+    const now = new Date();
+    const aur = await callAurora('/api/projects');
+    const projects = aur.projects||[];
+    const PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
+
+    const overdueProjects = [], invoiceAlerts = [], stuckProjects = [];
+
+    for (const p of projects.filter(proj=>proj.phase>=1&&proj.phase<=3).slice(0,15)) {
+      try {
+        const del = await callAurora('/api/projects/'+p.id+'/deliverables');
+        const overdue = (del.deliverables||[]).filter(d=>d.status==='Overdue'||(d.dueDate&&new Date(d.dueDate)<now&&d.status!=='Complete'));
+        if (overdue.length > 0) {
+          overdueProjects.push({
+            client: p.clientName, phase: PHASES[p.phase]||'?', consultant: p.consultant,
+            overdue: overdue.map(d=>d.deliverable||'Deliverable').slice(0,3),
+            overdueCount: overdue.length
+          });
+        }
+      } catch(e) {}
+
+      try {
+        const inv = await callAurora('/api/projects/'+p.id+'/invoices');
+        const oldUnpaid = (inv.invoices||[]).filter(i=>{
+          if (i.paid) return false;
+          const age = (now - new Date(i.createdAt||i.date||now)) / (24*60*60*1000);
+          return age > 30;
+        });
+        if (oldUnpaid.length > 0) {
+          const total = oldUnpaid.reduce((s,i)=>s+parseFloat(i.amount||0),0);
+          invoiceAlerts.push({client:p.clientName, count:oldUnpaid.length, total});
+        }
+      } catch(e) {}
+    }
+
+    if (overdueProjects.length === 0 && invoiceAlerts.length === 0) {
+      console.log('[AuroraAlert] No issues to report — skipping email');
+      state.auroraAlertWeek = weekKey;
+      saveProactiveState(state);
+      return;
+    }
+
+    let body = `Hi Kandia,\n\nHere is your weekly Aurora project status alert.\n\n`;
+
+    if (overdueProjects.length > 0) {
+      body += `OVERDUE DELIVERABLES (${overdueProjects.length} project${overdueProjects.length>1?'s':''})\n${'─'.repeat(50)}\n`;
+      overdueProjects.forEach(p => {
+        body += `\n  ${p.client} [${p.phase}]${p.consultant?' — '+p.consultant:''}\n`;
+        p.overdue.forEach(d => body += `    ⚠ ${d}\n`);
+        if (p.overdueCount > 3) body += `    ... and ${p.overdueCount-3} more overdue items\n`;
+      });
+    }
+
+    if (invoiceAlerts.length > 0) {
+      body += `\nOUTSTANDING INVOICES 30+ DAYS OVERDUE (${invoiceAlerts.length} client${invoiceAlerts.length>1?'s':''})\n${'─'.repeat(50)}\n`;
+      invoiceAlerts.forEach(i => {
+        body += `  • ${i.client} — ${i.count} invoice${i.count>1?'s':''} totalling $${Math.round(i.total).toLocaleString()}\n`;
+      });
+    }
+
+    body += `\nPlease review each project in Aurora and follow up with the relevant consultants.\nYou can also use Cinderella's Chase button in the Aurora tab to draft follow-up emails.\n\n─────────────────\nCinderella — Weekly Project Alert`;
+
+    await draftToKandia(`⚠ Aurora project alert — ${overdueProjects.length} overdue, ${invoiceAlerts.length} invoice${invoiceAlerts.length!==1?'s':''} outstanding`, body, true);
+
+    state.auroraAlertWeek = weekKey;
+    saveProactiveState(state);
+    console.log('[AuroraAlert] ✅ Sent');
+  } catch(e) {
+    console.error('[AuroraAlert] Error:', e.message);
+  }
+}
+
+// ── 4. CEO WEEKLY BRIEF DRAFT (Monday — draft only) ───────────
+async function draftCEOWeeklyBrief() {
+  if (!tokenStore.access_token) return;
+  const { weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.ceoWeeklyBriefWeek === weekKey) { console.log('[CEOBrief] Already drafted this week'); return; }
+
+  console.log('[CEOBrief] Drafting weekly CEO brief');
+  try {
+    const now = new Date();
+    // Gather operational snapshot
+    const actions = loadActions().filter(a=>a.status==='open');
+    const proState = loadProactiveState();
+    const finSnap = proState.financialSnapshot||{};
+
+    let auroraLines = '';
+    try {
+      const aur = await callAurora('/api/projects');
+      const active = (aur.projects||[]).filter(p=>p.phase>=1&&p.phase<=3);
+      auroraLines = `Active delivery projects: ${active.length}\n` + active.slice(0,5).map(p=>`- ${p.clientName}`).join('\n');
+    } catch(e) {}
+
+    const briefPrompt = `Draft a concise weekly CEO operational brief from Kandia Du Bruyn (COO) to Dave Cohen (CEO) at Risk 2 Solution. This is a DRAFT for Kandia to review before sending.
+
+Data available:
+- Open actions: ${actions.length} total, ${actions.filter(a=>a.urgency==='Urgent').length} urgent
+- Most urgent: ${actions.filter(a=>a.urgency==='Urgent').slice(0,3).map(a=>a.title).join(', ')||'None'}
+${finSnap.lastResult ? '- Last financial result: '+finSnap.period+' — '+finSnap.lastResult : ''}
+- Aurora: ${auroraLines}
+
+Write in first person as Kandia. Tone: professional, concise, confident. Cover: 1) Operational highlights this week, 2) Key items needing CEO awareness or decision, 3) Financial position if known, 4) Next week focus areas. Max 300 words. Leave [PLACEHOLDER] where Kandia should add specific details she knows.`;
+
+    const ai = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+      body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:500,messages:[{role:'user',content:briefPrompt}]})
+    });
+    const aiData = await ai.json();
+    const briefText = (aiData.content||[]).map(c=>c.text||'').join('');
+
+    // Draft to Dave, CC Kandia — BUT DO NOT SEND
+    const kanEmail = await getKandiaEmail();
+    const draftId = await createOutlookDraftOnly(
+      `R2S Weekly Operational Update — Week of ${new Date().toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})}`,
+      `Hi Dave,\n\n${briefText}\n\nKind regards,\nKandia Du Bruyn\nCOO — Risk 2 Solution`,
+      'dave.c@risk2solution.com',
+      kanEmail
+    );
+
+    // Alert Kandia that it's ready for review
+    if (draftId) {
+      await draftToKandia(
+        '📝 CEO weekly brief is in your Drafts — please review and send',
+        `Hi Kandia,\n\nI've drafted this week's CEO operational update to Dave. It's in your Outlook Drafts ready for your review.\n\nPlease:\n1. Open the draft in Outlook Drafts\n2. Review and amend as needed — I've added [PLACEHOLDER] where you should add specifics\n3. Send when ready\n\nCinderella`,
+        true
+      );
+    }
+
+    state.ceoWeeklyBriefWeek = weekKey;
+    saveProactiveState(state);
+    console.log('[CEOBrief] ✅ Draft created, Kandia alerted');
+  } catch(e) {
+    console.error('[CEOBrief] Error:', e.message);
+  }
+}
+
+// ── 5. CAPACITY BURNOUT TREND CHECK ──────────────────────────
+async function checkCapacityTrends() {
+  const { dateStr, weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.capacityCheckWeek === weekKey) return;
+
+  try {
+    const now = new Date();
+    const raw = JSON.parse(readFileSync('/home/checkins.json','utf8')||'[]');
+    const threeWeeksAgo = new Date(now.getTime()-21*24*60*60*1000);
+
+    // Group by person, last 3 weeks
+    const byPerson = {};
+    raw.filter(c=>c.submitted && new Date(c.submitted)>=threeWeeksAgo).forEach(c=>{
+      if (!c.name) return;
+      if (!byPerson[c.name]) byPerson[c.name] = [];
+      byPerson[c.name].push({capacity:c.capacity||0, submitted:c.submitted});
+    });
+
+    const atRisk = [], missingCheckIns = [];
+
+    // Check staff that should be checking in
+    const EXPECTED_STAFF = ['Janita Zhang','Diane Kruger','Garima Arora','Reinette Kruger','Dani Stevenson','Ross Mackenzie','Cherry Abadeza','Paul Johnston'];
+    EXPECTED_STAFF.forEach(name => {
+      const entries = byPerson[name]||[];
+      if (entries.length === 0) {
+        missingCheckIns.push(name);
+      } else {
+        const avg = Math.round(entries.reduce((s,e)=>s+e.capacity,0)/entries.length);
+        const recent = entries.slice(-3);
+        const allHigh = recent.length >= 2 && recent.every(e=>e.capacity>=88);
+        if (allHigh) atRisk.push({name, avg, weeks: recent.length, entries: recent});
+      }
+    });
+
+    if (atRisk.length === 0 && missingCheckIns.length === 0) {
+      state.capacityCheckWeek = weekKey;
+      saveProactiveState(state);
+      return;
+    }
+
+    let body = `Hi Kandia,\n\nWeekly staff capacity and wellbeing alert.\n\n`;
+
+    if (atRisk.length > 0) {
+      body += `BURNOUT RISK — consistently high capacity (3 weeks)\n${'─'.repeat(50)}\n`;
+      atRisk.forEach(p => {
+        body += `\n  ${p.name} — avg ${p.avg}% capacity\n`;
+        p.entries.forEach(e => body += `    Week of ${new Date(e.submitted).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}: ${e.capacity}%\n`);
+        body += `  Suggested action: Have a check-in conversation with ${p.name.split(' ')[0]} about workload and support needed.\n`;
+      });
+    }
+
+    if (missingCheckIns.length > 0) {
+      body += `\nMISSING CHECK-INS (3+ weeks)\n${'─'.repeat(50)}\n`;
+      missingCheckIns.forEach(n => body += `  • ${n}\n`);
+      body += `\nPlease remind these team members to complete their weekly check-in.\n`;
+    }
+
+    body += `\n─────────────────\nCinderella — Weekly Capacity Alert`;
+    await draftToKandia(`👥 Staff capacity alert — ${atRisk.length} at burnout risk, ${missingCheckIns.length} missing check-ins`, body, atRisk.length>0);
+
+    // Update trend history for dashboard
+    state.capacityTrends = byPerson;
+    state.capacityCheckWeek = weekKey;
+    state.burnoutRisk = atRisk.map(p=>p.name);
+    saveProactiveState(state);
+    console.log('[CapacityTrend] ✅ Alert sent');
+  } catch(e) {
+    console.error('[CapacityTrend] Error:', e.message);
+  }
+}
+
+// ── 6. FINANCIAL INTELLIGENCE ─────────────────────────────────
+async function checkFinancialAlerts() {
+  if (!tokenStore.access_token) return;
+  const { monthKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.financeCheckMonth === monthKey) return;
+
+  try {
+    const now = new Date();
+    // Scan last 45 days for Diane's finance emails
+    const since = new Date(now.getTime()-45*24*60*60*1000).toISOString();
+    const emails = await graphGet(`/me/messages?$top=50&$filter=receivedDateTime ge ${since}&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc`);
+
+    const finEmails = (emails.value||[]).filter(e => {
+      const from = (e.from?.emailAddress?.name||'').toLowerCase();
+      const subj = (e.subject||'').toLowerCase();
+      if (subj.includes('board report ready')) return false;
+      return (from.includes('diane')||from.includes('kruger')) && subj.match(/p&l|p\.l|profit|financial|month|result/i);
+    });
+
+    if (finEmails.length === 0) return;
+
+    const latest = finEmails[0];
+    const preview = latest.bodyPreview||'';
+    // Extract dollar figures
+    const dollarMatch = preview.match(/\$[\d,]+\.?\d*/g)||[];
+    const positiveMatch = preview.match(/positive[^$\n]*\$[\d,]+\.?\d*|closed[^$\n]*\$[\d,]+\.?\d*/i);
+    const negativeMatch = preview.match(/negative[^$\n]*\$[\d,]+\.?\d*|loss[^$\n]*\$[\d,]+\.?\d*/i);
+
+    if (dollarMatch.length > 0 || positiveMatch || negativeMatch) {
+      const result = positiveMatch ? positiveMatch[0].replace(/positive[^$]*/i,'').trim() :
+                     negativeMatch ? negativeMatch[0].replace(/negative[^$]*/i,'').trim() :
+                     dollarMatch[0];
+      const isPos = !negativeMatch && (positiveMatch || preview.toLowerCase().includes('positive'));
+      const period = latest.subject.replace(/p&l|p\.l|re:|fw:/gi,'').trim();
+
+      // Update stored snapshot
+      if (!state.financialSnapshot) state.financialSnapshot = {};
+      state.financialSnapshot.lastResult = (isPos ? '+' : '-') + result.replace('$','$');
+      state.financialSnapshot.period = period;
+      state.financialSnapshot.updatedAt = now.toISOString();
+
+      // Also try to get Aurora outstanding
+      try {
+        const aur = await callAurora('/api/projects');
+        let totalOut = 0;
+        for (const p of (aur.projects||[]).slice(0,10)) {
+          try {
+            const inv = await callAurora('/api/projects/'+p.id+'/invoices');
+            (inv.invoices||[]).filter(i=>!i.paid).forEach(i=>totalOut+=parseFloat(i.amount||0));
+          } catch(e) {}
+        }
+        state.financialSnapshot.outstanding = Math.round(totalOut);
+      } catch(e) {}
+
+      console.log('[FinanceAlert] Snapshot updated:', state.financialSnapshot.period, state.financialSnapshot.lastResult);
+      state.financeCheckMonth = monthKey;
+      saveProactiveState(state);
+    }
+  } catch(e) {
+    console.error('[FinanceAlert] Error:', e.message);
+  }
+}
+
+// ── 7. COMPLIANCE DEADLINE MONITORING ────────────────────────
+async function checkComplianceDeadlines() {
+  if (!tokenStore.access_token) return;
+  const { dateStr } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.complianceCheckDate === dateStr) return;
+
+  try {
+    const now = new Date();
+    const in60 = new Date(now.getTime()+60*24*60*60*1000).toISOString();
+    const COMP_KEYWORDS = ['asqa','rto','iso','disp','emdg','renewal','certification','accreditation','compliance','inspection','deadline','submission','tender','insurance','clearance','application','registration','audit','licence','license','workers comp','payroll tax','bas'];
+
+    // ── SOURCE 1: Calendar events ──
+    const cal = await graphGet(`/me/calendarView?startDateTime=${now.toISOString()}&endDateTime=${in60}&$select=subject,start&$top=50`);
+    const compEvents = (cal.value||[]).filter(e => {
+      const s = (e.subject||'').toLowerCase();
+      return COMP_KEYWORDS.some(k=>s.includes(k));
+    }).map(e => ({
+      id: 'cal-'+e.subject+e.start?.dateTime,
+      title: e.subject,
+      dueDate: (e.start.dateTime||e.start.date||'').substring(0,10),
+      daysOut: Math.ceil((new Date(e.start.dateTime||e.start.date)-now)/(24*60*60*1000)),
+      source: 'calendar',
+      category: 'Compliance'
+    }));
+
+    // ── SOURCE 2: Extract compliance items from emails using AI ──
+    const emailCompItems = [];
+    try {
+      const since30 = new Date(now.getTime()-30*24*60*60*1000).toISOString();
+      const emails = await graphGet(
+        `/me/messages?$top=80&$filter=receivedDateTime ge ${since30}&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc`
+      );
+
+      // Filter for emails that are likely compliance-related
+      const compEmails = (emails.value||[]).filter(e => {
+        const subj = (e.subject||'').toLowerCase();
+        const prev = (e.bodyPreview||'').toLowerCase();
+        return COMP_KEYWORDS.some(k => subj.includes(k) || prev.includes(k));
+      });
+
+      if (compEmails.length > 0) {
+        console.log('[Compliance] Found', compEmails.length, 'compliance-related emails to analyse');
+
+        // Build a summary for AI to extract structured items from
+        const emailSummary = compEmails.slice(0,20).map(e => {
+          const date = e.receivedDateTime?.substring(0,10)||'';
+          return `FROM: ${e.from?.emailAddress?.name||'?'} (${date})\nSUBJECT: ${e.subject}\nPREVIEW: ${(e.bodyPreview||'').substring(0,200)}`;
+        }).join('\n---\n');
+
+        const extractPrompt = `You are analysing emails received by Kandia Du Bruyn (COO, Risk 2 Solution) to extract compliance deadlines and regulatory obligations.
+
+Today's date: ${dateStr}
+
+EMAILS TO ANALYSE:
+${emailSummary}
+
+Extract any compliance items that have a specific deadline or due date mentioned. Return ONLY a JSON array. Each item must have a real date extracted from the email content.
+
+[
+  {
+    "title": "Brief descriptive title of the compliance item",
+    "dueDate": "YYYY-MM-DD",
+    "category": "one of: Accreditation|Certification|Compliance|Government|Insurance|Legal|Tender|Other",
+    "source_email": "Subject of the email it came from",
+    "notes": "Brief note about what action is needed"
+  }
+]
+
+Rules:
+- Only include items with a specific date mentioned in the email
+- Only include genuinely compliance/regulatory/legal/deadline items (not routine meetings)
+- If no items found, return []
+- Return ONLY the JSON array, no other text`;
+
+        const ai = await fetch('https://api.anthropic.com/v1/messages', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+          body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:800,messages:[{role:'user',content:extractPrompt}]})
+        });
+        const aiData = await ai.json();
+        const rawText = (aiData.content||[]).map(c=>c.text||'').join('').trim();
+
+        try {
+          const extracted = JSON.parse(rawText.replace(/^```json\s*/,'').replace(/```$/,'').trim());
+          if (Array.isArray(extracted)) {
+            extracted.forEach(item => {
+              if (item.title && item.dueDate && item.dueDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                const dueDate = new Date(item.dueDate);
+                if (dueDate >= new Date(dateStr)) { // Only future items
+                  emailCompItems.push({
+                    id: 'email-'+item.title.replace(/\s+/g,'-').toLowerCase()+'-'+item.dueDate,
+                    title: item.title,
+                    dueDate: item.dueDate,
+                    daysOut: Math.ceil((dueDate-now)/(24*60*60*1000)),
+                    source: 'email',
+                    sourceEmail: item.source_email,
+                    notes: item.notes,
+                    category: item.category||'Compliance',
+                    extractedAt: now.toISOString()
+                  });
+                }
+              }
+            });
+            console.log('[Compliance] AI extracted', emailCompItems.length, 'items from emails');
+          }
+        } catch(parseErr) {
+          console.warn('[Compliance] Could not parse AI email extraction:', parseErr.message);
+        }
+      }
+    } catch(emailErr) {
+      console.warn('[Compliance] Email scan error:', emailErr.message);
+    }
+
+    // ── MERGE ALL SOURCES ──
+    const existingItems = state.complianceItems||[];
+    const merged = [...existingItems];
+
+    // Add calendar events not already in list
+    compEvents.forEach(ev => {
+      if (!merged.find(m => m.title===ev.title || (m.dueDate===ev.dueDate && m.source==='calendar'))) {
+        merged.push(ev);
+      }
+    });
+
+    // Add email-extracted items not already in list
+    emailCompItems.forEach(ev => {
+      const isDuplicate = merged.find(m =>
+        m.id === ev.id ||
+        (m.title.toLowerCase() === ev.title.toLowerCase() && m.dueDate === ev.dueDate)
+      );
+      if (!isDuplicate) {
+        merged.push({...ev, id: ev.id || Date.now()+Math.random()});
+        console.log('[Compliance] New item from email:', ev.title, ev.dueDate);
+      }
+    });
+
+    // Recalculate daysOut and remove past items
+    const active = merged
+      .filter(c => c.dueDate && new Date(c.dueDate) >= new Date(dateStr))
+      .map(c => ({...c, daysOut: Math.ceil((new Date(c.dueDate)-now)/(24*60*60*1000))}));
+
+    state.complianceItems = active;
+
+    // Alert for items due at 60/30/14/7 day milestones
+    const alertThresholds = [7,14,30,60];
+    const alertItems = active.filter(c => alertThresholds.some(t => c.daysOut >= t-1 && c.daysOut <= t+1));
+
+    if (alertItems.length > 0) {
+      let body = `Hi Kandia,\n\nCompliance deadline reminders:\n\n`;
+      alertItems.sort((a,b)=>a.daysOut-b.daysOut).forEach(c => {
+        const urgency = c.daysOut<=7?'URGENT':c.daysOut<=14?'14 DAYS':c.daysOut<=30?'30 DAYS':'60 DAYS';
+        body += `[${urgency}] ${c.title}\n  Due: ${c.dueDate}`;
+        if (c.source === 'email' && c.sourceEmail) body += `\n  Source: ${c.sourceEmail}`;
+        if (c.notes) body += `\n  Action: ${c.notes}`;
+        body += `\n\n`;
+      });
+      body += `View the full compliance calendar in Cinderella under the Compliance tab.\n\n─────────────────\nCinderella — Compliance Alert`;
+      await draftToKandia(
+        `⚠ Compliance deadline alert — ${alertItems.length} item${alertItems.length>1?'s':''} due soon`,
+        body,
+        alertItems.some(c=>c.daysOut<=7)
+      );
+    }
+
+    // Log newly extracted items from email as a summary notification
+    const newEmailItems = emailCompItems.filter(ev =>
+      !existingItems.find(m => m.id===ev.id || (m.title.toLowerCase()===ev.title.toLowerCase()&&m.dueDate===ev.dueDate))
+    );
+    if (newEmailItems.length > 0) {
+      let body = `Hi Kandia,\n\nI found ${newEmailItems.length} new compliance item${newEmailItems.length>1?'s':''} in your recent emails:\n\n`;
+      newEmailItems.forEach(c => {
+        body += `• ${c.title}\n  Due: ${c.dueDate} (${c.daysOut} days)\n  From email: ${c.sourceEmail||'?'}\n`;
+        if (c.notes) body += `  Action needed: ${c.notes}\n`;
+        body += `\n`;
+      });
+      body += `These have been added to your Compliance calendar in Cinderella.\n\n─────────────────\nCinderella — Compliance Intelligence`;
+      await draftToKandia(
+        `📋 ${newEmailItems.length} new compliance item${newEmailItems.length>1?'s':''} found in your emails`,
+        body,
+        newEmailItems.some(c=>c.daysOut<=14)
+      );
+    }
+
+    state.complianceCheckDate = dateStr;
+    saveProactiveState(state);
+    console.log('[Compliance] ✅ Active items:', active.length, '| Email extractions:', emailCompItems.length, '| Alerts:', alertItems.length);
+  } catch(e) {
+    console.error('[Compliance] Error:', e.message);
+  }
+}
+
+// ── 8. ONBOARDING WORKFLOW GENERATOR ─────────────────────────
+async function checkOnboardingTriggers() {
+  if (!tokenStore.access_token) return;
+  const state = loadProactiveState();
+  if (!state.onboardingProcessed) state.onboardingProcessed = {};
+
+  try {
+    const since = new Date(Date.now()-3*24*60*60*1000).toISOString();
+    const emails = await graphGet(`/me/messages?$top=30&$filter=receivedDateTime ge ${since}&$select=subject,from,bodyPreview,conversationId`);
+
+    const HIRE_KEYWORDS = ['offer of employment','accepted the position','welcome aboard','new team member','onboarding','start date','employment contract'];
+    const hireEmails = (emails.value||[]).filter(e => {
+      const subj = (e.subject||'').toLowerCase();
+      const prev = (e.bodyPreview||'').toLowerCase();
+      return HIRE_KEYWORDS.some(k=>subj.includes(k)||prev.includes(k));
+    });
+
+    for (const email of hireEmails) {
+      const convId = email.conversationId||email.subject;
+      if (state.onboardingProcessed[convId]) continue;
+
+      console.log('[Onboarding] New hire detected:', email.subject);
+
+      // Extract name from subject/preview
+      const nameMatch = email.subject.match(/- ([A-Z][a-z]+ [A-Z][a-z]+)/);
+      const newHireName = nameMatch ? nameMatch[1] : 'New team member';
+
+      const prompt = `Generate a comprehensive onboarding checklist for a new hire at Risk 2 Solution Group (integrated risk management company). New hire: ${newHireName}.
+
+Format as a list of specific tasks with the assigned person in brackets. Include:
+- HR tasks (Diane Kruger — contract, superannuation, tax file, payroll setup, leave)
+- IT/Systems tasks (Janita Zhang — email, Teams, laptop, systems access, R2S Academy)
+- Compliance tasks (policy documents, WHS induction, privacy training)
+- Operations tasks (Kandia — buddy assigned, 30/60/90 day check-ins planned)
+- Week 1 schedule (team introductions, system orientation, role briefing with CEO)
+
+Output ONLY the checklist, no preamble. Each line: [ ] Task description (Assigned to: Name)`;
+
+      try {
+        const ai = await fetch('https://api.anthropic.com/v1/messages', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+          body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:600,messages:[{role:'user',content:prompt}]})
+        });
+        const aiData = await ai.json();
+        const checklist = (aiData.content||[]).map(c=>c.text||'').join('');
+
+        // Create as open actions
+        const tasks = checklist.split('\n').filter(t=>t.trim().startsWith('[ ]')).slice(0,12);
+        const actions = loadActions();
+        tasks.forEach(task => {
+          actions.unshift({
+            id: Date.now()+Math.random(),
+            title: task.replace('[ ]','').trim(),
+            source: `Onboarding: ${newHireName}`,
+            urgency: 'This week',
+            addedAt: new Date().toISOString(),
+            status: 'open',
+            type: 'onboarding'
+          });
+        });
+        saveActions(actions);
+
+        const body = `Hi Kandia,\n\nI've detected a new hire: ${newHireName}.\n\nI've created an onboarding checklist as open actions in your tracker. Here's the full list:\n\n${checklist}\n\nAll items have been added to your Open Actions tab for tracking.\n\n─────────────────\nCinderella — Onboarding Workflow`;
+        await draftToKandia(`🆕 Onboarding workflow created — ${newHireName}`, body, true);
+
+        state.onboardingProcessed[convId] = {name:newHireName, date:new Date().toISOString()};
+        saveProactiveState(state);
+        console.log('[Onboarding] ✅ Workflow created for', newHireName);
+      } catch(e) {
+        console.error('[Onboarding] AI error:', e.message);
+      }
+    }
+  } catch(e) {
+    console.error('[Onboarding] Error:', e.message);
+  }
+}
+
+// ── 9. RECEIVABLES CHASER ─────────────────────────────────────
+async function checkReceivables() {
+  const { weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.receivablesWeek === weekKey) return;
+
+  try {
+    const now = new Date();
+    let chaseDrafts = 0;
+
+    const aur = await callAurora('/api/projects');
+    for (const p of (aur.projects||[]).filter(proj=>proj.phase>=1&&proj.phase<=4).slice(0,15)) {
+      try {
+        const inv = await callAurora('/api/projects/'+p.id+'/invoices');
+        const overdue30 = (inv.invoices||[]).filter(i => {
+          if (i.paid) return false;
+          const age = (now - new Date(i.createdAt||now))/(24*60*60*1000);
+          return age > 30;
+        });
+        if (overdue30.length === 0) continue;
+
+        const total = overdue30.reduce((s,i)=>s+parseFloat(i.amount||0),0);
+        const oldest = Math.round(Math.max(...overdue30.map(i=>(now-new Date(i.createdAt||now))/(24*60*60*1000))));
+
+        const prompt = `Draft a professional but firm payment follow-up email from Risk 2 Solution to ${p.clientName}. 
+Outstanding: ${overdue30.length} invoice${overdue30.length>1?'s':''} totalling $${Math.round(total).toLocaleString()}, ${oldest} days overdue.
+Tone: polite but clear about urgency. Mention payment terms. Request ETA on payment. Max 150 words. Sign off as Accounts Receivable, Risk 2 Solution.`;
+
+        const ai = await fetch('https://api.anthropic.com/v1/messages', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+          body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:250,messages:[{role:'user',content:prompt}]})
+        });
+        const aiData = await ai.json();
+        const draftBody = (aiData.content||[]).map(c=>c.text||'').join('');
+
+        // Save as draft for Kandia to review and send
+        await createOutlookDraftOnly(
+          `Payment follow-up: ${p.clientName} — $${Math.round(total).toLocaleString()} outstanding`,
+          draftBody,
+          await getKandiaEmail() // placeholder — Kandia reviews before sending to client
+        );
+        chaseDrafts++;
+      } catch(e) {}
+    }
+
+    if (chaseDrafts > 0) {
+      await draftToKandia(
+        `💰 ${chaseDrafts} payment follow-up draft${chaseDrafts>1?'s':''} ready in Outlook Drafts`,
+        `Hi Kandia,\n\nI've drafted ${chaseDrafts} payment follow-up email${chaseDrafts>1?'s':''} for invoices outstanding 30+ days.\n\nThey're in your Outlook Drafts — please update the client email address and review before sending.\n\n─────────────────\nCinderella — Receivables`,
+        false
+      );
+    }
+
+    state.receivablesWeek = weekKey;
+    saveProactiveState(state);
+    console.log('[Receivables] ✅ Created', chaseDrafts, 'chase drafts');
+  } catch(e) {
+    console.error('[Receivables] Error:', e.message);
+  }
+}
+
+// ── COMPLIANCE CALENDAR STATE API ─────────────────────────────
+app.get('/proactive/state', requireAuth, (req, res) => {
+  res.json(loadProactiveState());
+});
+
+app.post('/proactive/compliance/add', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  if (!state.complianceItems) state.complianceItems = [];
+  const item = {
+    id: Date.now(),
+    title: req.body.title,
+    dueDate: req.body.dueDate,
+    category: req.body.category||'Other',
+    daysOut: Math.ceil((new Date(req.body.dueDate)-new Date())/(24*60*60*1000)),
+    source: 'manual'
+  };
+  state.complianceItems.push(item);
+  saveProactiveState(state);
+  res.json({success:true, item});
+});
+
+app.delete('/proactive/compliance/:id', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  state.complianceItems = (state.complianceItems||[]).filter(c=>String(c.id)!==String(req.params.id));
+  saveProactiveState(state);
+  res.json({success:true});
+});
+
+app.post('/proactive/trigger/:feature', requireAuth, async (req, res) => {
+  const { feature } = req.params;
+  // Force-trigger any proactive feature for testing
+  const state = loadProactiveState();
+  const { weekKey, dateStr } = getBrisbaneNow();
+  try {
+    if (feature==='morning') { delete state.morningBriefDate; saveProactiveState(state); await sendMorningBrief(); }
+    else if (feature==='aurora') { delete state.auroraAlertWeek; saveProactiveState(state); await sendAuroraProjectAlert(); }
+    else if (feature==='ceo') { delete state.ceoWeeklyBriefWeek; saveProactiveState(state); await draftCEOWeeklyBrief(); }
+    else if (feature==='capacity') { delete state.capacityCheckWeek; saveProactiveState(state); await checkCapacityTrends(); }
+    else if (feature==='compliance') { delete state.complianceCheckDate; saveProactiveState(state); await checkComplianceDeadlines(); }
+    else if (feature==='receivables') { delete state.receivablesWeek; saveProactiveState(state); await checkReceivables(); }
+    else if (feature==='finance') { delete state.financeCheckMonth; saveProactiveState(state); await checkFinancialAlerts(); }
+    else if (feature==='onboarding') { await checkOnboardingTriggers(); }
+    res.json({success:true, feature});
+  } catch(e) {
+    res.status(500).json({error:e.message});
+  }
+});
+
 // ── THINK LOOP ──
 async function think() {
   if (isRunning) return;
@@ -2450,6 +3418,34 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
     }
     // Check board meeting schedule (Thursdays only)
     await checkBoardMeetingSchedule();
+
+    // ── PROACTIVE INTELLIGENCE ──
+    const { hour: bHour, minute: bMin, dayOfWeek: bDay, isWeekday } = getBrisbaneNow();
+
+    // Morning brief — 7:00-7:30am weekdays
+    if (isWeekday && bHour === 7 && bMin < 30) {
+      await sendMorningBrief();
+    }
+
+    // Pre-meeting briefs — every cycle during business hours
+    await checkPreMeetingBriefs();
+
+    // Financial intelligence — check for new Diane P&L emails
+    await checkFinancialAlerts();
+
+    // Onboarding triggers — check for new hire emails (every cycle)
+    await checkOnboardingTriggers();
+
+    // Monday morning tasks
+    if (bDay === 'Monday' && bHour >= 7 && bHour <= 9) {
+      await sendAuroraProjectAlert();
+      await draftCEOWeeklyBrief();
+      await checkCapacityTrends();
+      await checkReceivables();
+    }
+
+    // Daily compliance check
+    await checkComplianceDeadlines();
   } catch (err) {
     console.error("❌ Error:", err.message);
   } finally {
