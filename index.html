@@ -778,6 +778,7 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
     <button class="ni" id="actionTrackerBtn" onclick="show('tracker',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>Open actions<span class="nb nb-r" id="trackerBadge" style="display:none">0</span></button>
     <button class="ni" id="auroraNavBtn" onclick="show('aurora',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l1.5 4.5H14l-3.5 2.5 1.5 4.5L8 11l-4 2.5 1.5-4.5L2 6.5h4.5z"/></svg>Aurora projects<span class="nb nb-a" id="auroraBadge" style="display:none">0</span></button>
     <button class="ni" id="clockifyNavBtn" onclick="show('clockify',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg>Clockify<span class="nb nb-r" id="clockifyBadge" style="display:none">0</span></button>
+    <button class="ni" id="complianceNavBtn" onclick="show('compliance',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1l5 2v5c0 3-5 6-5 6S3 11 3 8V3l5-2z"/></svg>Compliance<span class="nb nb-r" id="complianceBadge" style="display:none">0</span></button>
 
     <button class="ni" onclick="show('auto',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 8A5 5 0 113 8"/><path d="M8 3V1M8 3l-2 2M8 3l2 2"/></svg>Automation</button>
 
@@ -1179,9 +1180,11 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 
           <div class="card">
 
-            <div class="ct">Board report <span style="display:flex;gap:8px">
-              <span class="ct-action" onclick="forceSendBoardReport()" style="color:var(--r);font-weight:600">📧 Generate & email me now</span>
-              <span class="ct-action" onclick="generateBoardReportManual()">Generate only</span>
+            <div class="ct">Board report
+            <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <span class="ct-action" onclick="loadBoardReportStatus()">↻ Refresh</span>
+              <span class="ct-action" onclick="generateBoardReportManual()">Generate</span>
+              <span class="ct-action" onclick="forceSendBoardReport()" style="color:var(--r);font-weight:600">Generate &amp; email me</span>
             </span></div>
             <div id="boardReportStatus">
               <div style="font-size:11px;color:var(--t2);padding:4px 0">Loading...</div>
@@ -1190,6 +1193,11 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
             <div class="ct" style="margin-top:16px">R2S metrics <span class="ct-action" onclick="loadR2SMetrics()">↻ Refresh</span></div>
             <div id="r2sMetricsList"><div style="font-size:11px;color:var(--t2);padding:8px 0">Loading live data...</div></div>
 
+          </div>
+
+          <div class="card" id="financialIntelCard">
+            <div class="ct">Financial intelligence <span class="ct-action" onclick="triggerProactive('finance')">↻ Update</span> <span class="ct-action" onclick="triggerProactive('morning')">📧 Morning brief</span></div>
+            <div id="financialSnapshotContent"><div style="font-size:11px;color:var(--t3);padding:4px 0">Loading...</div></div>
           </div>
 
         </div>
@@ -1311,6 +1319,43 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
               <div><span style="color:var(--a)">Amber flag</span> = logging far fewer hours than capacity implies (not tracking time or overstating capacity)</div>
             </div>
           </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- COMPLIANCE CALENDAR -->
+    <div class="pnl" id="pnl-compliance">
+
+      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Compliance and Regulatory Calendar</span>
+        <div style="display:flex;gap:6px">
+          <button onclick="loadCompliance()" style="font-size:11px;padding:4px 10px;background:var(--bg2);border:0.5px solid var(--bm);border-radius:8px;cursor:pointer;color:var(--t2);font-family:var(--f)">↻ Refresh</button>
+          <button onclick="triggerProactive('compliance')" style="font-size:11px;padding:4px 10px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Run check now</button>
+          <button onclick="showAddCompliance()" style="font-size:11px;padding:4px 10px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">+ Add item</button>
+        </div>
+      </div>
+
+      <div id="complianceAddForm" style="display:none;background:var(--bg2);border-radius:var(--rm);padding:12px;margin-bottom:12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;align-items:end">
+          <div><div style="font-size:10px;color:var(--t3);margin-bottom:4px">Item</div><input id="compTitle" placeholder="e.g. ASQA RTO renewal" style="width:100%;padding:7px 10px;border:0.5px solid var(--bm);border-radius:8px;font-size:11px;font-family:var(--f);background:var(--bg)"></div>
+          <div><div style="font-size:10px;color:var(--t3);margin-bottom:4px">Due date</div><input id="compDate" type="date" style="width:100%;padding:7px 10px;border:0.5px solid var(--bm);border-radius:8px;font-size:11px;font-family:var(--f);background:var(--bg)"></div>
+          <div><div style="font-size:10px;color:var(--t3);margin-bottom:4px">Category</div><select id="compCat" style="padding:7px 10px;border:0.5px solid var(--bm);border-radius:8px;font-size:11px;font-family:var(--f);background:var(--bg)"><option>Accreditation</option><option>Certification</option><option>Compliance</option><option>Government</option><option>Insurance</option><option>Legal</option><option>Tender</option><option>Other</option></select></div>
+          <button onclick="addComplianceItem()" style="padding:7px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:11px;font-family:var(--f)">Save</button>
+        </div>
+      </div>
+
+      <div id="complianceList"><div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Loading compliance calendar...</div></div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="ct">Proactive intelligence — trigger manually</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;padding:4px 0">
+          <button onclick="triggerProactive('morning')" class="m-btn sec">📧 Send morning brief</button>
+          <button onclick="triggerProactive('aurora')" class="m-btn sec">⚠ Aurora project alert</button>
+          <button onclick="triggerProactive('ceo')" class="m-btn sec">📝 Draft CEO weekly brief</button>
+          <button onclick="triggerProactive('capacity')" class="m-btn sec">👥 Capacity check</button>
+          <button onclick="triggerProactive('receivables')" class="m-btn sec">💰 Receivables chasers</button>
+          <button onclick="triggerProactive('finance')" class="m-btn sec">📊 Financial snapshot</button>
         </div>
       </div>
 
@@ -1544,16 +1589,16 @@ html,body{height:100%;margin:0;padding:0;overflow:hidden}body{font-family:var(--
 async function loadBoardReportStatus() {
   var el = document.getElementById('boardReportStatus');
   if (!el) return;
+  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">Loading...</div>';
   try {
     var r = await fetch('/board-report/latest');
-    if (!r.ok) { el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No report generated yet. Click Generate now to create one.</div>'; return; }
-    var d = await r.json();
+    var d = (!r.ok) ? {} : await r.json().catch(function(){return {};});
     if (!d.filename) {
       var isThur = new Date().toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'}) === 'Thursday';
       if (isThur) {
-        el.innerHTML = '<div style="background:var(--rl);border-radius:10px;padding:10px 12px;margin-top:4px"><div style="font-size:12px;font-weight:600;color:#A32D2D;margin-bottom:4px">⚠️ Board report due today</div><div style="font-size:11px;color:#A32D2D;margin-bottom:8px">Today is Thursday — if there is a board meeting next week, Cinderella will auto-generate this. You can also generate it manually now.</div><button onclick="generateBoardReportManual()" style="font-size:11px;padding:5px 14px;background:#A32D2D;color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Generate now</button></div>';
+        el.innerHTML = '<div style="background:var(--rl);border-radius:10px;padding:10px 12px;margin-top:4px"><div style="font-size:12px;font-weight:600;color:#A32D2D;margin-bottom:4px">Board report due today</div><div style="font-size:11px;color:#A32D2D;margin-bottom:8px">Today is Thursday — Cinderella will auto-generate when she finds a board meeting next week. Click to generate now.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="forceSendBoardReport()" style="font-size:11px;padding:5px 14px;background:#A32D2D;color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Generate and email me</button><button onclick="generateBoardReportManual()" style="font-size:11px;padding:5px 14px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);border-radius:8px;cursor:pointer;font-family:var(--f)">Generate only</button></div></div>';
       } else {
-        el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No report generated yet. Click Generate now to create one.</div>';
+        el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">No report generated yet.<br><button onclick="forceSendBoardReport()" style="margin-top:6px;font-size:11px;padding:5px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Generate and email me</button></div>';
       }
       return;
     }
@@ -1561,7 +1606,10 @@ async function loadBoardReportStatus() {
     el.innerHTML = '<div style="background:var(--gl);border-radius:10px;padding:10px 12px;margin-top:4px">' +
       '<div style="font-size:12px;font-weight:600;color:#0F6E56;margin-bottom:3px">📋 ' + d.monthName + ' ' + d.yr + ' Report Ready</div>' +
       '<div style="font-size:11px;color:var(--t2);margin-bottom:8px">For: ' + (d.meetingSubject||'Board Meeting') + '<br>Generated: ' + genDate + '</div>' +
-      '<button onclick="downloadBoardReport()" style="font-size:11px;padding:5px 14px;background:#0F6E56;color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">⬇ Download Report</button>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      '<button onclick="downloadBoardReport()" style="font-size:11px;padding:5px 14px;background:#0F6E56;color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">⬇ Download</button>' +
+      '<button onclick="forceSendBoardReport()" style="font-size:11px;padding:5px 14px;background:var(--r);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Generate new and email me</button>' +
+      '</div>' +
     '</div>';
   } catch(e) { el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">Could not load report status.</div>'; }
 }
@@ -1600,8 +1648,11 @@ async function resetBoardReportState() {
 
 async function forceSendBoardReport() {
   var el = document.getElementById('boardReportStatus');
-  if (!confirm('This will generate the board report AND email it to you now. Continue?')) return;
-  if (el) el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">⏳ Generating report and sending email — this takes 30-60 seconds, please wait...</div>';
+  if (!confirm('This will generate a fresh board report for this month and email it to you. Any previous report will be replaced. Continue?')) return;
+  if (el) el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Step 1/2: Resetting state...</div>';
+  // Reset state first so force-send always generates fresh
+  try { await fetch('/board-report/reset-state', {method:'POST'}); } catch(e) {}
+  if (el) el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Step 2/2: Generating report — this takes 30-60 seconds...</div>';
   try {
     var r = await fetch('/board-report/force-send', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
     var d = await r.json();
@@ -4842,10 +4893,14 @@ function show(id,btn){
   if(id==='chat'&&!briefingDone){briefingDone=true;} // briefing now on-demand only
 
   // Load live data when COO tab opens
+  if(id==='today'){
+    loadFinancialSnapshot();
+  }
   if(id==='coo'){
     loadOpenActions(false);
     loadR2SMetrics();
     loadBoardReportStatus();
+    loadFinancialSnapshot();
   }
   if(id==='aurora'){
     loadAuroraFull(false);
@@ -4853,6 +4908,7 @@ function show(id,btn){
   if(id==='tracker') loadTracker();
 
   if(id==='clockify') loadClockify();
+  if(id==='compliance') loadCompliance();
 
 }
 
