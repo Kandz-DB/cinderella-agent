@@ -1783,7 +1783,7 @@ ${context}`;
 
   // Also save locally
   try { writeFileSync('/home/'+filename, docHtml); } catch(e) {}
-  writeFileSync('/home/board-report-latest.json', JSON.stringify({filename, monthName, yr, generatedAt: new Date().toISOString(), meetingSubject}));
+  writeFileSync('/home/board-report-latest.json', JSON.stringify({filename, monthName, yr, generatedAt: new Date().toISOString(), meetingSubject, meetingDate: meetingDate.toISOString()}));
   return filename;
 }
 
