@@ -1322,19 +1322,18 @@ async function loadBoardReportStatus() {
   try {
     var r = await fetch('/board-report/latest');
     var d = (!r.ok) ? {} : await r.json().catch(function(){return {};});
-    // Hide board report card if meeting has passed OR report is older than 12 days
+    // Hide board report card if meeting has passed OR report is older than 8 days
     var shouldHide = false;
     if (d.meetingDate) {
       var mDate = new Date(d.meetingDate);
-      if ((Date.now() - mDate) / (24*60*60*1000) > 2) shouldHide = true;
+      if ((Date.now() - mDate) / (24*60*60*1000) >= 1) shouldHide = true;
     } else if (d.generatedAt) {
-      // No meetingDate stored — use generatedAt as proxy
-      // If generated more than 12 days ago, the meeting has likely passed
       var genAge = (Date.now() - new Date(d.generatedAt)) / (24*60*60*1000);
-      if (genAge > 12) shouldHide = true;
+      if (genAge >= 8) shouldHide = true;
     }
     if (shouldHide) {
-      if (card) card.style.display = 'none';
+      // Show a minimal archived state rather than hiding entirely
+      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No active report — next report will be auto-generated the Thursday before your next board meeting. <span class="ct-action" onclick="forceSendBoardReport()" style="margin-left:8px">Generate now</span></div>';
       return;
     }
     if (!d.filename) {
