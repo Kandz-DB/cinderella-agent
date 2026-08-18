@@ -1925,6 +1925,41 @@ app.post('/board-report/reset-state', requireAuth, (req, res) => {
   res.json({ success: true, cleared: prev, message: 'State cleared — Thursday scheduler will now run and generate the report' });
 });
 
+// Financial intelligence debug — shows what emails are found without updating state
+app.get('/proactive/finance-debug', requireAuth, async (req, res) => {
+  try {
+    const now = new Date();
+    const since = new Date(now.getTime()-60*24*60*60*1000).toISOString();
+    const emails = await graphGet(
+      `/me/messages?$top=80&$filter=receivedDateTime ge ${since}&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc`
+    );
+    const all = emails.value||[];
+    const finEmails = all.filter(e => {
+      const from = (e.from?.emailAddress?.name||e.from?.emailAddress?.address||'').toLowerCase();
+      const subj = (e.subject||'').toLowerCase();
+      const prev = (e.bodyPreview||'').toLowerCase();
+      if (subj.includes('board report ready')) return false;
+      const isDiane = from.includes('diane') || from.includes('kruger');
+      const isFinance = subj.match(/p&l|profit|loss|financial|month|result|revenue|ytd|year to date|cash|forecast|budget/i) ||
+                        prev.match(/\$[\d,]+|positive|negative|result|closing/i);
+      return isDiane || isFinance;
+    });
+    const state = loadProactiveState();
+    res.json({
+      totalEmails: all.length,
+      financeEmailsFound: finEmails.length,
+      financeEmails: finEmails.map(e => ({
+        from: e.from?.emailAddress?.name,
+        subject: e.subject,
+        date: e.receivedDateTime?.substring(0,10),
+        preview: (e.bodyPreview||'').substring(0,200)
+      })),
+      currentSnapshot: state.financialSnapshot||null,
+      financeCheckMonth: state.financeCheckMonth||null
+    });
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
 // Debug: show current board state
 app.get('/board-report/debug', requireAuth, (req, res) => {
   const state = loadBoardState();
@@ -3116,11 +3151,15 @@ async function checkCapacityTrends() {
 }
 
 // ── 6. FINANCIAL INTELLIGENCE ─────────────────────────────────
-async function checkFinancialAlerts() {
-  if (!tokenStore.access_token) return;
+async function checkFinancialAlerts(forceRun) {
+  if (!tokenStore.access_token) return { found: false, error: 'Not authenticated' };
   const { monthKey } = getBrisbaneNow();
   const state = loadProactiveState();
-  // NOTE: financeCheckMonth guard is intentionally loose — manual triggers always bypass it
+  // Guard: skip if already checked this month UNLESS forced (manual trigger always forces)
+  if (!forceRun && state.financeCheckMonth === monthKey) {
+    console.log('[FinanceAlert] Already checked this month, skipping. Use force to bypass.');
+    return { found: false, skipped: true };
+  }
 
   try {
     const now = new Date();
@@ -3627,7 +3666,7 @@ app.post('/proactive/trigger/:feature', requireAuth, async (req, res) => {
       const pState = loadProactiveState();
       delete pState.financeCheckMonth;
       saveProactiveState(pState);
-      const finResult = await checkFinancialAlerts();
+      const finResult = await checkFinancialAlerts(true); // force bypass month guard
       const snap = loadProactiveState().financialSnapshot;
       return res.json({ success: true, feature,
         message: finResult.found
