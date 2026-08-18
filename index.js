@@ -1934,27 +1934,17 @@ app.get('/proactive/finance-debug', requireAuth, async (req, res) => {
       `/me/messages?$top=80&$filter=receivedDateTime ge ${since}&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc`
     );
     const all = emails.value||[];
-    // Search using $filter for exact email address match
-    let dianeEmails = [];
-    try {
-      const dFilter = encodeURIComponent("from/emailAddress/address eq 'diane.k@risk2solution.com'");
-      const ds = await graphGet(`/me/messages?$filter=${dFilter}&$top=30&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc`);
-      dianeEmails = ds.value||[];
-    } catch(e) { console.warn('Diane filter error:', e.message); }
-    // Also search by name
-    try {
-      const ds2 = await graphGet('/me/messages?$search="Diane Kruger"&$top=20&$select=subject,from,bodyPreview,receivedDateTime');
-      (ds2.value||[]).forEach(e => { if(!dianeEmails.find(x=>x.id===e.id)) dianeEmails.push(e); });
-    } catch(e) {}
-    // P&L subject search (encoded correctly)
-    try {
-      const ds3 = await graphGet('/me/messages?$search="P%26L"&$top=15&$select=subject,from,bodyPreview,receivedDateTime');
-      (ds3.value||[]).forEach(e => { if(!dianeEmails.find(x=>x.id===e.id)) dianeEmails.push(e); });
-    } catch(e) {}
-    const finEmails = dianeEmails.filter(e => {
+    // Fetch 200 most recent emails and filter locally (avoids Graph API filter/search quirks)
+    const allEmails = await graphGet('/me/messages?$top=200&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc');
+    const allMsgs = allEmails.value||[];
+    const finEmails = allMsgs.filter(e => {
       const fromAddr = (e.from?.emailAddress?.address||'').toLowerCase();
       const fromName = (e.from?.emailAddress?.name||'').toLowerCase();
-      return fromAddr.includes('risk2solution') || fromName.includes('diane') || fromName.includes('kruger');
+      const subj = (e.subject||'').toLowerCase();
+      if (subj.includes('board report ready')) return false;
+      const isR2S = fromAddr.includes('risk2solution.com');
+      const isFinance = subj.match(/p.l|profit|loss|actuals|forecast|financial|revenue|result|month|budget|cash|update/i);
+      return isR2S && isFinance;
     });
     const state = loadProactiveState();
     res.json({
@@ -3177,67 +3167,46 @@ async function checkFinancialAlerts(forceRun) {
     const now = new Date();
     const since = new Date(now.getTime()-90*24*60*60*1000).toISOString(); // 90 days back
 
-    // TARGETED SEARCH for Diane's finance emails
-    // Using $filter (NOT $search) to avoid URL encoding issues with & and @ characters
+    // SIMPLE RELIABLE SEARCH: fetch all recent emails, filter in JavaScript
+    // Avoid Graph API $filter/$search quirks — just get a large batch and filter locally
     let finEmails = [];
 
-    // Search 1: All emails FROM Diane's exact address using OData $filter
+    // Fetch last 200 emails (covers 90+ days for most inboxes)
     try {
-      const dianeAddr = encodeURIComponent("from/emailAddress/address eq 'diane.k@risk2solution.com'");
-      const dianeSince = encodeURIComponent(new Date(now.getTime()-90*24*60*60*1000).toISOString());
-      const dianeRes = await graphGet(
-        `/me/messages?$filter=${dianeAddr}&$top=50&$select=id,subject,from,bodyPreview,body,receivedDateTime&$orderby=receivedDateTime desc`
+      const batch1 = await graphGet(
+        '/me/messages?$top=200&$select=id,subject,from,bodyPreview,body,receivedDateTime&$orderby=receivedDateTime desc'
       );
-      (dianeRes.value||[]).forEach(e => { if (!finEmails.find(x=>x.id===e.id)) finEmails.push(e); });
-      console.log('[FinanceAlert] Diane filter search found:', dianeRes.value?.length||0, 'emails');
-    } catch(e) { console.warn('[FinanceAlert] Diane filter search error:', e.message); }
-
-    // Search 2: Display name search — catches shared files and forwarded emails
-    // Use $search with just "Diane Kruger" (no email address to avoid @ issues)
-    try {
-      const dianeNameRes = await graphGet(
-        '/me/messages?$search="Diane Kruger"&$top=30&$select=id,subject,from,bodyPreview,body,receivedDateTime'
-      );
-      (dianeNameRes.value||[]).forEach(e => { if (!finEmails.find(x=>x.id===e.id)) finEmails.push(e); });
-      console.log('[FinanceAlert] Diane name search found:', dianeNameRes.value?.length||0, 'emails');
-    } catch(e) { console.warn('[FinanceAlert] Diane name search error:', e.message); }
-
-    // Search 3: Subject search for P&L specifically — "PL" to avoid URL encoding issues with &
-    // Also search for "Actuals" and "Forecast" which appear in Diane's shared file emails
-    const subjectSearches = ['P%26L', 'Actuals', 'finance update', 'month end'];
-    for (const term of subjectSearches) {
-      try {
-        const sRes = await graphGet(
-          `/me/messages?$search="${term}"&$top=10&$select=id,subject,from,bodyPreview,body,receivedDateTime`
-        );
-        (sRes.value||[]).forEach(e => { if (!finEmails.find(x=>x.id===e.id)) finEmails.push(e); });
-      } catch(e) {}
+      finEmails = batch1.value||[];
+      console.log('[FinanceAlert] Total emails fetched:', finEmails.length);
+    } catch(e) {
+      console.error('[FinanceAlert] Email fetch error:', e.message);
+      return { found: false, error: e.message };
     }
 
-    // Filter: keep only internal R2S emails (Diane, Dave, other R2S staff) — exclude vendor invoices
+    // Filter locally — look for R2S staff finance emails
     finEmails = finEmails.filter(e => {
       const fromAddr = (e.from?.emailAddress?.address||'').toLowerCase();
       const fromName = (e.from?.emailAddress?.name||'').toLowerCase();
       const subj = (e.subject||'').toLowerCase();
-      if (subj.includes('board report ready')) return false;
-      // Must be from an R2S email address OR from a known R2S staff member name
+      if (subj.includes('board report ready') || subj.includes('morning brief')) return false;
+
+      // Must be from R2S domain
       const isR2S = fromAddr.includes('risk2solution.com');
-      const isKnownStaff = fromName.includes('diane') || fromName.includes('dave') ||
-                           fromName.includes('kandia') || fromName.includes('paul');
-      // Must have some finance relevance
-      const isFinanceRelated = subj.match(/p.l|profit|loss|actuals|forecast|financial|revenue|result|month|budget|cash/i);
-      return (isR2S || isKnownStaff) && isFinanceRelated;
+      // Must have finance-related subject
+      const isFinance = subj.match(/p.l|profit|loss|actuals|forecast|financial|revenue|result|month.end|budget|cash.flow|update/i);
+
+      return isR2S && isFinance;
     });
 
     // Sort most recent first
     finEmails.sort((a,b) => new Date(b.receivedDateTime)-new Date(a.receivedDateTime));
 
-    console.log('[FinanceAlert] Final finance emails:', finEmails.length,
-      finEmails.slice(0,5).map(e => new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'})+' '+e.from?.emailAddress?.name+': '+e.subject).join(' | '));
+    console.log('[FinanceAlert] R2S finance emails found:', finEmails.length,
+      finEmails.slice(0,5).map(e => new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) + ' | ' + e.from?.emailAddress?.name + ': ' + e.subject).join(' || '));
 
     if (finEmails.length === 0) {
-      console.warn('[FinanceAlert] No finance emails from R2S staff found in last 90 days');
-      return { found: false, message: 'No P&L emails from Diane found. Check /proactive/finance-debug for diagnostics.' };
+      console.warn('[FinanceAlert] No finance emails from risk2solution.com found in last 200 emails');
+      return { found: false, message: 'No internal R2S finance emails found. Check Azure logs for details.' };
     }
 
     // Build context from all finance emails for AI to analyse
