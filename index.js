@@ -3248,7 +3248,7 @@ async function checkFinancialAlerts(forceRun) {
         .replace(/<[^>]+>/g, ' ')
         .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
         .replace(/\s+/g, ' ').trim();
-      const fullContent = ((e.bodyPreview||'') + ' ' + bodyText).substring(0, 1200);
+      const fullContent = ((e.bodyPreview||'') + ' ' + bodyText).substring(0, 3000);
       return `FROM: ${e.from?.emailAddress?.name||'?'} | DATE: ${new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})}
 SUBJECT: ${e.subject}
 CONTENT: ${fullContent}`;
@@ -3285,18 +3285,24 @@ ${emailContext}
 
 Aurora context: ${auroraActiveCount} active projects, $${Math.round(auroraOutstanding).toLocaleString()} in outstanding client invoices (money owed TO R2S).
 
+Look specifically for phrases like:
+- "negative of $X" or "in a negative" = negative result
+- "positive of $X" or "closed positive" = positive result  
+- "currently X" in context of monthly P&L = current month position
+- Dollar amounts preceded by context about revenue, wages, expenses = financial figures
+
 Return ONLY a JSON object with no markdown:
 {
-  "period": "The reporting period, e.g. July 2026",
-  "result": "R2S net result as +$X or -$X (positive = profit, negative = loss). If no P&L data found, write null",
-  "resultClass": "pos, neg, or unknown",
-  "keyDriver": "1 sentence on what drove R2S's result this period",
-  "ytd": "YTD figure if mentioned in emails, else null",
-  "forecast": "Forward forecast if mentioned, else null",
-  "analysis": "3-4 sentences of COO-level analysis of R2S's financial position. Reference specific figures from the emails. Comment on performance vs budget/forecast if mentioned. Flag any concerns or positive signals. Be analytical, not generic.",
-  "actions": ["specific recommended action 1", "specific recommended action 2"],
+  "period": "The reporting period, e.g. August 2026 or July 2026",
+  "result": "R2S net result as +$X,XXX.XX or -$X,XXX.XX. Look for 'negative of $X' or 'positive of $X' in the email. Do NOT return null if figures are present — extract them.",
+  "resultClass": "pos or neg",
+  "keyDriver": "1 sentence on what drove the result, naming specific items and amounts from the email",
+  "ytd": "YTD figure if mentioned, else null",
+  "forecast": "Forward forecast figure if mentioned, else null",
+  "analysis": "3-4 sentences of sharp COO-level analysis. Name specific cost items and amounts. Flag risks. Comment on what this means for cash flow and whether any items are one-off vs recurring. Be analytical and specific.",
+  "actions": ["specific action with dollar amount or deadline if known", "second specific action"],
   "outstanding": ${Math.round(auroraOutstanding)},
-  "dataFound": true or false — set to false if no actual R2S P&L data was in the emails
+  "dataFound": true
 }`;
 
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
@@ -3683,6 +3689,19 @@ Tone: polite but clear about urgency. Mention payment terms. Request ETA on paym
 // ── COMPLIANCE CALENDAR STATE API ─────────────────────────────
 app.get('/proactive/state', requireAuth, (req, res) => {
   res.json(loadProactiveState());
+});
+
+// Manually set financial snapshot (for when emails don't parse automatically)
+app.post('/proactive/finance-snapshot', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  if (!state.financialSnapshot) state.financialSnapshot = {};
+  Object.assign(state.financialSnapshot, req.body, {
+    updatedAt: new Date().toISOString(),
+    source: 'manual'
+  });
+  saveProactiveState(state);
+  console.log('[FinanceAlert] Manual snapshot set:', req.body.period, req.body.result);
+  res.json({ success: true, snapshot: state.financialSnapshot });
 });
 
 app.post('/proactive/compliance/add', requireAuth, (req, res) => {
