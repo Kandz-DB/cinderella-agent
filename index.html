@@ -1322,14 +1322,20 @@ async function loadBoardReportStatus() {
   try {
     var r = await fetch('/board-report/latest');
     var d = (!r.ok) ? {} : await r.json().catch(function(){return {};});
-    // Hide board report card if meeting has already occurred (more than 2 days ago)
+    // Hide board report card if meeting has passed OR report is older than 12 days
+    var shouldHide = false;
     if (d.meetingDate) {
-      var meetingDate = new Date(d.meetingDate);
-      var daysSince = (Date.now() - meetingDate) / (24*60*60*1000);
-      if (daysSince > 2) {
-        if (card) card.style.display = 'none';
-        return;
-      }
+      var mDate = new Date(d.meetingDate);
+      if ((Date.now() - mDate) / (24*60*60*1000) > 2) shouldHide = true;
+    } else if (d.generatedAt) {
+      // No meetingDate stored — use generatedAt as proxy
+      // If generated more than 12 days ago, the meeting has likely passed
+      var genAge = (Date.now() - new Date(d.generatedAt)) / (24*60*60*1000);
+      if (genAge > 12) shouldHide = true;
+    }
+    if (shouldHide) {
+      if (card) card.style.display = 'none';
+      return;
     }
     if (!d.filename) {
       var isThur = new Date().toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'}) === 'Thursday';
@@ -7070,10 +7076,11 @@ function dismissCOOAction(el) {
 
 // ── PROACTIVE INTELLIGENCE FUNCTIONS ──
 
+var _finSnapLoading = false;
 async function loadFinancialSnapshot() {
   var el = document.getElementById('financialSnapshotContent');
-  if (!el) return;
-  if (el.innerHTML.includes('Loading')) return; // prevent duplicate calls
+  if (!el || _finSnapLoading) return;
+  _finSnapLoading = true;
   el.innerHTML = '<div style="font-size:11px;color:var(--t3)">Loading...</div>';
   try {
     var r = await fetch('/proactive/state');
@@ -7098,7 +7105,9 @@ async function loadFinancialSnapshot() {
       '</div>' +
       (fin.updatedAt ? '<div style="font-size:9px;color:var(--t3);margin-top:5px">Updated ' + new Date(fin.updatedAt).toLocaleDateString('en-AU',{day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}) + '</div>' : '');
   } catch(e) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">Could not load. <button onclick="loadFinancialSnapshot()" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--bg2);border:0.5px solid var(--bm);cursor:pointer;font-family:var(--f)">Retry</button></div>';
+    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">Could not load financial data. <button onclick="_finSnapLoading=false;loadFinancialSnapshot()" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--bg2);border:0.5px solid var(--bm);cursor:pointer;font-family:var(--f)">Retry</button></div>';
+  } finally {
+    _finSnapLoading = false;
   }
 }
 
