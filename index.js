@@ -2413,6 +2413,74 @@ function getBrisbaneNow() {
   };
 }
 
+// Build Outlook-safe HTML from plain text sections
+// Outlook Classic uses Word rendering — no flexbox, no grid, no modern CSS
+function buildOutlookEmail(subject, sections) {
+  // sections = [{type:'header'|'metric'|'text'|'list'|'divider', ...data}]
+  const TEAL = '#07706B';
+  const PINK = '#D4699A';
+  const GREY = '#6A6660';
+  const LIGHT = '#F2F1EE';
+
+  let rows = '';
+
+  // Header row
+  rows += `<tr><td style="background:linear-gradient(105deg,#07706B,#56D4CE 55%,#F0B8CC 85%,#F8D2DE);padding:20px 28px;">
+    <p style="margin:0;font-family:Georgia,serif;font-size:26px;font-style:italic;color:#ffffff;font-weight:bold;">Cinderella</p>
+    <p style="margin:4px 0 0;font-family:Arial,sans-serif;font-size:10px;color:rgba(255,255,255,0.8);letter-spacing:2px;text-transform:uppercase;">EXECUTIVE ASSISTANT · RISK 2 SOLUTION</p>
+  </td></tr>`;
+
+  // Subject row
+  rows += `<tr><td style="padding:20px 28px 12px;border-bottom:2px solid ${TEAL};">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;color:#111110;">${subject}</p>
+  </td></tr>`;
+
+  // Content rows
+  sections.forEach(s => {
+    if (s.type === 'heading') {
+      rows += `<tr><td style="padding:18px 28px 6px;"><p style="margin:0;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:${GREY};text-transform:uppercase;letter-spacing:1.5px;">${s.text}</p></td></tr>`;
+    } else if (s.type === 'divider') {
+      rows += `<tr><td style="padding:0 28px;"><hr style="border:none;border-top:1px solid #E8E6E1;margin:4px 0;"></td></tr>`;
+    } else if (s.type === 'text') {
+      rows += `<tr><td style="padding:6px 28px;"><p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">${s.text}</p></td></tr>`;
+    } else if (s.type === 'metric') {
+      rows += `<tr><td style="padding:10px 28px;">
+        <table width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td width="50%" style="padding:12px 14px;background:${LIGHT};border-radius:8px;vertical-align:top;">
+            <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:9px;color:${GREY};text-transform:uppercase;letter-spacing:1px;">${s.label}</p>
+            <p style="margin:0;font-family:Arial,sans-serif;font-size:22px;font-weight:bold;color:${s.color||'#111110'};">${s.value}</p>
+          </td>
+          ${s.label2?`<td width="4%"></td><td width="46%" style="padding:12px 14px;background:${LIGHT};border-radius:8px;vertical-align:top;"><p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:9px;color:${GREY};text-transform:uppercase;letter-spacing:1px;">${s.label2}</p><p style="margin:0;font-family:Arial,sans-serif;font-size:22px;font-weight:bold;color:${s.color2||'#111110'};">${s.value2}</p></td>`:''}
+        </tr></table>
+      </td></tr>`;
+    } else if (s.type === 'list') {
+      const items = (s.items||[]).map(i =>
+        `<tr><td style="padding:4px 0;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.5;">${s.bullet||'&#8226;'}&nbsp;&nbsp;${i}</td></tr>`
+      ).join('');
+      rows += `<tr><td style="padding:6px 28px 10px;"><table width="100%" cellpadding="0" cellspacing="0">${items}</table></td></tr>`;
+    } else if (s.type === 'callout') {
+      rows += `<tr><td style="padding:8px 28px;">
+        <table width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td style="padding:12px 16px;background:${s.bg||LIGHT};border-left:4px solid ${s.accent||TEAL};border-radius:0 6px 6px 0;">
+            <p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">${s.text}</p>
+          </td>
+        </tr></table>
+      </td></tr>`;
+    }
+  });
+
+  // Footer
+  rows += `<tr><td style="padding:20px 28px;background:${LIGHT};border-top:1px solid #E8E6E1;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:${GREY};">Cinderella &nbsp;&#183;&nbsp; Executive Assistant to Kandia Du Bruyn, COO &nbsp;&#183;&nbsp; Risk 2 Solution</p>
+  </td></tr>`;
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="X-UA-Compatible" content="IE=edge"></head>
+<body style="margin:0;padding:20px;background:#F2F1EE;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+${rows}
+</table></body></html>`;
+}
+
 async function draftToKandia(subject, body, highPriority) {
   try {
     const token = await getValidToken();
@@ -2585,7 +2653,51 @@ async function sendMorningBrief() {
 
     body += `\n${'─'.repeat(40)}\nCinderella — Executive Assistant to Kandia Du Bruyn, COO\nRisk 2 Solution`;
 
-    await draftToKandia(`🌅 Morning Brief — ${todayStr}`, body, false);
+    // Build Outlook-compatible HTML version
+    const morningHtml = buildOutlookEmail(`Morning Brief — ${todayStr}`, [
+      {type:'text', text:`Good morning Kandia. Here is your briefing for <strong>${todayStr}</strong>.`},
+      {type:'heading', text:'Today\'s Calendar'},
+      meetings.length === 0
+        ? {type:'text', text:'No meetings scheduled today.'}
+        : {type:'list', bullet:'&#128197;', items: meetings.map(m => `<strong>${m.time}</strong> &nbsp; ${m.subject}${m.attendees?' &nbsp;&#183;&nbsp; '+m.attendees:''}`)},
+      {type:'heading', text:`Priority Actions (${urgent.length} Urgent, ${thisWeek.length} This Week)`},
+      ...(urgent.length > 0 ? [{type:'list', bullet:'&#9888;', items: urgent.slice(0,5).map(a => `<strong>${a.title}</strong>${a.source?' &mdash; '+a.source:''}`)}] : []),
+      ...(thisWeek.length > 0 ? [{type:'list', bullet:'&#8226;', items: thisWeek.slice(0,5).map(a => a.title)}] : []),
+      ...(urgent.length===0&&thisWeek.length===0 ? [{type:'callout', text:'No urgent items today.', accent:'#0D8A62', bg:'#DCEEE6'}] : []),
+      {type:'heading', text:'Aurora Projects'},
+      {type:'metric', label:'Overdue Deliverables', value:String(auroraOverdue), color: auroraOverdue>0?'#C8211E':'#0D8A62',
+        label2:'Outstanding Invoices', value2:'$'+Math.round(auroraOutstanding).toLocaleString(), color2: auroraOutstanding>0?'#C4720A':'#0D8A62'},
+      {type:'heading', text:'Unanswered Emails (48h+)'},
+      unanswered.length === 0
+        ? {type:'callout', text:'Inbox clear — no unanswered emails over 48 hours.', accent:'#0D8A62', bg:'#DCEEE6'}
+        : {type:'list', bullet:'&#9993;', items: unanswered.slice(0,5).map(e => `<strong>${e.from?.emailAddress?.name||'?'}</strong> &mdash; ${e.subject}`)},
+      {type:'heading', text:`Staff Check-ins — ${checkInCount} received this week`},
+      {type:'divider'},
+      ...(compItems.length > 0 ? [{type:'heading', text:'Compliance Alerts (Due Within 7 Days)'}, {type:'list', bullet:'&#9888;', items: compItems.map(c => `<strong>${c.title}</strong> &mdash; due ${c.dueDate}`)}] : []),
+      ...(finSnap.lastResult ? [{type:'heading', text:'Financial Snapshot'}, {type:'metric', label:finSnap.period||'Last Period', value:finSnap.lastResult, color:finSnap.lastResult.startsWith('-')?'#C8211E':'#0D8A62'}] : [])
+    ]);
+
+    // Send as HTML email for Outlook compatibility
+    const token = await getValidToken();
+    const recipientEmail = await getKandiaEmail();
+    const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        subject: `🌅 Morning Brief — ${todayStr}`,
+        body:{contentType:'HTML', content:morningHtml},
+        toRecipients:[{emailAddress:{address:recipientEmail}}],
+        importance:'normal'
+      })
+    });
+    const draft = await draftRes.json();
+    if (draft.id) {
+      const sendRes = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send', {
+        method:'POST', headers:{Authorization:'Bearer '+token}
+      });
+      if (sendRes.status === 202) console.log('[MorningBrief] ✅ HTML email sent');
+      else console.log('[MorningBrief] Saved to Drafts (HTML)');
+    }
 
     state.morningBriefDate = dateStr;
     saveProactiveState(state);
@@ -2618,19 +2730,76 @@ async function checkPreMeetingBriefs() {
       const attendeeEmails = (meeting.attendees||[]).map(a=>a.emailAddress?.address||'').filter(Boolean);
       const meetTime = new Date(meeting.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
 
-      // Search emails for attendees
+      // Search emails AND Teams for context about this meeting
       let emailContext = '';
-      for (const email of attendeeEmails.slice(0,3)) {
+      let teamsContext = '';
+
+      // Email search — by attendee name/email/company
+      for (const email of attendeeEmails.slice(0,4)) {
         try {
           const domain = email.split('@')[1];
           if (domain && !domain.includes('risk2solution')) {
-            const recent = await graphGet(`/me/messages?$search="${email}"&$top=3&$select=subject,from,bodyPreview,receivedDateTime`);
+            const companyName = domain.split('.')[0];
+            const recent = await graphGet(`/me/messages?$search="${companyName}"&$top=5&$select=subject,from,bodyPreview,receivedDateTime,body`);
             (recent.value||[]).forEach(m => {
-              emailContext += `- ${m.from?.emailAddress?.name}: ${m.subject} | ${(m.bodyPreview||'').substring(0,100)}\n`;
+              const bodyText = (m.body?.content||m.bodyPreview||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').substring(0,200);
+              emailContext += `[${new Date(m.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}] ${m.from?.emailAddress?.name}: ${m.subject}\n  ${bodyText}\n\n`;
             });
           }
         } catch(e) {}
       }
+      // Also search by attendee names
+      for (const name of attendeeNames.split(',').map(n=>n.trim()).filter(Boolean).slice(0,3)) {
+        const firstName = name.split(' ')[0];
+        if (firstName.length < 3) continue;
+        try {
+          const nameSearch = await graphGet(`/me/messages?$search="${firstName}"&$top=4&$select=subject,from,bodyPreview,receivedDateTime`);
+          (nameSearch.value||[]).filter(m => {
+            const preview = (m.bodyPreview||'').toLowerCase();
+            return preview.includes(firstName.toLowerCase()) || (m.from?.emailAddress?.name||'').toLowerCase().includes(firstName.toLowerCase());
+          }).forEach(m => {
+            if (!emailContext.includes(m.subject)) {
+              emailContext += `[${new Date(m.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}] ${m.from?.emailAddress?.name}: ${m.subject}\n  ${(m.bodyPreview||'').substring(0,150)}\n\n`;
+            }
+          });
+        } catch(e) {}
+      }
+
+      // Teams chat search — critical for internal meetings
+      try {
+        const chats = await graphGet('/me/chats?$top=30&$expand=members');
+        let foundChats = 0;
+        for (const chat of (chats.value||[])) {
+          if (foundChats >= 4) break;
+          const members = (chat.members||[]).map(m=>m.displayName||'');
+          const relevant = attendeeNames.split(',').some(name => {
+            const n = name.trim().toLowerCase();
+            return members.some(m => m.toLowerCase().includes(n.split(' ')[0]) && n.split(' ')[0].length > 2);
+          });
+          if (!relevant) continue;
+          try {
+            const msgs = await graphGet(`/me/chats/${chat.id}/messages?$top=20&$orderby=createdDateTime desc`);
+            const recent = (msgs.value||[]).filter(m => {
+              if (!m.createdDateTime) return false;
+              return new Date(m.createdDateTime) >= new Date(Date.now()-14*24*60*60*1000);
+            });
+            if (recent.length > 0) {
+              const chatName = chat.topic || members.filter(m=>!m.includes('Kandia')).join(', ');
+              teamsContext += `Teams: "${chatName}"\n`;
+              recent.slice(0,8).forEach(m => {
+                const body = (m.body?.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().substring(0,200);
+                if (body.length > 15) {
+                  const sender = m.from?.user?.displayName||'?';
+                  const time = new Date(m.createdDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'});
+                  teamsContext += `  [${time}] ${sender}: ${body}\n`;
+                }
+              });
+              teamsContext += '\n';
+              foundChats++;
+            }
+          } catch(e) {}
+        }
+      } catch(e) { console.warn('[PreMeeting] Teams search error:', e.message); }
 
       // Check Aurora for matching projects
       let auroraContext = '';
@@ -2653,18 +2822,30 @@ async function checkPreMeetingBriefs() {
       });
 
       // Generate brief with AI
-      const briefPrompt = `Generate a concise pre-meeting brief (max 200 words) for Kandia Du Bruyn (COO, Risk 2 Solution) who has a meeting in 30 minutes.
+      const briefPrompt = `You are Cinderella, the COO assistant for Kandia Du Bruyn at Risk 2 Solution. Generate a sharp, useful pre-meeting brief. Kandia has a meeting starting in 30 minutes.
 
-Meeting: ${meeting.subject}
-Time: ${meetTime}
-Attendees: ${attendeeNames||'Unknown'}
-Meeting notes: ${meeting.bodyPreview||'No description'}
+MEETING: ${meeting.subject}
+TIME: ${meetTime}
+ATTENDEES: ${attendeeNames||'Unknown'}
+MEETING DESCRIPTION: ${meeting.bodyPreview||'Not provided'}
 
-Recent email context: ${emailContext||'No recent emails found'}
-${auroraContext ? 'Project context: '+auroraContext : ''}
-${actions.length > 0 ? 'Open actions related to these people: '+actions.map(a=>a.title).join(', ') : ''}
+RECENT EMAILS (last 14 days):
+${emailContext||'No recent email context found.'}
 
-Provide: 1) Key context about the attendees/topic, 2) 3 suggested talking points or questions, 3) Any relevant open actions to raise. Be specific and actionable. No generic filler.`;
+TEAMS CONVERSATIONS (last 14 days):
+${teamsContext||'No recent Teams messages found.'}
+
+${auroraContext ? 'AURORA PROJECT STATUS:\n'+auroraContext : ''}
+${actions.length > 0 ? 'OPEN ACTIONS:\n'+actions.map(a=>a.title).join('\n') : ''}
+
+Write a brief that covers:
+1. CONTEXT (2-3 sentences) — who is this person/group, what is the relationship with R2S, what has been discussed recently
+2. KEY BACKGROUND — pull specific details from the emails and Teams messages above. What decisions were made, what was promised, what issues exist
+3. TALKING POINTS (3-4 bullet points) — specific agenda items to raise based on actual conversation history, not generic suggestions
+4. WATCH POINTS — anything sensitive, unresolved, or that needs careful handling
+5. OPEN ACTIONS — any pending items involving these people
+
+Be specific. Pull real names, numbers, and topics from the context. No filler phrases.`;
 
       try {
         const ai = await fetch('https://api.anthropic.com/v1/messages', {
@@ -2675,9 +2856,35 @@ Provide: 1) Key context about the attendees/topic, 2) 3 suggested talking points
         const aiData = await ai.json();
         const briefText = (aiData.content||[]).map(c=>c.text||'').join('');
 
-        const body = `Hi Kandia,\n\nYou have a meeting starting in approximately 30 minutes:\n\n📅 ${meeting.subject}\n⏰ ${meetTime}\n👥 ${attendeeNames||'No external attendees'}\n\n${briefText}\n\n─────────────────\nCinderella — Pre-Meeting Brief`;
+        // Build Outlook-compatible HTML brief
+        const briefLines = briefText.split('\n').filter(l=>l.trim());
+        const briefHtml = buildOutlookEmail(`Pre-Meeting Brief: ${meeting.subject}`, [
+          {type:'metric', label:'Meeting', value:meeting.subject.substring(0,30), color:'#07706B',
+            label2:'Time', value2:meetTime, color2:'#07706B'},
+          {type:'text', text:`<strong>Attendees:</strong> ${attendeeNames||'Not specified'}`},
+          {type:'divider'},
+          ...briefLines.map(line => {
+            if (line.match(/^\d\.|^[A-Z\s]+:$|CONTEXT|BACKGROUND|TALKING|WATCH|OPEN/)) {
+              return {type:'heading', text:line.replace(/\*\*/g,'')};
+            } else if (line.startsWith('-') || line.startsWith('•')) {
+              return {type:'list', items:[line.replace(/^[-•]\s*/,'')]};
+            } else {
+              return {type:'text', text:line.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')};
+            }
+          })
+        ]);
 
-        await draftToKandia(`📅 Pre-meeting brief: ${meeting.subject} (${meetTime})`, body, true);
+        const token2 = await getValidToken();
+        const recip2 = await getKandiaEmail();
+        const dr2 = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+          method:'POST', headers:{Authorization:'Bearer '+token2,'Content-Type':'application/json'},
+          body:JSON.stringify({subject:`📅 Pre-meeting brief: ${meeting.subject} (${meetTime})`,body:{contentType:'HTML',content:briefHtml},toRecipients:[{emailAddress:{address:recip2}}],importance:'high'})
+        });
+        const draftObj = await dr2.json();
+        if (draftObj.id) {
+          const snd = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draftObj.id+'/send',{method:'POST',headers:{Authorization:'Bearer '+token2}});
+          console.log('[PreMeeting] Email status:', snd.status === 202 ? 'Sent' : 'Draft saved');
+        }
         state.preMeetingBriefsSent[meetId] = new Date().toISOString();
         saveProactiveState(state);
         console.log('[PreMeeting] ✅ Brief sent for:', meeting.subject);
