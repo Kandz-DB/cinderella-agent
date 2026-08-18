@@ -1934,15 +1934,19 @@ app.get('/proactive/finance-debug', requireAuth, async (req, res) => {
       `/me/messages?$top=80&$filter=receivedDateTime ge ${since}&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc`
     );
     const all = emails.value||[];
-    const finEmails = all.filter(e => {
+    // Targeted search for Diane's emails specifically
+    let dianeEmails = [];
+    try {
+      const ds = await graphGet('/me/messages?$search="from:diane.k@risk2solution.com"&$top=20&$select=subject,from,bodyPreview,receivedDateTime');
+      dianeEmails = ds.value||[];
+    } catch(e) {}
+    try {
+      const ds2 = await graphGet('/me/messages?$search="p&l"&$top=10&$select=subject,from,bodyPreview,receivedDateTime');
+      (ds2.value||[]).forEach(e => { if(!dianeEmails.find(x=>x.id===e.id)) dianeEmails.push(e); });
+    } catch(e) {}
+    const finEmails = dianeEmails.filter(e => {
       const from = (e.from?.emailAddress?.name||e.from?.emailAddress?.address||'').toLowerCase();
-      const subj = (e.subject||'').toLowerCase();
-      const prev = (e.bodyPreview||'').toLowerCase();
-      if (subj.includes('board report ready')) return false;
-      const isDiane = from.includes('diane') || from.includes('kruger');
-      const isFinance = subj.match(/p&l|profit|loss|financial|month|result|revenue|ytd|year to date|cash|forecast|budget/i) ||
-                        prev.match(/\$[\d,]+|positive|negative|result|closing/i);
-      return isDiane || isFinance;
+      return from.includes('diane') || from.includes('kruger') || from.includes('risk2solution');
     });
     const state = loadProactiveState();
     res.json({
@@ -3163,30 +3167,67 @@ async function checkFinancialAlerts(forceRun) {
 
   try {
     const now = new Date();
-    const since = new Date(now.getTime()-60*24*60*60*1000).toISOString(); // 60 days back
+    const since = new Date(now.getTime()-90*24*60*60*1000).toISOString(); // 90 days back
 
-    // Fetch emails WITH body content (not just preview) for finance emails
-    const emails = await graphGet(
-      `/me/messages?$top=80&$filter=receivedDateTime ge ${since}&$select=subject,from,bodyPreview,body,receivedDateTime&$orderby=receivedDateTime desc`
-    );
+    // TARGETED SEARCH: look specifically for Diane's emails (she sends the monthly P&L)
+    // Use multiple targeted searches rather than a broad filter
+    const DIANE_EMAILS = ['diane.k@risk2solution.com', 'diane@risk2solution.com'];
+    let finEmails = [];
 
-    // Broad filter — catch any finance-related email from Diane or with finance keywords
-    const finEmails = (emails.value||[]).filter(e => {
+    // Search 1: Emails FROM Diane specifically (any subject)
+    try {
+      for (const dianeEmail of DIANE_EMAILS) {
+        const dianeSearch = await graphGet(
+          `/me/messages?$search="from:${dianeEmail}"&$top=20&$select=subject,from,bodyPreview,body,receivedDateTime&$orderby=receivedDateTime desc`
+        );
+        (dianeSearch.value||[]).forEach(e => {
+          if (!finEmails.find(x=>x.id===e.id)) finEmails.push(e);
+        });
+      }
+    } catch(e) { console.warn('[FinanceAlert] Diane email search error:', e.message); }
+
+    // Search 2: Any email with "P&L" or "p&l" in subject (catches anyone sending P&L reports)
+    try {
+      const plSearch = await graphGet(
+        `/me/messages?$search="p&l"&$top=15&$select=subject,from,bodyPreview,body,receivedDateTime&$orderby=receivedDateTime desc`
+      );
+      (plSearch.value||[]).forEach(e => {
+        if (!finEmails.find(x=>x.id===e.id)) finEmails.push(e);
+      });
+    } catch(e) {}
+
+    // Search 3: Emails with "monthly" or "finance update" in subject from last 90 days
+    try {
+      const monthlySearch = await graphGet(
+        `/me/messages?$search="monthly report"&$top=10&$select=subject,from,bodyPreview,body,receivedDateTime&$orderby=receivedDateTime desc`
+      );
+      (monthlySearch.value||[]).forEach(e => {
+        if (!finEmails.find(x=>x.id===e.id)) finEmails.push(e);
+      });
+    } catch(e) {}
+
+    // Strictly filter: must be from Diane/Kruger OR explicitly about R2S's own P&L/results
+    // Exclude vendor invoices, supplier emails, external newsletters
+    finEmails = finEmails.filter(e => {
       const from = (e.from?.emailAddress?.name||e.from?.emailAddress?.address||'').toLowerCase();
       const subj = (e.subject||'').toLowerCase();
-      const preview = (e.bodyPreview||'').toLowerCase();
       if (subj.includes('board report ready')) return false;
-      const isDiane = from.includes('diane') || from.includes('kruger');
-      const isFinance = subj.match(/p&l|profit|loss|financial|month|result|revenue|ytd|year to date|cash|forecast|budget|payable|receivable|balance/i) ||
-                        preview.match(/\$[\d,]+|positive|negative|result|closing/i);
-      return isDiane || isFinance;
+      // Must be internal (from known R2S staff) OR explicitly a P&L/results email
+      const isInternal = from.includes('diane') || from.includes('kruger') ||
+                         from.includes('risk2solution') || from.includes('dave') ||
+                         from.includes('kandia');
+      const isOwnFinance = subj.match(/p&l|profit.?loss|month.*result|financial.*result|result.*month|r2s.*financial|revenue.*result|monthly.*update|finance.*update/i);
+      return isInternal || isOwnFinance;
     });
 
-    console.log('[FinanceAlert] Finance emails found:', finEmails.length, finEmails.slice(0,3).map(e=>e.subject).join(' | '));
+    // Sort by most recent first
+    finEmails.sort((a,b) => new Date(b.receivedDateTime)-new Date(a.receivedDateTime));
+
+    console.log('[FinanceAlert] Targeted finance emails found:', finEmails.length, finEmails.slice(0,5).map(e=>e.from?.emailAddress?.name+': '+e.subject).join(' | '));
 
     if (finEmails.length === 0) {
-      console.log('[FinanceAlert] No finance emails found in last 60 days');
-      return { found: false };
+      console.log('[FinanceAlert] No P&L emails found — check Diane has sent the monthly finance update');
+      return { found: false, message: 'No finance emails from Diane found. Ask her to forward the monthly P&L to your inbox.' };
     }
 
     // Build context from all finance emails for AI to analyse
@@ -3219,26 +3260,33 @@ CONTENT: ${fullContent}`;
     } catch(e) {}
 
     // Use AI to extract and analyse the financial data
-    const analysisPrompt = `You are Cinderella, COO intelligence assistant for Kandia Du Bruyn at Risk 2 Solution.
+    const analysisPrompt = `You are Cinderella, COO intelligence assistant for Kandia Du Bruyn at Risk 2 Solution Group.
 
-Analyse these finance emails and extract/generate a financial intelligence summary.
+Analyse these internal finance emails and extract Risk 2 Solution's own financial performance data.
 
-EMAILS:
+CRITICAL: You are looking for R2S's OWN profit/loss results - NOT vendor invoices, NOT bills R2S needs to pay, NOT supplier statements.
+- Diane Kruger is R2S's Corporate Operations Lead. Her emails contain R2S's monthly P&L results.
+- Ignore any email that is a bill or invoice R2S needs to pay (e.g. from Jewell Moore, suppliers, vendors)
+- Ignore any EOI, tender, or opportunity emails
+- Only extract figures from R2S's internal financial reporting
+
+EMAILS TO ANALYSE:
 ${emailContext}
 
-Aurora data: ${auroraActiveCount} active projects, $${Math.round(auroraOutstanding).toLocaleString()} in outstanding invoices.
+Aurora context: ${auroraActiveCount} active projects, $${Math.round(auroraOutstanding).toLocaleString()} in outstanding client invoices (money owed TO R2S).
 
 Return ONLY a JSON object with no markdown:
 {
-  "period": "e.g. July 2026",
-  "result": "e.g. +$17,209.41 or -$4,500.00",
-  "resultClass": "pos or neg",
-  "keyDriver": "1 sentence on what drove the result",
-  "ytd": "YTD figure if mentioned, else null",
-  "forecast": "forward forecast if mentioned, else null",
-  "analysis": "3-4 sentence COO-level analysis. What does this mean for R2S? Is it good/bad vs expectations? What should Kandia be watching? Be specific and analytical.",
-  "actions": ["specific action 1", "specific action 2"],
-  "outstanding": ${Math.round(auroraOutstanding)}
+  "period": "The reporting period, e.g. July 2026",
+  "result": "R2S net result as +$X or -$X (positive = profit, negative = loss). If no P&L data found, write null",
+  "resultClass": "pos, neg, or unknown",
+  "keyDriver": "1 sentence on what drove R2S's result this period",
+  "ytd": "YTD figure if mentioned in emails, else null",
+  "forecast": "Forward forecast if mentioned, else null",
+  "analysis": "3-4 sentences of COO-level analysis of R2S's financial position. Reference specific figures from the emails. Comment on performance vs budget/forecast if mentioned. Flag any concerns or positive signals. Be analytical, not generic.",
+  "actions": ["specific recommended action 1", "specific recommended action 2"],
+  "outstanding": ${Math.round(auroraOutstanding)},
+  "dataFound": true or false — set to false if no actual R2S P&L data was in the emails
 }`;
 
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
