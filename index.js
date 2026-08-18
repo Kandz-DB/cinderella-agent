@@ -3164,11 +3164,13 @@ async function checkFinancialAlerts(forceRun) {
   if (!tokenStore.access_token) return { found: false, error: 'Not authenticated' };
   const { monthKey } = getBrisbaneNow();
   const state = loadProactiveState();
-  // Guard: skip if already checked this month UNLESS forced (manual trigger always forces)
-  if (!forceRun && state.financeCheckMonth === monthKey) {
-    console.log('[FinanceAlert] Already checked this month, skipping. Use force to bypass.');
-    return { found: false, skipped: true };
+  // Only skip if we have a GOOD result already saved (not null) AND it's not forced
+  const hasGoodResult = state.financialSnapshot?.result && state.financialSnapshot.result !== 'null';
+  if (!forceRun && state.financeCheckMonth === monthKey && hasGoodResult) {
+    console.log('[FinanceAlert] Good result already saved for', monthKey, '— skipping. Force to re-run.');
+    return { found: true, skipped: true };
   }
+  console.log('[FinanceAlert] Running check. forceRun:', !!forceRun, '| monthKey:', monthKey, '| hasGoodResult:', !!hasGoodResult);
 
   try {
     const now = new Date();
@@ -3304,23 +3306,67 @@ Return ONLY a JSON object with no markdown:
     let snapshot = {};
     try {
       const cleaned = rawText.replace(/^```json\s*/,'').replace(/```$/,'').trim();
-      snapshot = JSON.parse(cleaned);
+      const parsed = JSON.parse(cleaned);
+      // Only use AI result if it actually found data
+      if (parsed.dataFound === false || !parsed.result) {
+        throw new Error('AI returned no financial data — using regex fallback');
+      }
+      snapshot = parsed;
       console.log('[FinanceAlert] AI extracted:', snapshot.period, snapshot.result);
     } catch(parseErr) {
-      // Fallback: try regex extraction from raw email content
-      console.warn('[FinanceAlert] AI parse failed, trying regex fallback');
-      const allText = finEmails.map(e=>e.bodyPreview||'').join(' ');
-      const dollarMatches = allText.match(/\$[\d,]+\.?\d{0,2}/g)||[];
-      const positiveMatch = allText.match(/positive[^$]*\$[\d,]+\.?\d{0,2}|closed.*?\$[\d,]+\.?\d{0,2}|\$[\d,]+\.?\d{0,2}.*positive/i);
+      console.warn('[FinanceAlert] AI fallback:', parseErr.message);
+      // REGEX FALLBACK: extract directly from email text
+      const allText = finEmails.map(e => {
+        const body = (e.body?.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ');
+        return (e.bodyPreview||'') + ' ' + body;
+      }).join(' ');
+
+      // Look for "closed on a positive/negative of $X" pattern
+      const closedPos = allText.match(/closed[^$\n]{0,30}positive[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      const closedNeg = allText.match(/closed[^$\n]{0,30}negative[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      // "ending on a positive/negative of $X"
+      const endPos = allText.match(/(?:ending|ended|closing|close)[^$\n]{0,40}positive[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      const endNeg = allText.match(/(?:ending|ended|closing|close)[^$\n]{0,40}negative[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      // "in a negative of $X" or "negative of $X"
+      const inNeg = allText.match(/in a negative[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      const inPos = allText.match(/in a positive[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      // "positive of $X" standalone
+      const posOf = allText.match(/positive of \$([\d,]+\.?\d{0,2})/i);
+      const negOf = allText.match(/negative of \$([\d,]+\.?\d{0,2})/i);
+
+      const posMatch = closedPos || endPos || inPos || posOf;
+      const negMatch = closedNeg || endNeg || inNeg || negOf;
+      const isPositive = !!posMatch && !negMatch;
+      const matchedFigure = (posMatch || negMatch || ['','0'])[1] || null;
+
+      // Extract key figures mentioned
+      const allFigures = allText.match(/\$[\d,]+\.?\d{0,2}/g)||[];
+      const uniqueFigures = [...new Set(allFigures)].slice(0,8).join(', ');
+
+      // Determine period from most recent email date
+      const latestDate = new Date(finEmails[0].receivedDateTime);
+      const reportMonth = latestDate.toLocaleString('en-AU',{month:'long',year:'numeric'});
+
       snapshot = {
-        period: finEmails[0].subject.replace(/re:|fw:|p&l|p\.l/gi,'').trim(),
-        result: positiveMatch ? '+' + (positiveMatch[0].match(/\$[\d,]+\.?\d{0,2}/)||['?'])[0] : (dollarMatches[0]||'See emails'),
-        resultClass: positiveMatch ? 'pos' : 'unknown',
-        keyDriver: 'See finance emails for details',
-        analysis: 'Financial data extracted from emails. Review Diane Kruger\'s latest P&L for full details.',
-        actions: [],
-        outstanding: auroraOutstanding
+        period: reportMonth,
+        result: matchedFigure ? (isPositive ? '+$' : '-$') + matchedFigure : null,
+        resultClass: matchedFigure ? (isPositive ? 'pos' : 'neg') : 'unknown',
+        keyDriver: matchedFigure
+          ? (isPositive ? 'Month closed positive' : 'Month closed negative') + ' — see Diane Kruger P&L Update for full detail'
+          : 'Review Diane Kruger\'s P&L Update and shared Excel file for figures',
+        ytd: null,
+        forecast: null,
+        analysis: matchedFigure
+          ? 'Regex extraction from email: ' + (isPositive ? '+' : '-') + '$' + matchedFigure + '. Key figures mentioned in emails: ' + uniqueFigures + '. Review Diane\'s P&L Excel (shared 13 Aug) for full breakdown including project-level profitability.'
+          : 'P&L emails found but dollar amounts not automatically extracted. Review: ' + finEmails.map(e=>e.subject).join(', '),
+        actions: [
+          'Open Diane\'s shared P&L Excel file to review full actuals and forecast',
+          'Confirm August forecast figures with Diane given PSG timing changes'
+        ],
+        outstanding: Math.round(auroraOutstanding),
+        dataFound: !!matchedFigure
       };
+      console.log('[FinanceAlert] Regex extracted:', snapshot.result, '| Figures found:', uniqueFigures);
     }
 
     // Save to state
@@ -3331,11 +3377,16 @@ Return ONLY a JSON object with no markdown:
       updatedAt: now.toISOString(),
       emailsAnalysed: finEmails.length
     });
-    state.financeCheckMonth = monthKey;
+    // Only mark month as done if we got a real result (not null)
+    if (snapshot.result && snapshot.result !== 'null') {
+      state.financeCheckMonth = monthKey;
+    } else {
+      console.warn('[FinanceAlert] Result is null — NOT setting financeCheckMonth so next trigger will retry');
+    }
     saveProactiveState(state);
 
     console.log('[FinanceAlert] ✅ Snapshot saved:', snapshot.period, snapshot.result);
-    return { found: true, snapshot };
+    return { found: !!snapshot.result, snapshot };
   } catch(e) {
     console.error('[FinanceAlert] Error:', e.message);
     return { found: false, error: e.message };
@@ -3728,15 +3779,20 @@ app.post('/proactive/trigger/:feature', requireAuth, async (req, res) => {
     else if (feature==='compliance') { delete state.complianceCheckDate; saveProactiveState(state); await checkComplianceDeadlines(); }
     else if (feature==='receivables') { delete state.receivablesWeek; saveProactiveState(state); await checkReceivables(); }
     else if (feature==='finance') {
+      // Explicitly clear the month guard so checkFinancialAlerts always runs
       const pState = loadProactiveState();
+      const prevMonth = pState.financeCheckMonth;
       delete pState.financeCheckMonth;
+      delete pState.financialSnapshot; // Also clear bad snapshot so it regenerates
       saveProactiveState(pState);
-      const finResult = await checkFinancialAlerts(true); // force bypass month guard
+      console.log('[FinanceAlert] Trigger: cleared financeCheckMonth (was:', prevMonth, ')');
+      const finResult = await checkFinancialAlerts(true);
       const snap = loadProactiveState().financialSnapshot;
+      const hasResult = snap && snap.result && snap.result !== 'null';
       return res.json({ success: true, feature,
-        message: finResult.found
-          ? `Found ${snap.period} — ${snap.result}. Dashboard updated.`
-          : 'No finance emails found in the last 60 days. Check that Diane has sent a P&L update.',
+        message: hasResult
+          ? 'Found ' + snap.period + ' — ' + snap.result + '. Dashboard updated.'
+          : 'Emails found but could not extract P&L figures. Check Azure logs.',
         snapshot: snap||null
       });
     }
