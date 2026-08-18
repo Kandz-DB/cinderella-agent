@@ -3730,6 +3730,76 @@ app.get('/proactive/state', requireAuth, (req, res) => {
   res.json(loadProactiveState());
 });
 
+// Returns pre-built HTML for the financial intelligence card
+app.get('/proactive/finance-html', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  const fin = state.financialSnapshot;
+  const result = fin && (fin.result || fin.lastResult);
+
+  if (!fin || !result || result === 'null') {
+    return res.send(`<div style="display:flex;align-items:center;gap:10px;padding:4px 0">
+      <div style="font-size:11px;color:#9A9693">No P&L snapshot yet. Click Check now to scan finance emails.</div>
+      <button onclick="rescanFinance()" style="flex-shrink:0;font-size:10px;padding:3px 10px;border-radius:6px;background:#0D8A62;color:#fff;border:none;cursor:pointer;font-weight:600">Check now</button>
+    </div>`);
+  }
+
+  const isPos = !result.toString().trim().startsWith('-');
+  const col   = isPos ? '#0D8A62' : '#C8211E';
+  const bg    = isPos ? '#DCEEE6' : '#FEE2E2';
+  const outstanding = fin.outstanding ? Number(fin.outstanding).toLocaleString() : null;
+  const updatedAt   = fin.updatedAt  ? new Date(fin.updatedAt).toLocaleDateString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+  const emailCount  = fin.emailsAnalysed ? fin.emailsAnalysed + ' emails analysed' : '';
+
+  const ytdHtml = (fin.ytd && fin.ytd !== 'null') ? `
+    <div style="background:#F2F1EE;border-radius:8px;padding:12px 16px;min-width:100px">
+      <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">YTD FY26/27</div>
+      <div style="font-size:18px;font-weight:700;color:#111110">${fin.ytd}</div>
+    </div>` : '';
+
+  const forecastHtml = (fin.forecast && fin.forecast !== 'null') ? `
+    <div style="background:#F2F1EE;border-radius:8px;padding:12px 16px;min-width:100px">
+      <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Forecast</div>
+      <div style="font-size:18px;font-weight:700;color:${fin.forecast.startsWith('-') ? '#C8211E' : '#0D8A62'}">${fin.forecast}</div>
+    </div>` : '';
+
+  const outstandingHtml = outstanding ? `
+    <div style="background:#FEF3C7;border-radius:8px;padding:12px 16px;min-width:100px">
+      <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Aurora Outstanding</div>
+      <div style="font-size:18px;font-weight:700;color:#D97706">$${outstanding}</div>
+      ${fin.auroraActiveCount ? `<div style="font-size:10px;color:#4A4844;margin-top:2px">${fin.auroraActiveCount} projects</div>` : ''}
+    </div>` : '';
+
+  const analysisHtml = (fin.analysis && fin.analysis !== 'null') ? `
+    <div style="background:#F2F1EE;border-radius:8px;padding:11px 14px;margin-bottom:10px;border-left:3px solid #2358D4">
+      <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">COO Analysis</div>
+      <div style="font-size:12px;color:#111110;line-height:1.6">${fin.analysis}</div>
+    </div>` : '';
+
+  const actions = Array.isArray(fin.actions) ? fin.actions.filter(a => a && a !== 'null') : [];
+  const actionsHtml = actions.length > 0 ? `
+    <div style="margin-bottom:8px">
+      <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">Actions</div>
+      ${actions.map(a => `<div style="font-size:11.5px;color:#111110;padding:3px 0;display:flex;gap:6px"><span style="color:#0D8A62;font-weight:700;flex-shrink:0">&rarr;</span><span>${a}</span></div>`).join('')}
+    </div>` : '';
+
+  res.send(`
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin-bottom:12px">
+      <div style="background:${bg};border-radius:8px;padding:12px 16px;flex:1;min-width:120px">
+        <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">${fin.period || 'Current Period'}</div>
+        <div style="font-size:24px;font-weight:800;color:${col};letter-spacing:-0.8px">${result}</div>
+        ${fin.keyDriver && fin.keyDriver !== 'null' ? `<div style="font-size:10px;color:#4A4844;margin-top:3px;line-height:1.4">${fin.keyDriver}</div>` : ''}
+      </div>
+      ${ytdHtml}${forecastHtml}${outstandingHtml}
+    </div>
+    ${analysisHtml}
+    ${actionsHtml}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
+      <span style="font-size:9px;color:#9A9693">${updatedAt}${emailCount ? ' &middot; ' + emailCount : ''}</span>
+      <button onclick="rescanFinance()" style="font-size:10px;padding:3px 10px;border-radius:6px;background:#F2F1EE;border:1px solid rgba(0,0,0,0.13);cursor:pointer">&#8635; Re-scan emails</button>
+    </div>
+  `);
+});
+
 // Manually set financial snapshot (for when emails don't parse automatically)
 app.post('/proactive/finance-snapshot', requireAuth, (req, res) => {
   const state = loadProactiveState();
