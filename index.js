@@ -3120,62 +3120,134 @@ async function checkFinancialAlerts() {
   if (!tokenStore.access_token) return;
   const { monthKey } = getBrisbaneNow();
   const state = loadProactiveState();
-  if (state.financeCheckMonth === monthKey) return;
+  // NOTE: financeCheckMonth guard is intentionally loose — manual triggers always bypass it
 
   try {
     const now = new Date();
-    // Scan last 45 days for Diane's finance emails
-    const since = new Date(now.getTime()-45*24*60*60*1000).toISOString();
-    const emails = await graphGet(`/me/messages?$top=50&$filter=receivedDateTime ge ${since}&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc`);
+    const since = new Date(now.getTime()-60*24*60*60*1000).toISOString(); // 60 days back
 
+    // Fetch emails WITH body content (not just preview) for finance emails
+    const emails = await graphGet(
+      `/me/messages?$top=80&$filter=receivedDateTime ge ${since}&$select=subject,from,bodyPreview,body,receivedDateTime&$orderby=receivedDateTime desc`
+    );
+
+    // Broad filter — catch any finance-related email from Diane or with finance keywords
     const finEmails = (emails.value||[]).filter(e => {
-      const from = (e.from?.emailAddress?.name||'').toLowerCase();
+      const from = (e.from?.emailAddress?.name||e.from?.emailAddress?.address||'').toLowerCase();
       const subj = (e.subject||'').toLowerCase();
+      const preview = (e.bodyPreview||'').toLowerCase();
       if (subj.includes('board report ready')) return false;
-      return (from.includes('diane')||from.includes('kruger')) && subj.match(/p&l|p\.l|profit|financial|month|result/i);
+      const isDiane = from.includes('diane') || from.includes('kruger');
+      const isFinance = subj.match(/p&l|profit|loss|financial|month|result|revenue|ytd|year to date|cash|forecast|budget|payable|receivable|balance/i) ||
+                        preview.match(/\$[\d,]+|positive|negative|result|closing/i);
+      return isDiane || isFinance;
     });
 
-    if (finEmails.length === 0) return;
+    console.log('[FinanceAlert] Finance emails found:', finEmails.length, finEmails.slice(0,3).map(e=>e.subject).join(' | '));
 
-    const latest = finEmails[0];
-    const preview = latest.bodyPreview||'';
-    // Extract dollar figures
-    const dollarMatch = preview.match(/\$[\d,]+\.?\d*/g)||[];
-    const positiveMatch = preview.match(/positive[^$\n]*\$[\d,]+\.?\d*|closed[^$\n]*\$[\d,]+\.?\d*/i);
-    const negativeMatch = preview.match(/negative[^$\n]*\$[\d,]+\.?\d*|loss[^$\n]*\$[\d,]+\.?\d*/i);
-
-    if (dollarMatch.length > 0 || positiveMatch || negativeMatch) {
-      const result = positiveMatch ? positiveMatch[0].replace(/positive[^$]*/i,'').trim() :
-                     negativeMatch ? negativeMatch[0].replace(/negative[^$]*/i,'').trim() :
-                     dollarMatch[0];
-      const isPos = !negativeMatch && (positiveMatch || preview.toLowerCase().includes('positive'));
-      const period = latest.subject.replace(/p&l|p\.l|re:|fw:/gi,'').trim();
-
-      // Update stored snapshot
-      if (!state.financialSnapshot) state.financialSnapshot = {};
-      state.financialSnapshot.lastResult = (isPos ? '+' : '-') + result.replace('$','$');
-      state.financialSnapshot.period = period;
-      state.financialSnapshot.updatedAt = now.toISOString();
-
-      // Also try to get Aurora outstanding
-      try {
-        const aur = await callAurora('/api/projects');
-        let totalOut = 0;
-        for (const p of (aur.projects||[]).slice(0,10)) {
-          try {
-            const inv = await callAurora('/api/projects/'+p.id+'/invoices');
-            (inv.invoices||[]).filter(i=>!i.paid).forEach(i=>totalOut+=parseFloat(i.amount||0));
-          } catch(e) {}
-        }
-        state.financialSnapshot.outstanding = Math.round(totalOut);
-      } catch(e) {}
-
-      console.log('[FinanceAlert] Snapshot updated:', state.financialSnapshot.period, state.financialSnapshot.lastResult);
-      state.financeCheckMonth = monthKey;
-      saveProactiveState(state);
+    if (finEmails.length === 0) {
+      console.log('[FinanceAlert] No finance emails found in last 60 days');
+      return { found: false };
     }
+
+    // Build context from all finance emails for AI to analyse
+    const emailContext = finEmails.slice(0,8).map(e => {
+      const htmlBody = e.body?.content || '';
+      const bodyText = htmlBody
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+        .replace(/\s+/g, ' ').trim();
+      const fullContent = ((e.bodyPreview||'') + ' ' + bodyText).substring(0, 1200);
+      return `FROM: ${e.from?.emailAddress?.name||'?'} | DATE: ${new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})}
+SUBJECT: ${e.subject}
+CONTENT: ${fullContent}`;
+    }).join('\n\n---\n\n');
+
+    // Get Aurora outstanding invoices
+    let auroraOutstanding = 0;
+    let auroraActiveCount = 0;
+    try {
+      const aur = await callAurora('/api/projects');
+      const active = (aur.projects||[]).filter(p=>p.phase>=1&&p.phase<=3);
+      auroraActiveCount = active.length;
+      for (const p of active.slice(0,12)) {
+        try {
+          const inv = await callAurora('/api/projects/'+p.id+'/invoices');
+          (inv.invoices||[]).filter(i=>!i.paid).forEach(i=>auroraOutstanding+=parseFloat(i.amount||0));
+        } catch(e) {}
+      }
+    } catch(e) {}
+
+    // Use AI to extract and analyse the financial data
+    const analysisPrompt = `You are Cinderella, COO intelligence assistant for Kandia Du Bruyn at Risk 2 Solution.
+
+Analyse these finance emails and extract/generate a financial intelligence summary.
+
+EMAILS:
+${emailContext}
+
+Aurora data: ${auroraActiveCount} active projects, $${Math.round(auroraOutstanding).toLocaleString()} in outstanding invoices.
+
+Return ONLY a JSON object with no markdown:
+{
+  "period": "e.g. July 2026",
+  "result": "e.g. +$17,209.41 or -$4,500.00",
+  "resultClass": "pos or neg",
+  "keyDriver": "1 sentence on what drove the result",
+  "ytd": "YTD figure if mentioned, else null",
+  "forecast": "forward forecast if mentioned, else null",
+  "analysis": "3-4 sentence COO-level analysis. What does this mean for R2S? Is it good/bad vs expectations? What should Kandia be watching? Be specific and analytical.",
+  "actions": ["specific action 1", "specific action 2"],
+  "outstanding": ${Math.round(auroraOutstanding)}
+}`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+      body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:600,messages:[{role:'user',content:analysisPrompt}]})
+    });
+    const aiData = await aiRes.json();
+    const rawText = (aiData.content||[]).map(c=>c.text||'').join('').trim();
+
+    let snapshot = {};
+    try {
+      const cleaned = rawText.replace(/^```json\s*/,'').replace(/```$/,'').trim();
+      snapshot = JSON.parse(cleaned);
+      console.log('[FinanceAlert] AI extracted:', snapshot.period, snapshot.result);
+    } catch(parseErr) {
+      // Fallback: try regex extraction from raw email content
+      console.warn('[FinanceAlert] AI parse failed, trying regex fallback');
+      const allText = finEmails.map(e=>e.bodyPreview||'').join(' ');
+      const dollarMatches = allText.match(/\$[\d,]+\.?\d{0,2}/g)||[];
+      const positiveMatch = allText.match(/positive[^$]*\$[\d,]+\.?\d{0,2}|closed.*?\$[\d,]+\.?\d{0,2}|\$[\d,]+\.?\d{0,2}.*positive/i);
+      snapshot = {
+        period: finEmails[0].subject.replace(/re:|fw:|p&l|p\.l/gi,'').trim(),
+        result: positiveMatch ? '+' + (positiveMatch[0].match(/\$[\d,]+\.?\d{0,2}/)||['?'])[0] : (dollarMatches[0]||'See emails'),
+        resultClass: positiveMatch ? 'pos' : 'unknown',
+        keyDriver: 'See finance emails for details',
+        analysis: 'Financial data extracted from emails. Review Diane Kruger\'s latest P&L for full details.',
+        actions: [],
+        outstanding: auroraOutstanding
+      };
+    }
+
+    // Save to state
+    if (!state.financialSnapshot) state.financialSnapshot = {};
+    Object.assign(state.financialSnapshot, snapshot, {
+      outstanding: Math.round(auroraOutstanding),
+      auroraActiveCount,
+      updatedAt: now.toISOString(),
+      emailsAnalysed: finEmails.length
+    });
+    state.financeCheckMonth = monthKey;
+    saveProactiveState(state);
+
+    console.log('[FinanceAlert] ✅ Snapshot saved:', snapshot.period, snapshot.result);
+    return { found: true, snapshot };
   } catch(e) {
     console.error('[FinanceAlert] Error:', e.message);
+    return { found: false, error: e.message };
   }
 }
 
@@ -3551,7 +3623,19 @@ app.post('/proactive/trigger/:feature', requireAuth, async (req, res) => {
     else if (feature==='capacity') { delete state.capacityCheckWeek; saveProactiveState(state); await checkCapacityTrends(); }
     else if (feature==='compliance') { delete state.complianceCheckDate; saveProactiveState(state); await checkComplianceDeadlines(); }
     else if (feature==='receivables') { delete state.receivablesWeek; saveProactiveState(state); await checkReceivables(); }
-    else if (feature==='finance') { delete state.financeCheckMonth; saveProactiveState(state); await checkFinancialAlerts(); }
+    else if (feature==='finance') {
+      const pState = loadProactiveState();
+      delete pState.financeCheckMonth;
+      saveProactiveState(pState);
+      const finResult = await checkFinancialAlerts();
+      const snap = loadProactiveState().financialSnapshot;
+      return res.json({ success: true, feature,
+        message: finResult.found
+          ? `Found ${snap.period} — ${snap.result}. Dashboard updated.`
+          : 'No finance emails found in the last 60 days. Check that Diane has sent a P&L update.',
+        snapshot: snap||null
+      });
+    }
     else if (feature==='onboarding') { await checkOnboardingTriggers(); }
     res.json({success:true, feature});
   } catch(e) {
