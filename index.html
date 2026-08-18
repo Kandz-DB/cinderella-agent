@@ -261,6 +261,20 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 .sinput{width:100%;border:1px solid var(--bl);border-radius:6px;padding:7px 10px;font-size:12.5px;background:var(--bg);color:var(--t1);font-family:var(--f);outline:none;transition:border-color .15s}
 .sinput:focus{border-color:var(--g)}
 
+/* Calendar rows */
+.row{display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer}
+.row:hover{background:var(--bg2);margin:0 -4px;padding:10px 4px;border-radius:6px}
+.row:last-child{border-bottom:none}
+.mtime{font-size:12px;font-weight:700;color:var(--b);min-width:68px;flex-shrink:0;padding-top:1px}
+.mt{font-size:12.5px;font-weight:500;color:var(--t1);line-height:1.3}
+.mm{font-size:10.5px;color:var(--t3);margin-top:2px}
+
+/* Duty items in COO panel */
+.duty-item{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:7px;cursor:pointer;transition:background .12s;margin-bottom:4px;border:1px solid var(--bl)}
+.duty-item:hover{background:var(--bg2);border-color:var(--bm)}
+.duty-item-label{font-size:12.5px;font-weight:500;color:var(--t1)}
+.duty-item-icon{width:20px;height:20px;border-radius:5px;background:var(--g);opacity:.15;flex-shrink:0}
+
 /* Misc */
 .sw{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:0.5px solid var(--bl)}
 .mm{position:fixed;bottom:20px;right:20px;background:var(--t1);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:12px;font-weight:500;z-index:9999;pointer-events:none;opacity:0;transition:opacity .3s;box-shadow:var(--sh2)}
@@ -866,30 +880,46 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 
           <div class="ct">Core responsibilities <span class="ct-action" onclick="qa('What are my most important COO responsibilities to focus on this week at Risk 2 Solution?')">This week's focus</span></div>
 
-          <div style="display:grid;grid-template-columns:1fr 1fr">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
 
-            <div>
-
-              <div class="ci" onclick="omKey('duty-ops')"><div class="cn-group">Operations oversight</div></div>
-
-              <div class="ci" onclick="omKey('duty-risk')"><div class="cn-group">Risk management</div></div>
-
-              <div class="ci" onclick="omKey('duty-strategy')"><div class="cn-group">Strategy execution</div></div>
-
-              <div class="ci" onclick="omKey('duty-clients')"><div class="cn-group">Client delivery</div></div>
-
+            <div class="duty-item" onclick="qa('What should I be focusing on for Operations oversight this week at R2S?')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
+              <span class="duty-item-label">Operations oversight</span>
             </div>
 
-            <div>
+            <div class="duty-item" onclick="qa('What people and culture matters need my attention this week?')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><circle cx="6" cy="5" r="2.5"/><path d="M1 13c0-2.8 2.2-5 5-5s5 2.2 5 5"/><circle cx="12" cy="5" r="2"/><path d="M12 10c1.7 0 3 1.3 3 3"/></svg>
+              <span class="duty-item-label">People &amp; culture</span>
+            </div>
 
-              <div class="ci" onclick="omKey('duty-people')"><div class="cn-group">People &amp; culture</div></div>
+            <div class="duty-item" onclick="qa('What risk management matters need attention this week at R2S?')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><path d="M8 2l5 2.5v4.5c0 3-5 5.5-5 5.5S3 12 3 9V4.5z"/></svg>
+              <span class="duty-item-label">Risk management</span>
+            </div>
 
-              <div class="ci" onclick="omKey('duty-finance')"><div class="cn-group">Financial oversight</div></div>
+            <div class="duty-item" onclick="qa('What is the current financial position and what needs my attention?')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><rect x="2" y="4" width="12" height="8" rx="1"/><path d="M5 8h6M8 6v4"/></svg>
+              <span class="duty-item-label">Financial oversight</span>
+            </div>
 
-              <div class="ci" onclick="omKey('duty-tech')"><div class="cn-group">Technology &amp; platform</div></div>
+            <div class="duty-item" onclick="qa('What strategic priorities should I be advancing this week?')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><path d="M3 13L8 3l5 10"/><path d="M5.5 9h5"/></svg>
+              <span class="duty-item-label">Strategy execution</span>
+            </div>
 
-              <div class="ci" onclick="omKey('duty-reporting')"><div class="cn-group">Board reporting</div></div>
+            <div class="duty-item" onclick="qa('What technology and platform matters need COO attention this week?')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><rect x="1" y="3" width="14" height="9" rx="1"/><path d="M5 14h6M8 12v2"/></svg>
+              <span class="duty-item-label">Technology &amp; platform</span>
+            </div>
 
+            <div class="duty-item" onclick="qa('What client delivery issues need my attention this week?')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>
+              <span class="duty-item-label">Client delivery</span>
+            </div>
+
+            <div class="duty-item" onclick="qa('What do I need to prepare or be aware of for the next board meeting?')">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M5 7h6M5 10h4"/></svg>
+              <span class="duty-item-label">Board reporting</span>
             </div>
 
           </div>
@@ -7088,7 +7118,7 @@ async function loadFinancialSnapshot() {
     var d = await r.json().catch(function(){ return {}; });
     var fin = d.financialSnapshot;
     var burn = d.burnoutRisk||[];
-    if (!fin || !fin.lastResult) {
+    var _r = fin && (fin.result || fin.lastResult); if (!_r || _r === 'null') {
       el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No P&L snapshot yet. Click Check now to scan finance emails. <button onclick="triggerProactive(\'finance\')" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--bg2);border:0.5px solid var(--bm);cursor:pointer;font-family:var(--f)">Check now</button></div>';
       return;
     }
@@ -7099,7 +7129,7 @@ async function loadFinancialSnapshot() {
      var metricsRow = '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin-bottom:12px">';
      metricsRow += '<div style="background:'+bg+';border-radius:8px;padding:12px 16px;min-width:130px;flex:1">' +
        '<div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">' + (fin.period||'Current Period') + '</div>' +
-       '<div style="font-size:22px;font-weight:800;color:'+col+';letter-spacing:-0.5px">' + (fin.lastResult||'—') + '</div>' +
+       '<div style="font-size:22px;font-weight:800;color:'+col+';letter-spacing:-0.5px">' + (_r||'—') + '</div>' +
        (fin.keyDriver ? '<div style="font-size:10px;color:var(--t2);margin-top:3px;line-height:1.4">' + fin.keyDriver + '</div>' : '') +
      '</div>';
      if (fin.ytd) metricsRow += '<div style="background:var(--bg2);border-radius:8px;padding:12px 16px;min-width:100px">' +
@@ -7156,7 +7186,7 @@ async function triggerProactive(feature) {
     if (d.success || d.error === undefined) {
       var msg = d.message || (feature==='finance' ? 'Financial snapshot updated' : feature==='compliance' ? 'Compliance calendar updated' : 'Done — check your Outlook inbox and drafts');
       showToast(msg);
-      if (feature==='finance') setTimeout(loadFinancialSnapshot, 2000);
+      if (feature==='finance') { _finSnapLoading = false; setTimeout(loadFinancialSnapshot, 2000); }
       if (feature==='compliance') setTimeout(loadCompliance, 1500);
     } else {
       showToast('Error: '+(d.error||'unknown error'));
