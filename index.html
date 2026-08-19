@@ -1707,9 +1707,9 @@ function renderLiveCalendar() {
 
     var end = new Date(e.end.replace('Z',''));
 
-    var time = start.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    var time = start.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
 
-    var endTime = end.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    var endTime = end.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
 
     var durationMins = Math.round((end - start) / 60000);
 
@@ -1907,7 +1907,7 @@ async function refreshTodayPriorities() {
 
   var calSummary = M365.events.map(function(e){
 
-    return new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'}) + ' — ' + e.subject;
+    return new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'}) + ' — ' + e.subject;
 
   }).join('\n') || 'No meetings today';
 
@@ -1993,7 +1993,7 @@ async function refreshTodayBriefing() {
 
     var nextMtg = M365.events[0];
 
-    var nextTime = new Date(nextMtg.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    var nextTime = new Date(nextMtg.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
 
     items.push({label:'Calendar', text: mtgCount + ' meeting' + (mtgCount > 1 ? 's' : '') + ' today. Next: ' + nextMtg.subject + ' at ' + nextTime + '. Click Ask Cinderella for full prep.', action: "qa('Help me prepare for my meetings today')"});
 
@@ -2119,7 +2119,7 @@ async function generateOpeningNotification() {
 
     M365.events.forEach(function(e){
 
-      lines.push('  ' + new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'}) + ' — ' + e.subject);
+      lines.push('  ' + new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'}) + ' — ' + e.subject);
 
     });
 
@@ -4047,7 +4047,7 @@ async function syncNow(){
 
     SD=Object.values(byP);
 
-    const t=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+    const t=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
 
     btn.textContent=`Synced ${t}`;btn.className='sync-btn ok';
 
@@ -4763,9 +4763,9 @@ async function autoBriefing(){
 
         calCtx='CALENDAR TODAY:\n'+M365.events.map(function(e){
 
-          var t=new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+          var t=new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
 
-          var et=new Date(e.end.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+          var et=new Date(e.end.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
 
           return '- '+t+' to '+et+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
 
@@ -4962,7 +4962,7 @@ async function send(){
 
     liveCtx+='\n\nCALENDAR TODAY (real data):\n'+M365.events.map(function(e){
 
-      return '- '+new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})+' to '+new Date(e.end.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
+      return '- '+new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})+' to '+new Date(e.end.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
 
     }).join('\n');
 
