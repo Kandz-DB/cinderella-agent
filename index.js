@@ -2598,7 +2598,7 @@ async function sendMorningBrief() {
     try {
       const cal = await graphGet(`/me/calendarView?startDateTime=${startOfDay}&endDateTime=${endOfDay}&$select=subject,start,end,attendees&$orderby=start/dateTime`);
       meetings = (cal.value||[]).map(e => ({
-        time: new Date(e.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'}),
+        time: new Date(e.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'}),
         subject: e.subject,
         attendees: (e.attendees||[]).map(a=>a.emailAddress?.name).filter(Boolean).slice(0,4).join(', ')
       }));
@@ -2772,42 +2772,44 @@ async function checkPreMeetingBriefs() {
       console.log('[PreMeeting] Generating brief for:', meeting.subject);
       const attendeeNames = (meeting.attendees||[]).map(a=>a.emailAddress?.name||a.emailAddress?.address||'').filter(Boolean).join(', ');
       const attendeeEmails = (meeting.attendees||[]).map(a=>a.emailAddress?.address||'').filter(Boolean);
-      const meetTime = new Date(meeting.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+      const meetTime = new Date(meeting.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
 
       // Search emails AND Teams for context about this meeting
       let emailContext = '';
       let teamsContext = '';
 
-      // Email search — by attendee name/email/company
-      for (const email of attendeeEmails.slice(0,4)) {
-        try {
-          const domain = email.split('@')[1];
-          if (domain && !domain.includes('risk2solution')) {
-            const companyName = domain.split('.')[0];
-            const recent = await graphGet(`/me/messages?$search="${companyName}"&$top=5&$select=subject,from,bodyPreview,receivedDateTime,body`);
-            (recent.value||[]).forEach(m => {
-              const bodyText = (m.body?.content||m.bodyPreview||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').substring(0,200);
-              emailContext += `[${new Date(m.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}] ${m.from?.emailAddress?.name}: ${m.subject}\n  ${bodyText}\n\n`;
-            });
-          }
-        } catch(e) {}
-      }
-      // Also search by attendee names
-      for (const name of attendeeNames.split(',').map(n=>n.trim()).filter(Boolean).slice(0,3)) {
-        const firstName = name.split(' ')[0];
-        if (firstName.length < 3) continue;
-        try {
-          const nameSearch = await graphGet(`/me/messages?$search="${firstName}"&$top=4&$select=subject,from,bodyPreview,receivedDateTime`);
-          (nameSearch.value||[]).filter(m => {
-            const preview = (m.bodyPreview||'').toLowerCase();
-            return preview.includes(firstName.toLowerCase()) || (m.from?.emailAddress?.name||'').toLowerCase().includes(firstName.toLowerCase());
-          }).forEach(m => {
-            if (!emailContext.includes(m.subject)) {
-              emailContext += `[${new Date(m.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}] ${m.from?.emailAddress?.name}: ${m.subject}\n  ${(m.bodyPreview||'').substring(0,150)}\n\n`;
-            }
-          });
-        } catch(e) {}
-      }
+      // Email search — search for ALL attendees (internal AND external)
+      // Get last 200 emails and filter locally to find any related to attendees
+      try {
+        const allMsgs = await graphGet('/me/messages?$top=200&$select=subject,from,bodyPreview,body,receivedDateTime,toRecipients,ccRecipients&$orderby=receivedDateTime desc');
+        const msgs = allMsgs.value||[];
+
+        // Build a list of terms to match against: attendee names, emails, meeting subject words
+        const matchTerms = [];
+        attendeeEmails.forEach(e => matchTerms.push(e.toLowerCase()));
+        attendeeNames.split(',').forEach(n => {
+          const parts = n.trim().split(' ');
+          parts.forEach(p => { if (p.length > 2) matchTerms.push(p.toLowerCase()); });
+        });
+        // Add meeting subject keywords
+        (meeting.subject||'').split(/\s+/).forEach(w => { if (w.length > 4) matchTerms.push(w.toLowerCase()); });
+
+        const relevant = msgs.filter(m => {
+          const subj = (m.subject||'').toLowerCase();
+          const from = (m.from?.emailAddress?.name||'').toLowerCase() + ' ' + (m.from?.emailAddress?.address||'').toLowerCase();
+          const preview = (m.bodyPreview||'').toLowerCase();
+          const toList = (m.toRecipients||[]).map(r=>(r.emailAddress?.address||'').toLowerCase()).join(' ');
+          const text = subj + ' ' + from + ' ' + preview + ' ' + toList;
+          return matchTerms.some(term => text.includes(term));
+        }).slice(0, 15);
+
+        relevant.forEach(m => {
+          const bodyText = (m.body?.content||m.bodyPreview||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').substring(0,400);
+          const date = new Date(m.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short',timeZone:'Australia/Brisbane'});
+          emailContext += `[${date}] FROM: ${m.from?.emailAddress?.name} | SUBJECT: ${m.subject}\n${bodyText}\n\n`;
+        });
+        console.log('[PreMeeting] Found', relevant.length, 'relevant emails from', msgs.length, 'fetched');
+      } catch(e) { console.warn('[PreMeeting] Email search error:', e.message); }
 
       // Teams chat search — critical for internal meetings
       try {
@@ -3898,7 +3900,7 @@ async function think() {
         const end   = new Date(Date.UTC(ty, tm, td, 23, 59, 59) - BRISBANE_MS).toISOString();
         const calData = await graphGet(`/me/calendarView?startDateTime=${start}&endDateTime=${end}&$select=subject,start,end`);
         calendarSummary = calData.value.map(e =>
-          `${new Date(e.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'})} — ${e.subject}`
+          `${new Date(e.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})} — ${e.subject}`
         ).join(', ') || 'No meetings today';
       } catch(e) {
         console.log('Graph fetch in think loop:', e.message);
