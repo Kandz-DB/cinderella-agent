@@ -4363,22 +4363,22 @@ async function sendReminderFromModal(idx) {
   var subject = 'Reminder: weekly check-in';
   var emailBody = 'Hi ' + firstName + ',\n\nI hope you are having a great week so far!\n\nPlease don\'t forget to send your weekly check-in. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin\n\nThanks so much!\n\nKandia';
   closeModal();
-  if (M365.connected) {
-    try {
-      var r = await fetch('/graph/email/draft', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subject:subject,body:emailBody,to:[s.email]})});
-      var d = await r.json();
-      if (d.success) {
-        openModal('Draft saved to Outlook','Reminder for '+s.name,
-          '<div class="alert-box ok"><div class="ab-title">Draft saved to your Outlook Drafts folder</div></div>'+
-          '<div class="mfield"><div class="mfl">To</div><div class="mfv">'+s.name+' &lt;'+s.email+'&gt;</div></div>'+
-          '<button class="m-btn" style="background:#0078D4" onclick="openOutlookDrafts()">Open Outlook Drafts to send</button> '+
-          '<button class="m-btn sec" onclick="closeModal()">Close</button>'
-        );
-        return;
-      }
-    } catch(e) { console.warn('Draft failed:', e.message); }
-  }
-  openDraftModal(s.name, emailBody, subject, 'email', s.email);
+  try {
+    var r = await fetch('/graph/email/draft', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subject:subject,body:emailBody,to:[s.email]})});
+    var d = await r.json();
+    if (d.success) {
+      openModal('Reminder saved to Drafts', 'For ' + s.name,
+        '<div class="alert-box ok"><div class="ab-title">Draft saved to Outlook Drafts</div>' +
+        '<div class="ab-text">Open Outlook Drafts, review and send the reminder to ' + firstName + '.</div></div>' +
+        '<div style="display:flex;gap:8px;margin-top:12px">' +
+          '<button class="m-btn" style="background:#0078D4" onclick="openOutlookDrafts()">Open Outlook Drafts</button>' +
+          '<button class="m-btn sec" onclick="closeModal()">Close</button>' +
+        '</div>'
+      );
+      return;
+    }
+  } catch(e) { console.warn('Draft failed:', e.message); }
+  showToast('Could not create draft — check your M365 connection');
 }
 
 function staffAction(type) {
@@ -6739,14 +6739,19 @@ async function sendAllReminders() {
     return !checked.some(function(n){ return n.includes(first); });
   });
   if (missing.length === 0) {
-    alert('All staff have already submitted check-ins this week!');
+    showToast('All staff have already submitted check-ins this week!');
     return;
   }
-  var emailList = missing.map(function(s){ return s.email; });
-  var subject = 'Reminder: weekly check-in';
-  var emailBody = 'Hi team,\n\nI hope you are all having a great week so far!\n\nThis is a reminder to please submit your weekly check-in if you haven\'t already. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin\n\nThanks so much!\n\nKandia';
 
-  // Try Graph API draft first
+  var emailList = missing.map(function(s){ return s.email; });
+  var subject = 'Reminder: Weekly Check-in';
+  var emailBody = 'Hi team,\n\nThis is a friendly reminder to please submit your weekly check-in if you have not done so yet.\n\nYour check-in helps Kandia understand your capacity, priorities and any blockers so she can support you effectively.\n\nComplete it here:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin\n\nThanks!\nKandia Du Bruyn | COO | Risk 2 Solution';
+
+  // Show loading state
+  openModal('Sending reminders...', 'Saving draft to Outlook',
+    '<div style="text-align:center;padding:20px 0"><div class="think"><span></span><span></span><span></span></div></div>'
+  );
+
   var draftCreated = false;
   try {
     var r = await fetch('/graph/email/draft', {
@@ -6756,36 +6761,37 @@ async function sendAllReminders() {
     });
     var d = await r.json();
     draftCreated = !!(d && d.success);
-  } catch(e) { console.warn('Graph draft:', e.message); }
+  } catch(e) { console.warn('Draft failed:', e.message); }
 
-  closeModal();
+  var recipientHtml = missing.map(function(s){
+    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:0.5px solid var(--bl)">' +
+      '<div style="width:28px;height:28px;border-radius:50%;background:var(--gl);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--g);flex-shrink:0">' + s.name.charAt(0) + '</div>' +
+      '<div><div style="font-size:12px;font-weight:500;color:var(--t1)">' + s.name + '</div><div style="font-size:10px;color:var(--t3)">' + s.email + '</div></div>' +
+    '</div>';
+  }).join('');
 
   if (draftCreated) {
-    var recipientList = missing.map(function(s){ return '<div style="font-size:11px;padding:2px 0">'+s.name+' — '+s.email+'</div>'; }).join('');
-    document.getElementById('draftModal').classList.add('open');
-    document.getElementById('dm-title').textContent = 'Draft saved to Outlook';
-    document.getElementById('dm-sub').textContent = missing.length + ' staff will receive the reminder';
-    document.getElementById('dm-icon').textContent = '📧';
-    document.getElementById('dm-loading').style.display = 'none';
-    document.getElementById('dm-draft-content').style.display = 'block';
-    document.getElementById('dm-email-actions').style.display = 'flex';
-    document.getElementById('dm-email-note').style.display = 'none';
-    document.getElementById('dm-to').value = emailList.join('; ');
-    document.getElementById('dm-subject').value = subject;
-    document.getElementById('dm-body').value = emailBody;
+    openModal('Reminders saved to Drafts', missing.length + ' staff — open Outlook Drafts to review and send',
+      '<div class="alert-box ok"><div class="ab-title">Draft email ready in Outlook Drafts</div>' +
+      '<div class="ab-text">The reminder has been saved as a draft to your Outlook. Open Outlook Drafts, review the email, and send it to the team.</div></div>' +
+      '<div style="margin:12px 0">' + recipientHtml + '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:4px">' +
+        '<button class="m-btn" style="background:#0078D4" onclick="openOutlookDrafts()">Open Outlook Drafts</button>' +
+        '<button class="m-btn sec" onclick="closeModal()">Close</button>' +
+      '</div>'
+    );
   } else {
-    // Fallback: show editable draft modal
-    document.getElementById('draftModal').classList.add('open');
-    document.getElementById('dm-title').textContent = 'Draft email to staff';
-    document.getElementById('dm-sub').textContent = 'Edit before sending — ' + missing.length + ' recipients';
-    document.getElementById('dm-icon').textContent = '📧';
-    document.getElementById('dm-loading').style.display = 'none';
-    document.getElementById('dm-draft-content').style.display = 'block';
-    document.getElementById('dm-email-actions').style.display = 'flex';
-    document.getElementById('dm-email-note').style.display = 'block';
-    document.getElementById('dm-to').value = emailList.join('; ');
-    document.getElementById('dm-subject').value = subject;
-    document.getElementById('dm-body').value = emailBody;
+    // Draft save failed — show mailto fallback
+    var mailtoLink = 'mailto:' + emailList.join(';') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(emailBody);
+    openModal('Could not save to Outlook', 'Use the link below to send directly',
+      '<div class="alert-box warn"><div class="ab-title">Outlook draft could not be created</div>' +
+      '<div class="ab-text">Your M365 session may have expired. Use the Send via Outlook button below to open the email directly in your email client.</div></div>' +
+      '<div style="margin:12px 0">' + recipientHtml + '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:4px">' +
+        '<a class="m-btn" href="' + mailtoLink + '" style="text-decoration:none;display:inline-flex;align-items:center">Send via Outlook</a>' +
+        '<button class="m-btn sec" onclick="closeModal()">Close</button>' +
+      '</div>'
+    );
   }
 }
 
