@@ -3875,6 +3875,218 @@ app.post('/proactive/trigger/:feature', requireAuth, async (req, res) => {
   }
 });
 
+// ── FRIDAY CHECK-IN REMINDER ──
+// Staff on leave can be added to LEAVE_LIST — they are excluded from reminders
+const LEAVE_LIST = ['Ross Mackenzie', 'ross.m@risk2solution.com']; // Update as staff come/go on leave
+
+const REMINDER_STAFF = [
+  {name:'Janita Zhang',    email:'janita.z@risk2solution.com'},
+  {name:'Diane Kruger',    email:'diane.k@risk2solution.com'},
+  {name:'Garima Arora',    email:'garima.a@risk2solution.com'},
+  {name:'Reinette Kruger', email:'reinette.k@risk2solution.com'},
+  {name:'Dani Stevenson',  email:'dani.s@risk2solution.com'},
+  {name:'Cherry Abadeza',  email:'cherry.a@risk2solution.com'},
+  {name:'Paul Johnston',   email:'paul.j@risk2solution.com'},
+];
+
+async function sendFridayCheckInReminder() {
+  if (!tokenStore.access_token) return;
+  const { weekKey, dateStr } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.fridayReminderWeek === weekKey) {
+    console.log('[FridayReminder] Already sent this week');
+    return;
+  }
+
+  // Exclude staff on leave
+  const recipients = REMINDER_STAFF.filter(s =>
+    !LEAVE_LIST.some(l => l.toLowerCase().includes(s.name.toLowerCase().split(' ')[0]) ||
+                          l.toLowerCase() === s.email.toLowerCase())
+  );
+
+  console.log('[FridayReminder] Sending to', recipients.length, 'staff. Excluded:', LEAVE_LIST.join(', '));
+
+  const subject = 'Friday reminder: weekly check-in';
+  const body = `Hi team,
+
+Happy Friday! This is your weekly reminder to please complete your check-in before the end of the day if you haven't done so already.
+
+Your check-in helps Kandia understand team capacity, priorities and any blockers so she can support you effectively.
+
+Complete your check-in here:
+https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin
+
+Have a great weekend!
+
+Kandia Du Bruyn | COO | Risk 2 Solution`;
+
+  try {
+    const token = await getValidToken();
+    const emailList = recipients.map(s => s.email);
+
+    // Send individually so each person receives a personalised copy
+    let sent = 0;
+    for (const staff of recipients) {
+      try {
+        const personalBody = body.replace('Hi team,', `Hi ${staff.name.split(' ')[0]},`);
+        const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+          method:'POST',
+          headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+          body:JSON.stringify({
+            subject, body:{contentType:'Text',content:personalBody},
+            toRecipients:[{emailAddress:{address:staff.email}}]
+          })
+        });
+        const msg = await draft.json();
+        if (msg.id) {
+          const send = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',
+            {method:'POST', headers:{Authorization:'Bearer '+token}});
+          if (send.status === 202) sent++;
+        }
+      } catch(e) { console.warn('[FridayReminder] Failed for', staff.name, ':', e.message); }
+    }
+
+    console.log('[FridayReminder] ✅ Sent to', sent, 'of', recipients.length, 'staff');
+    state.fridayReminderWeek = weekKey;
+    state.fridayReminderSentAt = new Date().toISOString();
+    state.fridayReminderCount = sent;
+    saveProactiveState(state);
+  } catch(e) {
+    console.error('[FridayReminder] Error:', e.message);
+  }
+}
+
+// Manual trigger for Friday reminder (from proactive/trigger endpoint)
+app.post('/proactive/trigger/friday-reminder', requireAuth, async (req, res) => {
+  const state = loadProactiveState();
+  delete state.fridayReminderWeek;
+  saveProactiveState(state);
+  await sendFridayCheckInReminder();
+  const newState = loadProactiveState();
+  res.json({success:true, sent:newState.fridayReminderCount, sentAt:newState.fridayReminderSentAt});
+});
+
+// ── INTERNAL PROJECTS ──
+const PROJECTS_BLOB_PREFIX = 'internal-projects/';
+
+async function getProjectsFromBlob() {
+  try {
+    const cc = await getBlobContainer();
+    if (!cc) return [];
+    const projects = [];
+    for await (const blob of cc.listBlobsFlat({prefix:PROJECTS_BLOB_PREFIX})) {
+      try {
+        const bc = cc.getBlockBlobClient(blob.name);
+        const buf = await bc.downloadToBuffer();
+        projects.push(JSON.parse(buf.toString('utf8')));
+      } catch(e) {}
+    }
+    return projects.sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt));
+  } catch(e) { return []; }
+}
+
+async function saveProjectToBlob(project) {
+  const cc = await getBlobContainer();
+  if (!cc) throw new Error('Blob storage not available');
+  const bc = cc.getBlockBlobClient(PROJECTS_BLOB_PREFIX + project.id + '.json');
+  const data = JSON.stringify(project, null, 2);
+  await bc.upload(data, Buffer.byteLength(data), {blobHTTPHeaders:{blobContentType:'application/json'}});
+}
+
+app.get('/projects', requireAuth, async (req, res) => {
+  try { res.json(await getProjectsFromBlob()); }
+  catch(e) { res.status(500).json({error:e.message}); }
+});
+
+app.get('/projects/:id', requireAuth, async (req, res) => {
+  try {
+    const projects = await getProjectsFromBlob();
+    const p = projects.find(p=>p.id===req.params.id);
+    if (!p) return res.status(404).json({error:'Not found'});
+    res.json(p);
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+app.post('/projects', requireAuth, async (req, res) => {
+  try {
+    const project = {
+      id: 'proj_' + Date.now(),
+      createdAt: new Date().toISOString(),
+      status: 'active',
+      ...req.body
+    };
+    await saveProjectToBlob(project);
+    res.json({success:true, project});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+app.put('/projects/:id', requireAuth, async (req, res) => {
+  try {
+    const projects = await getProjectsFromBlob();
+    const existing = projects.find(p=>p.id===req.params.id);
+    if (!existing) return res.status(404).json({error:'Not found'});
+    const updated = {...existing, ...req.body, id:req.params.id, updatedAt:new Date().toISOString()};
+    await saveProjectToBlob(updated);
+    res.json({success:true, project:updated});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+app.post('/projects/extract', requireAuth, async (req, res) => {
+  try {
+    const { content, filename } = req.body;
+    if (!content) return res.status(400).json({error:'No content provided'});
+
+    const STAFF_LIST = REMINDER_STAFF.map(s=>s.name).join(', ');
+
+    const prompt = `You are Cinderella, COO assistant for Kandia Du Bruyn at Risk 2 Solution Group.
+
+Analyse this document/email/instructions and extract a complete internal project definition.
+
+CONTENT:
+${content.substring(0, 8000)}
+
+AVAILABLE STAFF: ${STAFF_LIST}, Kandia Du Bruyn, Dave Cohen
+
+Return ONLY valid JSON, no markdown:
+{
+  "name": "Concise project name (5-8 words)",
+  "description": "2-3 sentence project brief — what needs to be done and why",
+  "dueDate": "YYYY-MM-DD or null if not specified",
+  "priority": "high, medium, or low",
+  "tags": ["tag1","tag2"],
+  "tasks": [
+    {
+      "title": "Specific deliverable or task",
+      "description": "What needs to be done",
+      "assignedTo": "Name of most suitable staff member from the list above (or Kandia Du Bruyn)",
+      "dueDate": "YYYY-MM-DD or null",
+      "status": "pending"
+    }
+  ],
+  "notes": "Any important context, constraints, or requirements Kandia should know"
+}
+
+Rules:
+- Extract SPECIFIC tasks, not generic ones
+- Assign tasks to the most logical staff member based on their role
+- If dates are mentioned (e.g. "by Friday", "end of month"), convert to YYYY-MM-DD based on today being ${new Date().toISOString().substring(0,10)}
+- If no tasks are clear, create sensible ones based on the project type`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:2000,messages:[{role:'user',content:prompt}]})
+    });
+    const aiData = await aiRes.json();
+    const raw = (aiData.content||[]).map(c=>c.text||'').join('').replace(/^```json\s*/,'').replace(/```$/,'').trim();
+    const extracted = JSON.parse(raw);
+    res.json({success:true, extracted, filename});
+  } catch(e) {
+    console.error('[Projects] Extract error:', e.message);
+    res.status(500).json({error:e.message});
+  }
+});
+
 // ── THINK LOOP ──
 async function think() {
   if (isRunning) return;
@@ -3965,6 +4177,11 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
       await draftCEOWeeklyBrief();
       await checkCapacityTrends();
       await checkReceivables();
+    }
+
+    // Friday 11am — automated check-in reminder to all staff
+    if (bDay === 'Friday' && bHour === 11 && bMin < 30) {
+      await sendFridayCheckInReminder();
     }
 
     // Daily compliance check
