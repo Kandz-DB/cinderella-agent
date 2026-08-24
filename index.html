@@ -521,7 +521,6 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
     <button class="ni" id="auroraNavBtn" onclick="show('aurora',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l1.5 4.5H14l-3.5 2.5 1.5 4.5L8 11l-4 2.5 1.5-4.5L2 6.5h4.5z"/></svg>Aurora projects<span class="nb nb-a" id="auroraBadge" style="display:none">0</span></button>
     <button class="ni" id="clockifyNavBtn" onclick="show('clockify',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg>Clockify<span class="nb nb-r" id="clockifyBadge" style="display:none">0</span></button>
     <button class="ni" id="complianceNavBtn" onclick="show('compliance',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1l5 2v5c0 3-5 6-5 6S3 11 3 8V3l5-2z"/></svg>Compliance<span class="nb nb-r" id="complianceBadge" style="display:none">0</span></button>
-    <button class="ni" id="projectsNavBtn" onclick="show('projects',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><path d="M9 11.5h5M11.5 9v5"/></svg>Projects<span class="nb nb-g" id="projectsBadge" style="display:none">0</span></button>
 
     <button class="ni" onclick="show('auto',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 8A5 5 0 113 8"/><path d="M8 3V1M8 3l-2 2M8 3l2 2"/></svg>Automation</button>
 
@@ -1117,21 +1116,6 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
           <button onclick="triggerProactive('finance')" class="m-btn sec">📊 Financial snapshot</button>
         </div>
       </div>
-
-    </div>
-
-    <!-- INTERNAL PROJECTS -->
-    <div class="pnl" id="pnl-projects">
-
-      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
-        <span>Internal Projects</span>
-        <div style="display:flex;gap:6px">
-          <button onclick="loadProjects()" style="font-size:11px;padding:4px 10px;background:var(--bg2);border:0.5px solid var(--bm);border-radius:8px;cursor:pointer;color:var(--t2);font-family:var(--f)">↻ Refresh</button>
-          <button onclick="showCreateProject()" style="font-size:11px;padding:4px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f);font-weight:600">+ New project</button>
-        </div>
-      </div>
-
-      <div id="projectsList"><div style="font-size:12px;color:var(--t3);padding:24px 0;text-align:center">Loading projects...</div></div>
 
     </div>
 
@@ -4698,7 +4682,6 @@ function show(id,btn){
 
   if(id==='clockify') loadClockify();
   if(id==='compliance') loadCompliance();
-  if(id==='projects') loadProjects();
 
 }
 
