@@ -197,6 +197,8 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 .mbh{padding:20px 24px 16px;border-bottom:1px solid var(--bl);display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .mb-title{font-size:16px;font-weight:700;color:var(--t1);letter-spacing:-0.3px}
 .mb-sub{font-size:12px;color:var(--t3);margin-top:3px}
+.mh-title{font-size:17px;font-weight:700;color:var(--t1);letter-spacing:-0.4px;line-height:1.2}
+.mh-sub{font-size:12px;color:var(--t3);margin-top:4px;line-height:1.4}
 .mb-close{background:var(--bg2);border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;color:var(--t3);font-size:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--f)}
 .mb-close:hover{background:var(--bg3);color:var(--t1)}
 #m-body{padding:20px 24px}
@@ -4408,94 +4410,100 @@ function openStaffModal(idx){
     const pct = st.capacity||0;
     const pctNext = st.capacityNext||0;
     const capCol = pct>=90?'#C8211E':pct>=75?'#D97706':'#0D8A62';
-    const capBg  = pct>=90?'#FEE2E2':pct>=75?'#FEF3C7':'#DCEEE6';
     const nxtCol = pctNext>=90?'#C8211E':pctNext>=75?'#D97706':'#0D8A62';
 
-    function bar(val, col) {
-      return '<div style="display:flex;align-items:center;gap:12px;margin-top:6px">' +
-        '<div style="flex:1;height:10px;background:#F2F1EE;border-radius:999px;overflow:hidden">' +
-          '<div style="height:100%;width:'+val+'%;background:'+col+';border-radius:999px;transition:width .4s"></div>' +
+    function barRow(label, val, col) {
+      return '<div style="margin-bottom:12px">' +
+        '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">'+label+'</div>' +
+        '<div style="display:flex;align-items:center;gap:14px">' +
+          '<div style="flex:1;height:12px;background:#E8E6E1;border-radius:999px;overflow:hidden">' +
+            '<div style="height:100%;width:'+val+'%;background:'+col+';border-radius:999px"></div>' +
+          '</div>' +
+          '<span style="font-size:20px;font-weight:800;color:'+col+';letter-spacing:-1px;min-width:52px;text-align:right">'+val+'%</span>' +
         '</div>' +
-        '<span style="font-size:18px;font-weight:800;color:'+col+';letter-spacing:-0.5px;min-width:48px;text-align:right">'+val+'%</span>' +
       '</div>';
     }
 
-    function field(label, value, opts) {
-      if(!value && !opts) return '';
-      return '<div style="margin-bottom:14px">' +
-        '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">'+label+'</div>' +
-        '<div style="font-size:13px;color:'+(opts&&opts.color?opts.color:'#111110')+';line-height:1.5">'+value+'</div>' +
-      '</div>';
-    }
-
+    const hasBlocker = st.blockers && !st.blockers.toLowerCase().match(/^(none|no|n\/a|not at the moment|-)$/);
     const matches = findMatches().filter(m=>m.busy.name===st.name||m.free.name===st.name);
-    const skills = (st.skills||'').split(',').filter(x=>x.trim());
-
-    const matchHtml = matches.length>0
-      ? '<div style="margin-bottom:14px"><div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Skill match opportunities</div>' +
-        matches.map(m=>'<div style="background:#DCEEE6;border-left:3px solid #0D8A62;border-radius:0 6px 6px 0;padding:8px 12px;margin-bottom:5px"><div style="font-size:12px;font-weight:600;color:#0D8A62">'+(m.busy.name===st.name?'Support available from '+m.free.name+' ('+m.free.capacity+'%)':'Can support '+m.busy.name+' ('+m.busy.capacity+'%)')+'</div><div style="font-size:11px;color:#4A4844;margin-top:2px">Shared: '+m.shared.join(', ')+'</div></div>').join('')+
-        '</div>'
-      : '';
-
+    const skills = (st.skills||'').split(',').map(s=>s.trim()).filter(Boolean);
     const submittedStr = st.submitted
       ? new Date(st.submitted).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})
       : 'Unknown';
 
     var html =
-      // Capacity section — hero element
-      '<div style="background:'+capBg+';border-radius:12px;padding:16px 20px;margin-bottom:18px">' +
-        '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px">This week — capacity</div>' +
-        bar(pct, capCol) +
-        (pctNext ?
-          '<div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06)">' +
-          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px">Next week — forecast</div>' +
-          bar(pctNext, nxtCol) + '</div>' : '') +
+      // ── CAPACITY BARS ── full width, stacked
+      '<div style="background:#F8F8F6;border-radius:12px;padding:18px 20px;margin-bottom:16px;border:1px solid #E8E6E1">' +
+        barRow('This week — capacity', pct, capCol) +
+        (pctNext ? '<div style="height:1px;background:#E8E6E1;margin:4px 0 14px"></div>' + barRow('Next week — forecast', pctNext, nxtCol) : '') +
       '</div>' +
 
-      // Blockers — prominent if present
-      (st.blockers && st.blockers.toLowerCase()!=='none' && st.blockers.toLowerCase()!=='no' && st.blockers.toLowerCase()!=='n/a' ?
-        '<div style="background:#FEE2E2;border-left:3px solid #C8211E;border-radius:0 8px 8px 0;padding:10px 14px;margin-bottom:16px">' +
-        '<div style="font-size:9px;font-weight:700;color:#C8211E;text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px">⚠ Blocker</div>' +
-        '<div style="font-size:13px;color:#111110">'+st.blockers+'</div></div>' : '') +
+      // ── BLOCKER ── own row, below capacity
+      (hasBlocker ?
+        '<div style="background:#FEE2E2;border-radius:10px;padding:12px 16px;margin-bottom:16px">' +
+          '<div style="font-size:9px;font-weight:700;color:#C8211E;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">⚠ Blocker reported</div>' +
+          '<div style="font-size:13px;color:#7F1D1D;line-height:1.5">'+st.blockers+'</div>' +
+        '</div>' : '') +
 
-      // Two-column quick stats
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">' +
-        '<div style="background:#F2F1EE;border-radius:8px;padding:10px 12px">' +
-          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px">Trend</div>' +
-          '<div style="font-size:12.5px;color:#111110;font-weight:500">'+(st.trend||'—')+'</div>' +
+      // ── STATS GRID ──
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">' +
+        '<div style="background:#F8F8F6;border-radius:8px;padding:10px 14px;border:1px solid #E8E6E1">' +
+          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px">Workload trend</div>' +
+          '<div style="font-size:13px;color:#111110;font-weight:500">'+(st.trend||'—')+'</div>' +
         '</div>' +
-        '<div style="background:#F2F1EE;border-radius:8px;padding:10px 12px">' +
+        '<div style="background:#F8F8F6;border-radius:8px;padding:10px 14px;border:1px solid #E8E6E1">' +
           '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px">Availability next week</div>' +
-          '<div style="font-size:12.5px;color:#111110;font-weight:500">'+(st.availability||'Full week')+(st.leave?' &mdash; '+st.leave:'')+'</div>' +
+          '<div style="font-size:13px;color:#111110;font-weight:500">'+(st.availability||'Full week')+(st.leave?' — '+st.leave:'')+'</div>' +
         '</div>' +
       '</div>' +
 
-      field('Projects this week', st.projects||'—') +
-
-      (skills.length>0 ?
-        '<div style="margin-bottom:14px"><div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Skills</div>' +
-        '<div style="display:flex;flex-wrap:wrap;gap:5px">' +
-        skills.map(s=>'<span style="background:#EEF4FF;color:#1e40af;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px">'+s.trim()+'</span>').join('') +
-        '</div></div>' : '') +
-
-      (st.notes ? field('Notes to COO', st.notes) : '') +
-
-      matchHtml +
-
-      '<div style="font-size:10px;color:#9A9693;margin-bottom:16px">Submitted '+submittedStr+'</div>' +
-
-      // Action buttons
-      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">' +
-        '<button onclick="staffAction(0)" style="flex:1;min-width:80px;padding:9px 0;border-radius:8px;background:#0D8A62;color:#fff;border:none;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--f)">✉ Email</button>' +
-        '<button onclick="staffAction(1)" style="flex:1;min-width:80px;padding:9px 0;border-radius:8px;background:#1e40af;color:#fff;border:none;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--f)">📅 1:1</button>' +
-        (st.blockers&&st.blockers.toLowerCase()!=='none'?'<button onclick="staffAction(2)" style="flex:1;min-width:80px;padding:9px 0;border-radius:8px;background:#F2F1EE;color:#C8211E;border:1.5px solid #C8211E;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--f)">🚧 Blocker</button>':'') +
-        (matches.length>0?'<button onclick="staffAction(3)" style="flex:1;min-width:80px;padding:9px 0;border-radius:8px;background:#F2F1EE;color:#111110;border:1px solid rgba(0,0,0,0.12);font-size:12px;font-weight:500;cursor:pointer;font-family:var(--f)">Skill match</button>':'') +
+      // ── PROJECTS ──
+      '<div style="margin-bottom:16px">' +
+        '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Projects this week</div>' +
+        '<div style="font-size:13px;color:#111110;line-height:1.5">'+(st.projects||'—')+'</div>' +
       '</div>' +
 
-      '<button onclick="staffAction(4)" style="width:100%;padding:9px 0;border-radius:8px;background:#fff;color:#C8211E;border:1.5px solid #C8211E;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--f)">Delete this check-in</button>';
+      // ── SKILLS ──
+      (skills.length>0 ?
+        '<div style="margin-bottom:16px">' +
+          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:7px">Skills</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+            skills.map(s=>'<span style="background:#EEF4FF;color:#1D4ED8;font-size:11px;font-weight:600;padding:4px 12px;border-radius:999px;border:1px solid #BFDBFE">'+s+'</span>').join('') +
+          '</div>' +
+        '</div>' : '') +
+
+      // ── NOTES ──
+      (st.notes ?
+        '<div style="margin-bottom:16px">' +
+          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Notes to COO</div>' +
+          '<div style="font-size:13px;color:#111110;line-height:1.5;background:#FEFCE8;padding:10px 14px;border-radius:8px;border:1px solid #FEF08A">'+st.notes+'</div>' +
+        '</div>' : '') +
+
+      // ── SKILL MATCHES ──
+      (matches.length>0 ?
+        '<div style="margin-bottom:16px">' +
+          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Skill match opportunities</div>' +
+          matches.map(m=>
+            '<div style="background:#DCEEE6;border-left:3px solid #0D8A62;border-radius:0 8px 8px 0;padding:9px 14px;margin-bottom:5px">' +
+            '<div style="font-size:12px;font-weight:600;color:#0D8A62">'+(m.busy.name===st.name?'Support available from '+m.free.name+' ('+m.free.capacity+'%)':'Can support '+m.busy.name+' ('+m.busy.capacity+'%)')+'</div>' +
+            '<div style="font-size:11px;color:#4A4844;margin-top:2px">Shared skills: '+m.shared.join(', ')+'</div></div>'
+          ).join('') +
+        '</div>' : '') +
+
+      '<div style="font-size:10px;color:#9A9693;margin-bottom:18px;padding-top:4px;border-top:1px solid #E8E6E1">Submitted '+submittedStr+'</div>' +
+
+      // ── ACTIONS ──
+      '<div style="display:flex;gap:8px;margin-bottom:10px">' +
+        '<button onclick="staffAction(0)" style="flex:1;padding:10px 0;border-radius:8px;background:#0D8A62;color:#fff;border:none;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--f)">✉ Email</button>' +
+        '<button onclick="staffAction(1)" style="flex:1;padding:10px 0;border-radius:8px;background:#1D4ED8;color:#fff;border:none;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--f)">📅 1:1</button>' +
+        (hasBlocker?'<button onclick="staffAction(2)" style="flex:1;padding:10px 0;border-radius:8px;background:#FEE2E2;color:#C8211E;border:1.5px solid #C8211E;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--f)">🚧 Blocker</button>':'') +
+        (matches.length>0?'<button onclick="staffAction(3)" style="flex:1;padding:10px 0;border-radius:8px;background:#F8F8F6;color:#111110;border:1px solid #E8E6E1;font-size:12.5px;font-weight:500;cursor:pointer;font-family:var(--f)">✦ Skill match</button>':'') +
+      '</div>' +
+      '<button onclick="staffAction(4)" style="width:100%;padding:10px 0;border-radius:8px;background:#fff;color:#C8211E;border:1.5px solid #C8211E;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--f)">Delete this check-in</button>';
 
     window._currentStaff = st;
-    openModal(cap(st.name), (cap(st.role)||'Staff member')+' &middot; Week ending '+(st.weekEnding||''), html);
+    // Use · character directly (not &middot; since openModal uses innerHTML for subtitle now)
+    openModal(cap(st.name), (cap(st.role)||'Staff member')+' · Week ending '+(st.weekEnding||''), html);
   } catch(err) { console.error('openStaffModal error:', err); }
 }
 
@@ -4871,7 +4879,7 @@ function openModal(title,sub,body){
 
   document.getElementById('m-title').textContent=title;
 
-  document.getElementById('m-sub').textContent=sub||'';
+  document.getElementById('m-sub').innerHTML=sub||'';
 
   document.getElementById('m-body').innerHTML=body||'';
 
