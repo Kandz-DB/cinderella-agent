@@ -194,11 +194,11 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 .mo{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
 .mo.open{display:flex}
 .mb{background:var(--bg);border-radius:16px;width:90%;max-width:540px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2)}
-.mbh{padding:20px 24px 16px;border-bottom:1px solid var(--bl);display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.mbh{padding:22px 24px 18px;border-bottom:1px solid var(--bl);display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
 .mb-title{font-size:16px;font-weight:700;color:var(--t1);letter-spacing:-0.3px}
 .mb-sub{font-size:12px;color:var(--t3);margin-top:3px}
-.mh-title{font-size:17px;font-weight:700;color:var(--t1);letter-spacing:-0.4px;line-height:1.2}
-.mh-sub{font-size:12px;color:var(--t3);margin-top:4px;line-height:1.4}
+.mh-title{font-size:18px;font-weight:800;color:var(--t1);letter-spacing:-0.5px;line-height:1.25;flex:1;min-width:0}
+.mh-sub{font-size:12.5px;color:var(--t3);margin-top:5px;line-height:1.5;font-weight:400}
 .mb-close{background:var(--bg2);border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;color:var(--t3);font-size:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--f)}
 .mb-close:hover{background:var(--bg3);color:var(--t1)}
 #m-body{padding:20px 24px}
@@ -354,7 +354,7 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 
     <div class="mh">
 
-      <div><div class="mh-title" id="m-title"></div><div class="mh-sub" id="m-sub"></div></div>
+      <div style="flex:1;min-width:0"><div class="mh-title" id="m-title"></div><div class="mh-sub" id="m-sub"></div></div>
 
       <button class="mclose" onclick="closeModal()">×</button>
 
@@ -4413,13 +4413,13 @@ function openStaffModal(idx){
     const nxtCol = pctNext>=90?'#C8211E':pctNext>=75?'#D97706':'#0D8A62';
 
     function barRow(label, val, col) {
-      return '<div style="margin-bottom:12px">' +
-        '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">'+label+'</div>' +
-        '<div style="display:flex;align-items:center;gap:14px">' +
-          '<div style="flex:1;height:12px;background:#E8E6E1;border-radius:999px;overflow:hidden">' +
-            '<div style="height:100%;width:'+val+'%;background:'+col+';border-radius:999px"></div>' +
-          '</div>' +
-          '<span style="font-size:20px;font-weight:800;color:'+col+';letter-spacing:-1px;min-width:52px;text-align:right">'+val+'%</span>' +
+      return '<div style="margin-bottom:14px">' +
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px">' +
+          '<span style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em">'+label+'</span>' +
+          '<span style="font-size:22px;font-weight:800;color:'+col+';letter-spacing:-1px;line-height:1">'+val+'%</span>' +
+        '</div>' +
+        '<div style="width:100%;height:14px;background:#E8E6E1;border-radius:999px;overflow:hidden">' +
+          '<div style="height:100%;width:'+val+'%;background:'+col+';border-radius:999px"></div>' +
         '</div>' +
       '</div>';
     }
@@ -4433,9 +4433,9 @@ function openStaffModal(idx){
 
     var html =
       // ── CAPACITY BARS ── full width, stacked
-      '<div style="background:#F8F8F6;border-radius:12px;padding:18px 20px;margin-bottom:16px;border:1px solid #E8E6E1">' +
+      '<div style="background:#F8F8F6;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #E8E6E1;width:100%;box-sizing:border-box">' +
         barRow('This week — capacity', pct, capCol) +
-        (pctNext ? '<div style="height:1px;background:#E8E6E1;margin:4px 0 14px"></div>' + barRow('Next week — forecast', pctNext, nxtCol) : '') +
+        (pctNext ? '<div style="height:1px;background:#E8E6E1;margin:6px 0 16px"></div>' + barRow('Next week — forecast', pctNext, nxtCol) : '') +
       '</div>' +
 
       // ── BLOCKER ── own row, below capacity
