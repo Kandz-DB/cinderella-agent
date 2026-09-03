@@ -1656,7 +1656,7 @@ ${context}`;
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1A1A1A;background:#fff;line-height:1.5}
     .page{max-width:800px;margin:0 auto;padding:28px 32px}
-    h2{color:${NAVY};font-size:13pt;border-bottom:1.5px solid #C7D8E8;padding-bottom:5px;margin:20px 0 10px;font-weight:600}
+    h2{color:${NAVY};font-size:13pt;margin:20px 0 10px;font-weight:600}
     table{width:100%;border-collapse:collapse;font-size:9.5pt;margin-bottom:12px}
     th{background:${NAVY};color:#fff;padding:7px 10px;text-align:left;font-weight:600}
     td{padding:7px 10px;border:0.5px solid #d0d0d0;vertical-align:top}
@@ -1664,7 +1664,7 @@ ${context}`;
     .pos{color:${GREEN};font-weight:700}
     .neg{color:${RED};font-weight:700}
     .amb{color:${AMBER};font-weight:700}
-    .coo-box{background:#EEF3FB;border-left:3px solid ${NAVY};padding:10px 14px;margin:10px 0 16px;font-size:9.5pt;line-height:1.6}
+    .coo-box{margin:10px 0 16px;font-size:9.5pt;line-height:1.6}
     .badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:8.5pt;font-weight:600;white-space:nowrap}
     .stable{background:#E8F5F1;color:#1E5C3A}
     .monitor{background:#FFF3E0;color:#7A3D00}
@@ -1673,14 +1673,14 @@ ${context}`;
     ul{padding-left:18px;font-size:9.5pt;line-height:1.8}
     p{font-size:10pt;line-height:1.6;margin-bottom:10px}
     .meta td{border:0.5px solid #C7D8E8;background:#F5F8FC;font-size:9.5pt;padding:6px 10px}
-    .kpi-row{display:flex;gap:12px;margin-bottom:14px}
-    .kpi{flex:1;border-radius:4px;padding:12px;text-align:center}
-    .kpi-p{border:1.5px solid #B2D4C0}
-    .kpi-n{border:1.5px solid #E8BBBB}
-    .kpi-label{font-size:9pt;color:#666;margin-bottom:4px}
-    .kpi-val-p{font-size:18pt;font-weight:700;color:${GREEN}}
-    .kpi-val-n{font-size:18pt;font-weight:700;color:${RED}}
-    .kpi-sub{font-size:9pt;color:#888}
+    .kpi-row{display:flex;gap:12px;margin-bottom:16px}
+    .kpi{flex:1;border-radius:6px;padding:14px;text-align:center}
+    .kpi-p{border:1.5px solid #B2D4C0;background:#F4FBF7}
+    .kpi-n{border:1.5px solid #E8BBBB;background:#FDF4F4}
+    .kpi-label{font-size:9pt;color:#666;margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+    .kpi-val-p{font-size:22pt;font-weight:700;color:${GREEN};letter-spacing:-1px}
+    .kpi-val-n{font-size:22pt;font-weight:700;color:${RED};letter-spacing:-1px}
+    .kpi-sub{font-size:8.5pt;color:#888;margin-top:4px}
   </style>`;
 
   const meetDateStr = meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
@@ -1700,7 +1700,7 @@ ${context}`;
     <td><strong>Classification:</strong> Confidential - Board Only</td>
   </tr></table>`;
 
-  // Section 1 — Executive Summary
+  // Section 1 — Executive Summary with KPI metric tiles
   const kpiRows = (sections.financialTableRows||[]).slice(0,2);
   const kpi1 = kpiRows[0]||{};
   const kpi2 = kpiRows[1]||{};
@@ -1709,12 +1709,12 @@ ${context}`;
     <div class="kpi ${kpi1.resultClass==='neg'?'kpi-n':'kpi-p'}">
       <div class="kpi-label">${kpi1.period||'Current Period'}</div>
       <div class="${kpi1.resultClass==='neg'?'kpi-val-n':'kpi-val-p'}">${kpi1.result||'—'}</div>
-      <div class="kpi-sub">${kpi1.keyDriver?kpi1.keyDriver.substring(0,60)+'...':''}</div>
+      <div class="kpi-sub">${kpi1.keyDriver?kpi1.keyDriver.substring(0,70)+'...':''}</div>
     </div>
     ${kpi2.period?`<div class="kpi ${kpi2.resultClass==='neg'?'kpi-n':'kpi-p'}">
       <div class="kpi-label">${kpi2.period}</div>
       <div class="${kpi2.resultClass==='neg'?'kpi-val-n':'kpi-val-p'}">${kpi2.result}</div>
-      <div class="kpi-sub">${(kpi2.keyDriver||'').substring(0,60)+'...'}</div>
+      <div class="kpi-sub">${(kpi2.keyDriver||'').substring(0,70)+'...'}</div>
     </div>`:''}
   </div>
   <p>${sections.executiveSummary||''}</p>`;
@@ -1727,7 +1727,7 @@ ${context}`;
   <table><thead><tr><th>Period</th><th>Result</th><th>Key Driver</th></tr></thead>
   <tbody>${finRows||'<tr><td colspan="3">No financial data available - check Diane\'s finance emails are in scope.</td></tr>'}</tbody></table>
   ${sections.financeNote?`<p style="font-size:9pt;color:#555">Note: ${sections.financeNote}</p>`:''}
-  <div class="coo-box"><strong>COO Assessment</strong><br>${sections.financialAnalysis||''}</div>`;
+  <p style="margin:12px 0 0;font-size:10pt;line-height:1.7"><strong>COO Assessment:</strong> ${sections.financialAnalysis||''}</p>`;
 
   // Section 3 — People & Culture
   const pRows = (sections.peopleRows||[]).map((p,i) => {
