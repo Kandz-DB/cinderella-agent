@@ -962,7 +962,7 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 
           <div class="card" id="emailBriefCard">
             <div class="ct">Email brief — last 24 hours
-              <span class="ct-action" onclick="loadEmailBrief(true)" id="emailBriefRefresh">↻ Refresh</span>
+              <span class="ct-action" onclick="loadEmailBrief()" id="emailBriefRefresh">↻ Refresh</span>
             </div>
             <div id="emailBriefContent"><div style="font-size:11px;color:var(--t3);padding:4px 0">Click refresh to generate your inbox brief.</div></div>
           </div>
@@ -4711,7 +4711,6 @@ function show(id,btn){
   // Load live data when COO tab opens
   if(id==='today'){
     loadFinancialSnapshot();
-    loadEmailBrief(false);
   }
   if(id==='coo'){
     loadOpenActions(false);
@@ -7283,6 +7282,26 @@ function askAboutAuroraProject() {
   qa('Give me a full status update on the ' + title + ' project from Aurora — open deliverables, outstanding invoices, what does Kandia need to action?');
 }
 
+
+async function loadEmailBrief() {
+  var el = document.getElementById('emailBriefContent');
+  var btn = document.getElementById('emailBriefRefresh');
+  if (!el) return;
+  if (btn) { btn.textContent = 'Generating...'; btn.style.pointerEvents = 'none'; }
+  el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;font-size:11px;color:var(--t3)"><div class="think"><span></span><span></span><span></span></div>Analysing your inbox&hellip;</div>';
+  try {
+    var r = await fetch('/email-brief');
+    if (r.status === 401) { el.innerHTML = '<div style="font-size:11px;color:var(--t3)">Session expired - refresh page.</div>'; return; }
+    if (!r.ok) throw new Error('Server error ' + r.status);
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+    el.innerHTML = d.html || '<div style="font-size:11px;color:var(--t3)">No emails in last 24 hours.</div>';
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">' + e.message + ' <button onclick="loadEmailBrief()" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--bg2);border:1px solid var(--bm);cursor:pointer;font-family:var(--f);margin-left:6px">Retry</button></div>';
+  } finally {
+    if (btn) { btn.textContent = '&#8635; Refresh'; btn.style.pointerEvents = 'auto'; }
+  }
+}
 </script>
 
 </body>
