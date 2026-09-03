@@ -7299,7 +7299,7 @@ async function loadEmailBrief() {
   } catch(e) {
     el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">' + e.message + ' <button onclick="loadEmailBrief()" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--bg2);border:1px solid var(--bm);cursor:pointer;font-family:var(--f);margin-left:6px">Retry</button></div>';
   } finally {
-    if (btn) { btn.textContent = '&#8635; Refresh'; btn.style.pointerEvents = 'auto'; }
+    if (btn) { btn.innerHTML = '&#8635; Refresh'; btn.style.pointerEvents = 'auto'; }
   }
 }
 </script>
