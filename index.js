@@ -3966,6 +3966,151 @@ app.post('/proactive/trigger/friday-reminder', requireAuth, async (req, res) => 
   res.json({success:true, sent:newState.fridayReminderCount, sentAt:newState.fridayReminderSentAt});
 });
 
+// ── EMAIL BRIEF ──────────────────────────────────────────────
+app.get('/email-brief', requireAuth, async (req, res) => {
+  try {
+    // Fetch last 24 hours of inbox emails
+    const since = new Date(Date.now() - 24*60*60*1000).toISOString();
+    const [inboxData, sentData] = await Promise.all([
+      graphGet(`/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${since}&$top=80&$select=subject,from,bodyPreview,receivedDateTime,isRead,importance,hasAttachments,conversationId&$orderby=receivedDateTime desc`),
+      graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$select=conversationId&$top=100`)
+    ]);
+
+    const repliedConvs = new Set((sentData.value||[]).map(m=>m.conversationId).filter(Boolean));
+
+    // Filter out bulk/system/marketing noise
+    const EXCLUDE_SENDERS = ['noreply','no-reply','donotreply','mailer-daemon','notifications@','newsletter','@bounce','postmaster','automated@','alerts@','quarantine@'];
+    const EXCLUDE_KEYWORDS = ['unsubscribe','special offer','limited time','click here','dear customer','dear valued','winner','prize','survey feedback','receipt for your','payment confirmation','order confirmation','shipping confirmation','capcoal','luxury escapes','island printing'];
+    const EXCLUDE_DOMAINS = ['mailchimp','constantcontact','campaignmonitor','sendgrid','klaviyo','hubspot','marketo'];
+
+    const emails = (inboxData.value||[]).filter(m => {
+      const addr = (m.from?.emailAddress?.address||'').toLowerCase();
+      const name = (m.from?.emailAddress?.name||'').toLowerCase();
+      const subj = (m.subject||'').toLowerCase();
+      if (EXCLUDE_SENDERS.some(p=>addr.includes(p))) return false;
+      if (EXCLUDE_KEYWORDS.some(p=>subj.includes(p)||addr.includes(p))) return false;
+      if (EXCLUDE_DOMAINS.some(p=>addr.includes(p))) return false;
+      if (name.includes('no reply')||name.includes('automated')) return false;
+      return true;
+    });
+
+    if (emails.length === 0) {
+      return res.json({ html: '<div style="font-size:12px;color:#9A9693;padding:8px 0">No significant emails in the last 24 hours.</div>' });
+    }
+
+    // Build email list for AI
+    const emailList = emails.slice(0,40).map(m => {
+      const replied = m.conversationId && repliedConvs.has(m.conversationId);
+      return `FROM: ${m.from?.emailAddress?.name||m.from?.emailAddress?.address} <${m.from?.emailAddress?.address}>
+SUBJECT: ${m.subject}
+TIME: ${new Date(m.receivedDateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})}
+READ: ${m.isRead?'yes':'no'} | REPLIED: ${replied?'yes':'no'} | IMPORTANCE: ${m.importance||'normal'}
+PREVIEW: ${(m.bodyPreview||'').substring(0,180)}`;
+    }).join('\n\n---\n\n');
+
+    const prompt = `You are Cinderella, executive assistant to Kandia Du Bruyn (COO, Risk 2 Solution Group).
+
+Generate an executive and concise Inbox Brief for the following emails received in the last 24 hours. 
+
+GROUP BY action needed:
+- 🔴 Needs Reply — emails requiring a response from Kandia
+- 🟠 Decision Required — emails where Kandia must make a decision or give direction  
+- 🔵 FYI — informational emails worth noting
+- 🟢 Read Later — low priority, can be reviewed later
+
+Rules:
+- If no emails fall under a category, omit that category entirely
+- Exclude Cinderella's own morning briefs and pre-meeting briefs from the groups (they can be mentioned in roll-up count)
+- Start with ONE sentence: total count, 2-3 dominant themes, any invites
+- List 3-5 bullets per group maximum: [Sender] — Subject — one-line gist
+- End with 3-5 specific suggested next actions as bullet points
+- Be specific and analytical — reference actual names, amounts, deadlines from the emails
+- Use the Cinderella/R2S context: risk management company, COO role, key staff are Diane Kruger (finance/ops), Janita Zhang (IT/marketing), Dave Cohen (CEO), Paul Johnston (risk/consulting)
+
+Return ONLY valid JSON, no markdown:
+{
+  "rollup": "One sentence summary of emails, themes, invites",
+  "groups": [
+    {
+      "label": "🔴 Needs Reply",
+      "items": [
+        {"icon":"📧","sender":"Name","subject":"Subject","gist":"One-line gist"}
+      ]
+    }
+  ],
+  "actions": ["specific action 1","specific action 2","specific action 3"]
+}
+
+EMAILS:
+${emailList}`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+      body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:1200,messages:[{role:'user',content:prompt}]})
+    });
+    const aiData = await aiRes.json();
+    const rawText = (aiData.content||[]).map(c=>c.text||'').join('').replace(/^```json\s*/,'').replace(/```$/,'').trim();
+
+    let brief;
+    try { brief = JSON.parse(rawText); }
+    catch(e) {
+      console.error('[EmailBrief] Parse error:', e.message);
+      return res.json({ html: '<div style="font-size:12px;color:#9A9693">Could not generate email brief — try again later.</div>' });
+    }
+
+    // Build HTML
+    const GROUP_COLOURS = {
+      '🔴':{ bg:'#FEE2E2', border:'#C8211E', label:'#C8211E' },
+      '🟠':{ bg:'#FEF3C7', border:'#D97706', label:'#92400E' },
+      '🔵':{ bg:'#EFF6FF', border:'#2563EB', label:'#1D4ED8' },
+      '🟢':{ bg:'#F0FDF4', border:'#16A34A', label:'#15803D' },
+    };
+
+    let html = '';
+
+    // Roll-up
+    html += `<div style="font-size:12.5px;color:#111110;line-height:1.6;margin-bottom:14px;padding:12px 14px;background:#F8F8F6;border-radius:8px;border-left:3px solid #0D8A62">${brief.rollup||''}</div>`;
+
+    // Groups
+    (brief.groups||[]).forEach(group => {
+      const emoji = group.label ? group.label.charAt(0) : '🔵';
+      const c = GROUP_COLOURS[emoji]||GROUP_COLOURS['🔵'];
+      html += `<div style="margin-bottom:12px">`;
+      html += `<div style="font-size:10px;font-weight:700;color:${c.label};text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${group.label||''}</div>`;
+      (group.items||[]).forEach(item => {
+        html += `<div style="display:flex;gap:8px;padding:7px 10px;border-radius:6px;margin-bottom:4px;background:${c.bg};border-left:2.5px solid ${c.border}">` +
+          `<span style="flex-shrink:0">${item.icon||'📧'}</span>` +
+          `<div style="min-width:0">` +
+            `<div style="font-size:12px;font-weight:600;color:#111110;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.sender||''} — ${item.subject||''}</div>` +
+            `<div style="font-size:11px;color:#4A4844;margin-top:1px;line-height:1.4">${item.gist||''}</div>` +
+          `</div>` +
+        `</div>`;
+      });
+      html += `</div>`;
+    });
+
+    // Suggested actions
+    if ((brief.actions||[]).length > 0) {
+      html += `<div style="margin-top:14px;padding:12px 14px;background:#F8F8F6;border-radius:8px">`;
+      html += `<div style="font-size:10px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Suggested next actions</div>`;
+      brief.actions.forEach(a => {
+        html += `<div style="display:flex;gap:8px;padding:4px 0;font-size:12px;color:#111110;line-height:1.5"><span style="color:#0D8A62;font-weight:700;flex-shrink:0">✅</span><span>${a}</span></div>`;
+      });
+      html += `</div>`;
+    }
+
+    // Footer
+    const emailCount = emails.length;
+    html += `<div style="font-size:10px;color:#9A9693;margin-top:10px;padding-top:8px;border-top:1px solid #E8E6E1">${emailCount} emails scanned · Last 24 hours · Generated ${new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})}</div>`;
+
+    res.json({ html });
+  } catch(e) {
+    console.error('[EmailBrief] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── THINK LOOP ──
 async function think() {
   if (isRunning) return;
