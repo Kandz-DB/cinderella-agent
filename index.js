@@ -3999,7 +3999,7 @@ app.get('/email-brief', requireAuth, async (req, res) => {
     }
 
     // Build email list for AI
-    const emailList = emails.slice(0,40).map(m => {
+    const emailList = emails.slice(0,25).map(m => {
       const replied = m.conversationId && repliedConvs.has(m.conversationId);
       return `FROM: ${m.from?.emailAddress?.name||m.from?.emailAddress?.address} <${m.from?.emailAddress?.address}>
 SUBJECT: ${m.subject}
@@ -4047,16 +4047,25 @@ ${emailList}`;
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
-      body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:1200,messages:[{role:'user',content:prompt}]})
+      body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:2000,messages:[{role:'user',content:prompt}]})
     });
     const aiData = await aiRes.json();
     const rawText = (aiData.content||[]).map(c=>c.text||'').join('').replace(/^```json\s*/,'').replace(/```$/,'').trim();
 
     let brief;
-    try { brief = JSON.parse(rawText); }
-    catch(e) {
-      console.error('[EmailBrief] Parse error:', e.message);
-      return res.json({ html: '<div style="font-size:12px;color:#9A9693">Could not generate email brief — try again later.</div>' });
+    try {
+      // Strip all markdown wrappers and find the JSON object
+      let cleaned = rawText.replace(/^```json\s*/i,'').replace(/^```\s*/,'').replace(/\s*```\s*$/,'').trim();
+      // Find the outermost JSON object
+      const jsonStart = cleaned.indexOf('{');
+      const jsonEnd = cleaned.lastIndexOf('}');
+      if (jsonStart >= 0 && jsonEnd > jsonStart) cleaned = cleaned.substring(jsonStart, jsonEnd+1);
+      brief = JSON.parse(cleaned);
+      console.log('[EmailBrief] Parsed OK — groups:', (brief.groups||[]).length, 'actions:', (brief.actions||[]).length);
+    } catch(e) {
+      console.error('[EmailBrief] JSON parse error:', e.message);
+      console.error('[EmailBrief] Raw AI text:', rawText.substring(0,500));
+      return res.json({ html: '<div style="font-size:12px;color:#9A9693;padding:4px 0">Could not parse email brief — check Azure logs. Raw: ' + rawText.substring(0,200).replace(/</g,'&lt;') + '</div>' });
     }
 
     // Build HTML
