@@ -960,6 +960,13 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
             <div id="financialSnapshotContent"><div style="font-size:11px;color:var(--t3);padding:4px 0">Loading...</div></div>
           </div>
 
+          <div class="card" id="emailBriefCard">
+            <div class="ct">Email brief — last 24 hours
+              <span class="ct-action" onclick="loadEmailBrief(true)" id="emailBriefRefresh">↻ Refresh</span>
+            </div>
+            <div id="emailBriefContent"><div style="font-size:11px;color:var(--t3);padding:4px 0">Click refresh to generate your inbox brief.</div></div>
+          </div>
+
         </div>
 
       </div>
@@ -4704,6 +4711,7 @@ function show(id,btn){
   // Load live data when COO tab opens
   if(id==='today'){
     loadFinancialSnapshot();
+    loadEmailBrief(false);
   }
   if(id==='coo'){
     loadOpenActions(false);
