@@ -3112,7 +3112,7 @@ async function checkCapacityTrends() {
     const atRisk = [], missingCheckIns = [];
 
     // Check staff that should be checking in
-    const EXPECTED_STAFF = ['Janita Zhang','Diane Kruger','Garima Arora','Reinette Kruger','Dani Stevenson','Ross Mackenzie','Cherry Abadeza','Paul Johnston'];
+    const EXPECTED_STAFF = ['Janita Zhang','Diane Kruger','Garima Arora','Reinette Kruger','Dani Stevenson','Ross Mackenzie','Cherry Abadeza','Paul Johnston','Dylan Finigan'];
     EXPECTED_STAFF.forEach(name => {
       const entries = byPerson[name]||[];
       if (entries.length === 0) {
@@ -4118,6 +4118,224 @@ ${emailList}`;
     res.json({ html });
   } catch(e) {
     console.error('[EmailBrief] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// ── HR PROCESS GENERATOR ──────────────────────────────────────
+app.post('/hr-process', requireAuth, async (req, res) => {
+  try {
+    const { type, staffContext, atRisk, blockers, leave, skills, staffCount } = req.body;
+
+    const PROMPTS = {
+      actions: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a prioritised THIS WEEK HR Action Plan based on ACTUAL check-in data.
+
+TEAM DATA (${staffCount} submitted):
+${staffContext}
+HIGH CAPACITY STAFF (88%+): ${atRisk}
+STAFF WITH BLOCKERS: ${blockers}
+AVAILABILITY ISSUES: ${leave}
+
+Generate a clear, prioritised action plan for Kandia to work through this week:
+
+## Priority 1 — Urgent (action today or tomorrow)
+List specific actions for each person at 90%+ or with serious blockers. Name them. What exactly should Kandia do?
+
+## Priority 2 — This week
+Actions for staff at 85-90% and minor blockers. Specific steps.
+
+## Priority 3 — Monitor
+Staff to keep an eye on. What signals to watch for.
+
+## Recommended 1:1 Agenda items
+For each overloaded or blocked staff member — 3 specific questions to ask in a check-in conversation.
+
+## Workload Redistribution Options
+Based on current capacity, who can absorb work from whom? Name the specific pairings.
+
+Be direct and specific. Name staff. Give exact recommended actions, not general advice.`,
+
+      blockers: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a Blocker Resolution Plan based on ACTUAL current blockers.
+
+TEAM DATA (${staffCount} submitted):
+${staffContext}
+STAFF WITH BLOCKERS: ${blockers}
+
+For each person with a reported blocker, generate:
+
+## [Staff Name] — [Their Role]
+**Blocker:** What they reported
+**Impact:** What this is affecting (their projects, team, deliverables)
+**Root Cause Analysis:** Most likely cause of this blocker
+**Recommended Action for Kandia:** Exactly what to do (email, call, escalate, provide resource, make decision)
+**Estimated Resolution Time:** How long to fix if actioned today
+**Follow-up:** What to check at next 1:1
+
+End with a summary table of all blockers by severity (High/Medium/Low) and owner.
+
+Be specific. If blockers say 'NTR' or 'None' these are fine — focus only on real blockers.`,
+
+      availability: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a Coverage and Availability Management Plan based on ACTUAL current data.
+
+TEAM DATA (${staffCount} submitted):
+${staffContext}
+AVAILABILITY ISSUES / LEAVE: ${leave}
+STAFF ALREADY AT HIGH CAPACITY (limited ability to cover): ${atRisk}
+
+Generate:
+
+## Current Availability Issues
+For each person with availability concerns — what is the issue, when, and what projects are affected.
+
+## Coverage Assignments
+For each person who is away or limited — who specifically covers what. Name the backup person and the specific tasks they take on.
+
+## Risk Assessment
+What is at risk this week if coverage isn't arranged? Client deliverables, deadlines, internal tasks?
+
+## Recommended Actions for Kandia (Today)
+Numbered list of specific actions to take to address each availability issue.
+
+## Communication Needed
+Who needs to be notified? What should Kandia communicate to clients or staff?
+
+## Leave Calendar Gap Alert
+Given who is at high capacity, flag if any planned absence creates a dangerous coverage gap.`,
+
+      plan: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a comprehensive HR Action Plan for this week based on ALL check-in data.
+
+TEAM DATA (${staffCount} submitted):
+${staffContext}
+HIGH CAPACITY (88%+): ${atRisk}
+BLOCKERS: ${blockers}
+AVAILABILITY ISSUES: ${leave}
+SKILLS ACROSS TEAM: ${skills}
+
+Generate a complete weekly HR action plan:
+
+## Executive Summary
+2-3 sentences on overall team health this week. Traffic light status: 🔴🟡🟢
+
+## This Week's Priority Actions (in order)
+Numbered list of specific actions, each with: WHO (Kandia does what), WHAT (exact action), WHY (the issue it addresses), WHEN (today/tomorrow/end of week)
+
+## Staff-by-Staff Assessment
+For each staff member — current status, any concerns, recommended action
+
+## Capacity Risk Matrix
+Table showing: Name | Capacity | Risk Level | Recommended Action
+
+## BD Impact Assessment
+Given current team capacity, what is the impact on business development and new work intake?
+
+## Next Check-in Focus
+What should Kandia specifically focus on asking each staff member in their next 1:1?
+
+Be analytical and specific. Name staff members. Give exact recommended actions.`,
+
+
+      pip: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group (integrated risk management company, Brisbane, Australia).
+
+Generate a complete, professional Performance Improvement Plan (PIP) template for R2S.
+
+CURRENT TEAM DATA (${staffCount} staff submitted this week):
+${staffContext}
+Staff with blockers: ${blockers}
+
+Create a ready-to-use PIP document with these sections:
+1. Employee & Role Details (include fields for name, role, manager, start date of PIP)
+2. Performance Concerns (specific, measurable examples relevant to consulting/training/risk work)
+3. Improvement Objectives with SMART goals (4-6 objectives specific to R2S service delivery)
+4. Support Provided by R2S (mentoring, training, resources, regular check-ins with Kandia)
+5. Review Milestones (Week 2, Week 4, Week 8 — what success looks like at each stage)
+6. Consequence Statement
+7. Sign-off section (Employee, COO, CEO)
+
+Make it specific to R2S context — reference consulting deliverables, client management, check-in compliance, project delivery. Use professional HR language. Format with clear numbered sections.`,
+
+      burnout: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a practical Burnout Prevention Protocol based on ACTUAL current team data.
+
+CURRENT TEAM DATA (${staffCount} staff this week):
+${staffContext}
+STAFF AT HIGH CAPACITY (88%+): ${atRisk}
+STAFF WITH BLOCKERS: ${blockers}
+
+Generate a protocol with these sections:
+1. Trigger Thresholds — capacity % levels and what each triggers (85%, 90%, 95%+)
+2. Immediate Actions for Kandia — specific steps when a staff member hits 90%+ (name the current at-risk staff)
+3. Workload Redistribution — specific reallocation options based on current team availability
+4. Check-in Conversation Guide — what to say, what questions to ask, what to listen for
+5. Week-by-Week Recovery Plan — how to bring capacity back down over 4 weeks
+6. Early Warning Signals — behavioural and check-in patterns to watch for at R2S
+7. Escalation Path — when to involve Dave Cohen or HR support
+
+Reference the ACTUAL staff currently at high capacity by name. Be specific and actionable.`,
+
+      skills: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a Skills Development Plan based on ACTUAL current team skills data.
+
+CURRENT TEAM DATA (${staffCount} staff):
+${staffContext}
+SKILLS ACROSS TEAM: ${skills}
+
+Generate:
+1. Team Skills Inventory Summary — what R2S has and where coverage is thin
+2. Critical Single-Person Dependencies — skills held by only one person (vulnerability analysis)
+3. Cross-Training Recommendations — specific pairs (Person A should learn X from Person B)
+4. Individual Development Priorities — for each named staff member, 2-3 development focus areas
+5. 90-Day Learning Plan Template — structured format for quarterly development goals
+6. Recommended Resources — specific courses, certifications, and programs relevant to risk management, emergency planning, RTO/training, and business consulting
+7. Skill Gap Priorities for R2S Growth — what skills does R2S need to acquire for BD and service expansion?
+
+Use actual staff names and their listed skills. Flag vulnerabilities explicitly.`,
+
+      leave: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a Leave Management Process based on CURRENT team situation.
+
+CURRENT TEAM DATA (${staffCount} staff):
+${staffContext}
+STAFF ON/PLANNING LEAVE: ${leave}
+STAFF AT HIGH CAPACITY (who cannot absorb extra work easily): ${atRisk}
+
+Generate:
+1. Current Coverage Assessment — who is away and what coverage exists right now (name specific people)
+2. Leave Request Process — how staff submit requests, approval timeline, minimum notice periods by role
+3. Handover Checklist — what must be completed before leave starts (client handover, project status, file access)
+4. Minimum Coverage Rules — which roles/functions cannot have simultaneous absence at R2S
+5. Cover Assignments — for each role, who covers in their absence (name specific backup people from current team)
+6. On-Call Protocol — emergency contacts, escalation to Dave Cohen or Kandia
+7. Return-to-Work Process — briefing, catch-up steps, priority reset
+
+Be specific — use actual staff names. Flag any coverage risks given current high-capacity staff who cannot absorb leave.`
+    };
+
+    const prompt = PROMPTS[type];
+    if (!prompt) return res.status(400).json({ error: 'Unknown HR process type: ' + type });
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2500, messages: [{ role: 'user', content: prompt }] })
+    });
+    const aiData = await aiRes.json();
+    if (aiData.error) throw new Error(aiData.error.message || 'AI error');
+    const content = (aiData.content||[]).map(c => c.text||'').join('');
+    res.json({ success: true, content });
+  } catch(e) {
+    console.error('[HRProcess] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
