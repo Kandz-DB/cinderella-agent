@@ -2191,6 +2191,7 @@ const CLOCKIFY_STAFF_MAP = [
   { clockify: 'dani.s',      checkIn: 'Dani Stevenson'   },
   { clockify: 'ross.m',      checkIn: 'Ross Mackenzie'   },
   { clockify: 'cherry.a',    checkIn: 'Cherry Abadeza'   },
+  { clockify: 'dylan.f',     checkIn: 'Dylan Finigan'    },
   // Paul Johnston not in Clockify
 ];
 
@@ -3887,6 +3888,7 @@ const REMINDER_STAFF = [
   {name:'Dani Stevenson',  email:'dani.s@risk2solution.com'},
   {name:'Cherry Abadeza',  email:'cherry.a@risk2solution.com'},
   {name:'Paul Johnston',   email:'paul.j@risk2solution.com'},
+  {name:'Dylan Finigan',   email:'dylan.f@risk2solution.com'},
 ];
 
 async function sendFridayCheckInReminder() {
