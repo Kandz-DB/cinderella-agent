@@ -828,7 +828,7 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 
         <div class="met" onclick="filterStaff('free')"><div class="ml">Available staff</div><div class="mv" id="sk-fr" style="color:var(--g)">0</div><div class="ms">below 65%</div></div>
 
-        <div class="met" onclick="qa('Who on my team has the most versatile skill set for covering multiple roles?')"><div class="ml">Skills audit</div><div class="mv" style="font-size:14px;color:var(--b)">Ask</div><div class="ms">Cinderella</div></div>
+        <div class="met" onclick="generateHRProcess('skills')" style="cursor:pointer"><div class="ml">Skills audit</div><div class="mv" style="font-size:14px;color:var(--g)">Generate</div><div class="ms">skills plan</div></div>
 
       </div>
 
@@ -1196,13 +1196,13 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 
       <div class="mrow">
 
-        <div class="met"><div class="ml">HR actions identified</div><div class="mv" id="hr-n" style="color:var(--a)">0</div><div class="ms">from check-ins</div></div>
+        <div class="met" onclick="generateHRProcess('actions')" style="cursor:pointer" title="Click to generate action plan"><div class="ml">HR actions identified</div><div class="mv" id="hr-n" style="color:var(--a)">0</div><div class="ms">from check-ins — click to action</div></div>
 
-        <div class="met"><div class="ml">Blockers reported</div><div class="mv" id="hr-bl" style="color:var(--r)">0</div><div class="ms">need intervention</div></div>
+        <div class="met" onclick="generateHRProcess('blockers')" style="cursor:pointer" title="Click to resolve blockers"><div class="ml">Blockers reported</div><div class="mv" id="hr-bl" style="color:var(--r)">0</div><div class="ms">need intervention — click to resolve</div></div>
 
-        <div class="met"><div class="ml">Availability issues</div><div class="mv" id="hr-av" style="color:var(--a)">0</div><div class="ms">this week</div></div>
+        <div class="met" onclick="generateHRProcess('availability')" style="cursor:pointer" title="Click for coverage planning"><div class="ml">Availability issues</div><div class="mv" id="hr-av" style="color:var(--a)">0</div><div class="ms">this week — click to plan</div></div>
 
-        <div class="met" onclick="qa('Based on the staff check-in data what HR actions should I take this week?')"><div class="ml">HR action plan</div><div class="mv" style="font-size:14px;color:var(--b)">Ask</div><div class="ms">Cinderella</div></div>
+        <div class="met" onclick="generateHRProcess('plan')" style="cursor:pointer"><div class="ml">HR action plan</div><div class="mv" style="font-size:14px;color:var(--b)">Generate</div><div class="ms">this week's plan</div></div>
 
       </div>
 
@@ -1226,13 +1226,13 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 
             <div class="ct">Standing HR processes Cinderella can generate</div>
 
-            <div class="hr-card" onclick="qa('Generate a performance improvement plan template for Risk 2 Solution')"><div class="hr-title">Performance improvement plan (PIP)</div><div class="hr-sub">Template for consistently underperforming staff.</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Generate template</span></div>
+            <div class="hr-card" onclick="generateHRProcess('pip')"><div class="hr-title">Performance improvement plan (PIP)</div><div class="hr-sub">Template for consistently underperforming staff.</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Generate template</span></div>
 
-            <div class="hr-card" onclick="qa('Generate a staff wellbeing check-in process for Risk 2 Solution for when capacity stays above 90%')"><div class="hr-title">Burnout prevention protocol</div><div class="hr-sub">Triggered when capacity stays above 90% for 2+ weeks.</div><span class="hr-tag" style="background:var(--rl);color:#A32D2D">Generate protocol</span></div>
+            <div class="hr-card" onclick="generateHRProcess('burnout')"><div class="hr-title">Burnout prevention protocol</div><div class="hr-sub">Triggered when capacity stays above 90% for 2+ weeks.</div><span class="hr-tag" style="background:var(--rl);color:#A32D2D">Generate protocol</span></div>
 
-            <div class="hr-card" onclick="qa('Generate a skills development plan template for Risk 2 Solution staff')"><div class="hr-title">Skills development plan</div><div class="hr-sub">Individual learning plans based on skill gaps.</div><span class="hr-tag" style="background:var(--gl);color:#0F6E56">Generate template</span></div>
+            <div class="hr-card" onclick="generateHRProcess('skills')"><div class="hr-title">Skills development plan</div><div class="hr-sub">Individual learning plans based on skill gaps.</div><span class="hr-tag" style="background:var(--gl);color:#0F6E56">Generate template</span></div>
 
-            <div class="hr-card" onclick="qa('Generate a leave management process for Risk 2 Solution')"><div class="hr-title">Leave management process</div><div class="hr-sub">Coverage planning, approval workflow, handover checklist.</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Generate process</span></div>
+            <div class="hr-card" onclick="generateHRProcess('leave')"><div class="hr-title">Leave management process</div><div class="hr-sub">Coverage planning, approval workflow, handover checklist.</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Generate process</span></div>
 
           </div>
 
@@ -7303,6 +7303,90 @@ async function loadEmailBrief() {
     if (btn) { btn.innerHTML = '&#8635; Refresh'; btn.style.pointerEvents = 'auto'; }
   }
 }
+
+
+async function generateHRProcess(type) {
+  var staffContext = '';
+  var atRisk = [];
+  var withBlockers = [];
+  var onLeave = [];
+  var allSkills = {};
+
+  (SD||[]).forEach(function(s) {
+    var cap = s.capacity||0;
+    staffContext += s.name + ' (' + (s.role||'?') + '): ' + cap + '% capacity';
+    if (s.trend) staffContext += ', trend: ' + s.trend;
+    if (s.projects) staffContext += ', projects: ' + s.projects;
+    var hasBlocker = s.blockers && !s.blockers.toLowerCase().match(/^(none|no|ntr|n\/a|not at the moment|-)$/);
+    if (hasBlocker) { staffContext += ', BLOCKER: ' + s.blockers; withBlockers.push(s.name + ': ' + s.blockers); }
+    if (s.leave) { staffContext += ', leave: ' + s.leave; onLeave.push(s.name + ' - ' + s.leave); }
+    if (cap >= 88) atRisk.push(s.name + ' ' + cap + '%');
+    if (s.skills) s.skills.split(',').forEach(function(sk) { var k = sk.trim(); if (k) { if (!allSkills[k]) allSkills[k]=[]; allSkills[k].push(s.name); } });
+    staffContext += '\n';
+  });
+
+  var skillsList = Object.entries(allSkills).map(function(e){ return e[0] + ' (' + e[1].join(', ') + ')'; }).join('; ');
+  var atRiskStr = atRisk.join(', ') || 'None this week';
+  var blockersStr = withBlockers.join('; ') || 'None reported';
+  var leaveStr = onLeave.join('; ') || 'None this week';
+
+  var typeConfig = {
+    pip:          { title:'Performance Improvement Plan (PIP)', colour:'#185FA5', bg:'#EFF6FF' },
+    burnout:      { title:'Burnout Prevention Protocol',        colour:'#A32D2D', bg:'#FEF2F2' },
+    skills:       { title:'Skills Development Plan',            colour:'#0F6E56', bg:'#F0FDF4' },
+    leave:        { title:'Leave Management Process',           colour:'#185FA5', bg:'#EFF6FF' },
+    actions:      { title:'HR Actions — This Week',             colour:'#D97706', bg:'#FFFBEB' },
+    blockers:     { title:'Blocker Resolution Plan',            colour:'#A32D2D', bg:'#FEF2F2' },
+    availability: { title:'Availability & Coverage Plan',       colour:'#D97706', bg:'#FFFBEB' },
+    plan:         { title:'Weekly HR Action Plan',              colour:'#185FA5', bg:'#EFF6FF' }
+  };
+  var cfg = typeConfig[type] || typeConfig.pip;
+
+  openModal(cfg.title, 'Generated from live check-in data — ' + (SD||[]).length + ' submissions this week',
+    '<div style="display:flex;align-items:center;gap:8px;padding:12px 0;font-size:12px;color:var(--t3)"><div class="think"><span></span><span></span><span></span></div>Generating using your actual team data&hellip; (this takes ~15 seconds)</div>'
+  );
+
+  // Send to server endpoint
+  try {
+    var r = await fetch('/hr-process', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        type: type,
+        staffContext: staffContext,
+        atRisk: atRiskStr,
+        blockers: blockersStr,
+        leave: leaveStr,
+        skills: skillsList,
+        staffCount: (SD||[]).length
+      })
+    });
+    if (!r.ok) throw new Error('Server error ' + r.status);
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+
+    var text = d.content || '';
+    var formatted = text
+      .replace(/^#{1,3} (.+)$/gm, '<div style="font-size:13px;font-weight:700;color:var(--t1);margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--bl)">$1</div>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/^[-\u2022] (.+)$/gm, '<div style="display:flex;gap:6px;padding:2px 0;font-size:12px"><span style="color:var(--g);flex-shrink:0">\u2022</span><span>$1</span></div>')
+      .replace(/^\d+\. (.+)$/gm, '<div style="display:flex;gap:6px;padding:3px 0;font-size:12px"><span style="font-weight:700;color:var(--b);flex-shrink:0">\u203a</span><span>$1</span></div>')
+      .replace(/\n\n/g, '<div style="height:6px"></div>')
+      .replace(/\n/g, '<br>');
+
+    window._lastHRDoc = text;
+    document.getElementById('m-body').innerHTML =
+      '<div style="font-size:11px;color:var(--t3);margin-bottom:14px;padding:8px 12px;background:' + cfg.bg + ';border-radius:6px;border-left:3px solid ' + cfg.colour + '">Generated by Cinderella using live check-in data</div>' +
+      '<div style="font-size:12.5px;line-height:1.75;color:var(--t1);max-height:55vh;overflow-y:auto;padding-right:4px">' + formatted + '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid var(--bl)">' +
+        '<button onclick="navigator.clipboard.writeText(window._lastHRDoc||\'\').then(function(){showToast(\'Copied\');})" class="m-btn sec" style="flex:1">Copy text</button>' +
+        '<button onclick="closeModal()" class="m-btn sec" style="flex:1">Close</button>' +
+      '</div>';
+  } catch(e) {
+    document.getElementById('m-body').innerHTML = '<div style="font-size:12px;color:var(--r);padding:8px 0">Error: ' + e.message + '</div><button onclick="closeModal()" class="m-btn sec" style="margin-top:10px">Close</button>';
+  }
+}
+
 </script>
 
 </body>
