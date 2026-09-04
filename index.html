@@ -4250,18 +4250,48 @@ function renderStaff(){
 
     const pct=s.capacity||0;
 
-    return `<div class="sc" onclick="openStaffModal(${i})">
+    const capCol = pct>=90?'#C8211E':pct>=75?'#D97706':'#0A9A94';
+    const capBg  = pct>=90?'rgba(200,33,30,0.08)':pct>=75?'rgba(217,119,6,0.08)':'rgba(10,154,148,0.08)';
+    const hasBlockerReal = s.blockers && !s.blockers.toLowerCase().match(/^(none|no|ntr|n\/a|not at the moment|-)$/);
+    const cardAccent = hasBlockerReal ? '#C8211E' : pct>=90 ? '#C8211E' : pct>=75 ? '#D97706' : '#0A9A94';
+    const skillsPills = (s.skills||'').split(',').filter(x=>x.trim()).slice(0,4).map(sk=>
+      `<span style="font-size:9.5px;font-weight:600;padding:2px 8px;border-radius:999px;background:#E6F7F7;color:#0A9A94;white-space:nowrap">${sk.trim()}</span>`
+    ).join('');
 
-      <div class="sh"><div class="sav" style="${av}">${initials(s.name)}</div><div style="flex:1;min-width:0"><div class="sn">${cap(s.name)}</div><div class="sr">${cap(s.role)||'—'}</div></div><div class="sw">${sub}</div></div>
+    return `<div class="sc" onclick="openStaffModal(${i})" style="border-top:3px solid ${cardAccent}">
 
-      <div class="cbr"><div class="cbl">Capacity</div><div class="bw"><div class="bar ${bc(pct)}" style="width:${pct}%"></div></div><div class="bp" style="color:${pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)'}">${pct}%</div></div>
+      <!-- Header: avatar + name + time -->
+      <div class="sh">
+        <div style="width:36px;height:36px;border-radius:50%;background:${cardAccent};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0">${initials(s.name)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:700;color:var(--t1);line-height:1.2">${cap(s.name)}</div>
+          <div style="font-size:10.5px;color:var(--t3);margin-top:1px">${cap(s.role)||'—'}</div>
+        </div>
+        <div style="font-size:9.5px;color:var(--t3);text-align:right;flex-shrink:0">${sub}</div>
+      </div>
 
-      ${s.projects?`<div style="font-size:10px;color:var(--t2);margin-top:4px;line-height:1.4"><strong style="color:var(--t3)">Projects: </strong>${s.projects}</div>`:''}
+      <!-- Capacity bar section -->
+      <div style="padding:0 15px 12px">
+        <div style="background:${capBg};border-radius:8px;padding:10px 12px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:9px;font-weight:700;color:${capCol};text-transform:uppercase;letter-spacing:.08em">This week — capacity</span>
+            <span style="font-size:20px;font-weight:800;color:${capCol};letter-spacing:-1px;line-height:1">${pct}%</span>
+          </div>
+          <div style="height:8px;background:rgba(0,0,0,0.08);border-radius:999px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;background:${capCol};border-radius:999px"></div>
+          </div>
+          ${s.trend?`<div style="font-size:9.5px;color:${capCol};opacity:.8;margin-top:5px;font-weight:500">${s.trend==='Lighter'?'↓ Lighter':s.trend==='Heavier'?'↑ Heavier':'→ Similar'} than last week</div>`:''}
+        </div>
 
-      <div class="stags">${tags.join('')}${skills}</div>
+        <!-- Projects -->
+        ${s.projects?`<div style="margin-top:10px"><div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px">Projects</div><div style="font-size:11px;color:var(--t2);line-height:1.45">${s.projects}</div></div>`:''}
 
-      ${s.blockers?`<div class="snotes">Blocker: ${s.blockers}</div>`:''}
+        <!-- Blocker -->
+        ${hasBlockerReal?`<div style="margin-top:10px;background:#FEE2E2;border-radius:6px;padding:7px 10px"><div style="font-size:9px;font-weight:700;color:#C8211E;text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px">⚠ Blocker</div><div style="font-size:11px;color:#7F1D1D">${s.blockers}</div></div>`:''}
 
+        <!-- Skills -->
+        ${skillsPills?`<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:10px">${skillsPills}</div>`:''}
+      </div>
     </div>`;
 
   }).join('');
