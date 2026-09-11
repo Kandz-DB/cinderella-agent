@@ -3908,17 +3908,15 @@ async function sendFridayCheckInReminder() {
 
   console.log('[FridayReminder] Sending to', recipients.length, 'staff. Excluded:', LEAVE_LIST.join(', '));
 
-  const subject = 'Friday reminder: weekly check-in';
+  const subject = 'Reminder: weekly check-in';
   const body = `Hi team,
 
-Happy Friday! This is your weekly reminder to please complete your check-in before the end of the day if you haven't done so already.
+Just a reminder to please submit your weekly check-in if you have not done so yet. These should be submitted on a Friday by 2pm so it falls in the correct week for analysis and review as these really help us to understand your capacity, priorities and any blockers so we can support you effectively.
 
-Your check-in helps Kandia understand team capacity, priorities and any blockers so she can support you effectively.
-
-Complete your check-in here:
+Complete it here:
 https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin
 
-Have a great weekend!
+Thanks!
 
 Kandia Du Bruyn | COO | Risk 2 Solution`;
 
@@ -4433,7 +4431,7 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
     }
 
     // Friday 11am — automated check-in reminder to all staff
-    if (bDay === 'Friday' && bHour === 11 && bMin < 30) {
+    if (bDay === 'Friday' && bHour === 12 && bMin < 30) {
       await sendFridayCheckInReminder();
     }
 
