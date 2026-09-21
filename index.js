@@ -3839,6 +3839,23 @@ app.delete('/proactive/compliance/:id', requireAuth, (req, res) => {
   res.json({success:true});
 });
 
+// Clear onboarding state (disable false positive trigger)
+app.post('/proactive/clear-onboarding', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  state.onboardingProcessed = {};
+  saveProactiveState(state);
+  // Also remove onboarding actions from open actions tracker
+  try {
+    const actions = loadActions();
+    const cleaned = actions.filter(a => a.type !== 'onboarding');
+    const removed = actions.length - cleaned.length;
+    saveActions(cleaned);
+    res.json({ success: true, message: 'Onboarding state cleared, ' + removed + ' actions removed' });
+  } catch(e) {
+    res.json({ success: true, message: 'State cleared', error: e.message });
+  }
+});
+
 app.post('/proactive/trigger/:feature', requireAuth, async (req, res) => {
   const { feature } = req.params;
   // Force-trigger any proactive feature for testing
@@ -4419,8 +4436,8 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
     // Financial intelligence — check for new Diane P&L emails
     await checkFinancialAlerts();
 
-    // Onboarding triggers — check for new hire emails (every cycle)
-    await checkOnboardingTriggers();
+    // Onboarding triggers — DISABLED (too many false positives)
+    // await checkOnboardingTriggers();
 
     // Monday morning tasks
     if (bDay === 'Monday' && bHour >= 7 && bHour <= 9) {
