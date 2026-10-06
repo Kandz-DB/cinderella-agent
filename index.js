@@ -1708,7 +1708,7 @@ ${context}`;
     .kpi-label{font-size:9pt;color:#666;margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
     .kpi-val-p{font-size:22pt;font-weight:700;color:${GREEN};letter-spacing:-1px}
     .kpi-val-n{font-size:22pt;font-weight:700;color:${RED};letter-spacing:-1px}
-    .kpi-sub{font-size:8.5pt;color:#888;margin-top:4px}
+    .kpi-sub{font-size:8pt;color:#888;margin-top:5px;line-height:1.4}
   </style>`;
 
   const meetDateStr = meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
@@ -1737,12 +1737,12 @@ ${context}`;
     <div class="kpi ${kpi1.resultClass==='neg'?'kpi-n':'kpi-p'}">
       <div class="kpi-label">${kpi1.period||'Current Period'}</div>
       <div class="${kpi1.resultClass==='neg'?'kpi-val-n':'kpi-val-p'}">${kpi1.result||'—'}</div>
-      <div class="kpi-sub">${kpi1.keyDriver?kpi1.keyDriver.substring(0,70)+'...':''}</div>
+      <div class="kpi-sub">${kpi1.keyDriver||''}</div>
     </div>
     ${kpi2.period?`<div class="kpi ${kpi2.resultClass==='neg'?'kpi-n':'kpi-p'}">
       <div class="kpi-label">${kpi2.period}</div>
       <div class="${kpi2.resultClass==='neg'?'kpi-val-n':'kpi-val-p'}">${kpi2.result}</div>
-      <div class="kpi-sub">${(kpi2.keyDriver||'').substring(0,70)+'...'}</div>
+      <div class="kpi-sub">${kpi2.keyDriver||''}</div>
     </div>`:''}
   </div>
   <p>${sections.executiveSummary||''}</p>`;
