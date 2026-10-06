@@ -1299,7 +1299,12 @@ async function generateBoardReport(meetingDate, meetingSubject) {
     }
   } catch(e) {}
 
-  // Hardcoded financial data removed — report now uses live email data only
+  // Known confirmed financial figures (hardcoded as ground truth)
+  context += 'CONFIRMED FINANCIAL FACTS (use these in the financial table):\n';
+  context += '- August 2026 FINAL ACTUAL: +$23,100 (closed, confirmed by Diane Kruger via P&L Update email Aug 2026)\n';
+  context += '- July 2026 FINAL ACTUAL: +$17,209.41 (closed, confirmed by Diane Kruger P&L July 2026 email, 3 Aug 2026)\n';
+  context += '- For a September 2026 board report: Row 1 = August 2026 Actual +$23,100, Row 2 = September 2026 actual/forecast, Row 3 = October 2026 forecast\n';
+  context += '- Do NOT include July 2026 in the financial table for a September report - it is 2 months ago\n\n';
 
 
   // 3. Document library - read actual content of past board reports + list other docs
@@ -1554,46 +1559,47 @@ async function generateBoardReport(meetingDate, meetingSubject) {
   }
 
 
+  const prevMonthName = new Date(yr, mm - 1, 1).toLocaleString('en-AU',{month:'long'});
+  const nextMonthName = new Date(yr, mm + 1, 1).toLocaleString('en-AU',{month:'long'});
+  const nextMonthYr   = new Date(yr, mm + 1, 1).getFullYear();
+
   const sysP = `You are Cinderella, executive assistant to Kandia Du Bruyn, COO at Risk 2 Solution Group.
 Generate a COO Board Paper for ${monthName} ${yr}. Output ONLY valid JSON - no markdown, no backticks, no extra text.
 
 JSON structure required:
 {"executiveSummary":"string","financialTableRows":[{"period":"","result":"","resultClass":"pos or neg","keyDriver":""}],"financeNote":"string","financialAnalysis":"string","peopleIntro":"string","peopleRows":[{"name":"","role":"","capacity":"","hours":"","status":"stable or monitor or at-limit or blocker","note":""}],"clientIntro":"string","clientRows":[{"client":"","status":""}],"newBusiness":["string"],"complianceItems":["string"],"boardItems":[{"item":"","type":"For Noting or For Awareness or For Decision","action":""}]}
 
-DEPTH AND SPECIFICITY - CRITICAL. Every field must contain specific facts, names, figures, and dates. Generic filler is not acceptable. Keep each field concise - 1-3 sentences max per field. The entire JSON response must stay under 6000 tokens.
+DEPTH AND SPECIFICITY - CRITICAL. Every field must contain specific facts, names, figures, and dates. Keep each field concise - 1-3 sentences max. Stay under 6000 tokens total.
 
-FINANCIAL:
-- Use ONLY figures from FINANCE EMAILS and KEY FINANCIAL FIGURES EXTRACTED in context
-- July 2026: Diane Kruger confirmed in "P&L July 2026" (3 Aug 2026): July closed positive at $17,209.41 - use this exact figure
-- Do NOT use $37,038.11 (FY25/26 year-end) or -$62,000 (old forecast) for July results
-- Show July 2026 actual, FY26/27 YTD if available, and forward outlook
-- Note: Dave Cohen requested Diane prepare a mini P&L per project (cost and opex vs revenue to calculate net profit per project) - in progress, figures in Excel attachment; board should be aware this reporting framework is being developed
-- financialAnalysis: specific commentary on the July result vs the -$62,000 forecast, what drove it, BD pipeline status
+FINANCIAL TABLE - EXACTLY 3 ROWS, NO MORE, NO FEWER:
+Row 1: ${prevMonthName} ${yr} ACTUAL - the confirmed final closed result for last month. This is a CLOSED month - show the actual figure, NOT "in progress". Known confirmed figures: August 2026 = +$23,100, July 2026 = +$17,209.41.
+Row 2: ${monthName} ${yr} ACTUAL or FORECAST - the current month position from emails. Use figures from Diane's emails about this month.
+Row 3: ${nextMonthName} ${nextMonthYr} FORECAST - forward-looking projection from any email references.
+STRICT: Do NOT add rows for months 2+ months ago. A September report shows August/September/October only - NOT July.
+
+FINANCIAL ANALYSIS:
+- Comment on ${prevMonthName} final result vs expectations, what drove it
+- ${monthName} current position and key drivers
+- Forward risks or opportunities for ${nextMonthName}
+- Mini P&L per project framework: Dave Cohen requested Diane prepare project-level P&L - in progress
+
+EXECUTIVE SUMMARY - 3-4 sentences covering:
+- ${prevMonthName} final result (the closed figure)
+- ${monthName} current operational highlights and financial position
+- Primary strategic challenge or board decision required
+Do NOT lead with months from 2+ months ago.
 
 PEOPLE:
-- Cross-reference check-in capacity % with monthly Clockify hours (capacity% x 37.5h x 4.3 weeks = implied monthly hours)
-- Be specific: use actual project names from check-ins, actual blocker details
-- Note: Dylan Finigan accepted offer as Business Development Associate (5 Aug 2026), onboarding in progress via Diane Kruger and Janita Zhang
+- Use actual staff names and project names from check-in and email context
+- Cross-reference capacity % with Clockify hours logged
+- Dylan Finigan has resigned and left R2S. Note this as a people change requiring attention.
 - Do not write generic notes
 
-COMPLIANCE - include ALL of:
-- DISP Application: Kandia submitted documents to Auruba/Defence 5 Aug 2026, Paul Johnston provided SRA Template (37 risk exposures), Dave Cohen baseline clearance application via myClearance - 10 business day deadline or Defence may withdraw
-- EMDG Grant: MR-001-EMDG-10019821 - CEO action required from Dave Cohen
-- ISO Audit 2026: underway with external auditor Craig (Global ISO Services), Diane and team preparing documentation
-- Any ASQA/RTO matters if in context
+COMPLIANCE - include items found in emails and calendar context only. Do not repeat stale items unless email context confirms still active.
 
-CLIENT DELIVERY:
-- Use actual project names from Aurora, BHP project update forwarded via info@
-- Charters Towers Regional Council VendorPanel tender PR000135 (Training Services)
-- Note any overdue deliverables specifically
+BOARD ITEMS - genuinely board-level only. NOT routine payables or scheduling.
 
-BOARD ITEMS - genuinely board-level only (strategic, governance, financial, compliance):
-- July financial result, EMDG CEO action, DISP clearance progress, new BD hire, mini P&L framework, ISO audit
-- NOT: individual invoice queries, routine payables, scheduling
-
-EXECUTIVE SUMMARY: 3-4 sentences covering July result ($17,209.41), DISP progress, new BD hire, primary challenge/decision.
-
-No em dashes. No underlines. Use hyphen (-) instead of dash.`;
+No em dashes. Use hyphen (-) instead of dash.`;
 
   const usrP = `Generate the board paper JSON for ${monthName} ${yr}. Meeting: ${meetingSubject} on ${meetingDate.toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}.
 
@@ -2191,7 +2197,7 @@ const CLOCKIFY_STAFF_MAP = [
   { clockify: 'dani.s',      checkIn: 'Dani Stevenson'   },
   { clockify: 'ross.m',      checkIn: 'Ross Mackenzie'   },
   { clockify: 'cherry.a',    checkIn: 'Cherry Abadeza'   },
-  { clockify: 'dylan.f',     checkIn: 'Dylan Finigan'    },
+  { clockify: 'rionoch.g',   checkIn: 'Rionoch Goodwin'  },
   // Paul Johnston not in Clockify
 ];
 
@@ -3112,7 +3118,7 @@ async function checkCapacityTrends() {
     const atRisk = [], missingCheckIns = [];
 
     // Check staff that should be checking in
-    const EXPECTED_STAFF = ['Janita Zhang','Diane Kruger','Garima Arora','Reinette Kruger','Dani Stevenson','Ross Mackenzie','Cherry Abadeza','Paul Johnston','Dylan Finigan'];
+    const EXPECTED_STAFF = ['Janita Zhang','Diane Kruger','Garima Arora','Reinette Kruger','Dani Stevenson','Ross Mackenzie','Cherry Abadeza','Paul Johnston','Rionoch Goodwin'];
     EXPECTED_STAFF.forEach(name => {
       const entries = byPerson[name]||[];
       if (entries.length === 0) {
@@ -3905,7 +3911,7 @@ const REMINDER_STAFF = [
   {name:'Dani Stevenson',  email:'dani.s@risk2solution.com'},
   {name:'Cherry Abadeza',  email:'cherry.a@risk2solution.com'},
   {name:'Paul Johnston',   email:'paul.j@risk2solution.com'},
-  {name:'Dylan Finigan',   email:'dylan.f@risk2solution.com'},
+  {name:'Rionoch Goodwin',  email:'rionoch.g@risk2solution.com'},
 ];
 
 async function sendFridayCheckInReminder() {
