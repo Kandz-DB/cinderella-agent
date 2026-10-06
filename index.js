@@ -1381,10 +1381,12 @@ async function generateBoardReport(meetingDate, meetingSubject) {
     const aurData = await callAurora('/api/projects');
     const projects = aurData.projects || [];
     const PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
-    const active = projects.filter(p => p.phase >= 1 && p.phase <= 3);
+    // Include all phases 0-4 — Enquiry through Close-out — all are relevant for board report
+    const active = projects.filter(p => p.phase >= 0 && p.phase <= 4);
+    console.log('[BoardReport] Aurora projects found:', projects.length, '| Included in report:', active.length);
     if (active.length > 0) {
-      context += 'ACTIVE PROJECTS (from Aurora):\n';
-      for (const p of active.slice(0, 10)) {
+      context += 'ALL PROJECTS (from Aurora — include ALL in client delivery section):\n';
+      for (const p of active) {  // No slice — include every project
         let invTotal = 0, invPaid = 0;
         try {
           const inv = await callAurora('/api/projects/' + p.id + '/invoices');
@@ -1405,27 +1407,8 @@ async function generateBoardReport(meetingDate, meetingSubject) {
     }
   } catch(e) { console.warn('[BoardReport] Aurora data:', e.message); }
 
-  // 4. Monday.com client projects
-  try {
-    const monday = await fetch('https://api.monday.com/v2', {
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':process.env.MONDAY_API_KEY},
-      body:JSON.stringify({query:'{ boards(ids:[2031906973,2005758439,2005747804]) { name items_page { items { name column_values { id text } } } } }'})
-    });
-    const md = await monday.json();
-    const boards = md.data?.boards || [];
-    if (boards.length > 0) {
-      context += 'CLIENT PROJECTS (Monday.com):\n';
-      boards.forEach(b => {
-        const items = b.items_page?.items || [];
-        items.slice(0,8).forEach(item => {
-          const status = (item.column_values||[]).find(c=>c.id.includes('color')||c.id.includes('status'));
-          context += '- '+item.name+(status?' ['+status.text+']':'')+'\n';
-        });
-      });
-      context += '\n';
-    }
-  } catch(e) {}
+
+  // Monday.com removed — Aurora + emails used instead
 
   // 5. Open actions tracker
   try {
@@ -1589,10 +1572,17 @@ EXECUTIVE SUMMARY - 3-4 sentences covering:
 - Primary strategic challenge or board decision required
 Do NOT lead with months from 2+ months ago.
 
+CLIENT DELIVERY:
+- clientRows MUST include EVERY project listed in the ALL PROJECTS Aurora context — do not omit any. List all clients by name.
+- For each client note the phase (Enquiry/Proposal/Active/Review/Close-out), key status, outstanding invoices, and any overdue deliverables
+- Also include project intelligence from emails — Macquarie Bank, Bairnsdale, Shepparton, BHP and any others mentioned in emails or Teams
+- Flag any overdue deliverables, unpaid invoices over 30 days, or at-risk engagements
+- clientIntro: 1 sentence summarising total active portfolio and any delivery risks
+
 PEOPLE:
 - Use actual staff names and project names from check-in and email context
 - Cross-reference capacity % with Clockify hours logged
-- Dylan Finigan has resigned and left R2S. Note this as a people change requiring attention.
+- Rionoch Goodwin has joined R2S replacing Dylan Finigan in the BD function
 - Do not write generic notes
 
 COMPLIANCE - include items found in emails and calendar context only. Do not repeat stale items unless email context confirms still active.
