@@ -2175,6 +2175,29 @@ app.get('/board-report/download', requireAuth, async (req, res) => {
 
 // ── AURORA PROXY ROUTES ──
 
+// Debug: show exactly what Aurora returns — all projects, all phases
+app.get('/aurora/debug-all', requireAuth, async (req, res) => {
+  try {
+    const data = await callAurora('/api/projects');
+    const projects = data.projects || data || [];
+    const PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
+    res.json({
+      total: projects.length,
+      projects: projects.map(p => ({
+        id: p.id,
+        clientName: p.clientName,
+        phase: p.phase,
+        phaseName: PHASES[p.phase] || 'Unknown('+p.phase+')',
+        consultant: p.consultant,
+        dueDate: p.dueDate,
+        status: p.status
+      }))
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Summary: all projects + invoice totals + overdue deliverables
 app.get('/aurora/summary', requireAuth, async (req, res) => {
   try {
