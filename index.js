@@ -1610,7 +1610,7 @@ ${context}`;
   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
     headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
-    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:8000,system:sysP,messages:[{role:'user',content:usrP}]})
+    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:6000,system:sysP,messages:[{role:'user',content:usrP}]})
   });
   if (!aiRes.ok) {
     const errText = await aiRes.text();
@@ -1628,27 +1628,49 @@ ${context}`;
     const jsonMatch = raw.match(/(\{[\s\S]*\})/);
     if (jsonMatch) raw = jsonMatch[1];
 
+    // Try direct parse first
     try {
       sections = JSON.parse(raw);
     } catch(parseErr) {
-      console.warn('[BoardReport] Direct parse failed, attempting repair:', parseErr.message);
+      console.warn('[BoardReport] Direct parse failed:', parseErr.message, '— attempting repair');
+      // Repair truncated JSON by closing open brackets/braces
       let repaired = raw;
-      let openBrackets = 0, openBraces = 0, inString = false, escaped = false;
-      for (const ch of repaired) {
-        if (escaped) { escaped = false; continue; }
-        if (ch === '\\\\') { escaped = true; continue; }
-        if (ch === '"') { inString = !inString; continue; }
-        if (inString) continue;
-        if (ch === '[') openBrackets++;
-        else if (ch === ']') openBrackets = Math.max(0, openBrackets-1);
-        else if (ch === '{') openBraces++;
-        else if (ch === '}') openBraces = Math.max(0, openBraces-1);
+      try {
+        let openBrackets = 0, openBraces = 0, inString = false, escaped = false;
+        for (const ch of repaired) {
+          if (escaped) { escaped = false; continue; }
+          if (ch === '\\') { escaped = true; continue; }
+          if (ch === '"' && !escaped) { inString = !inString; continue; }
+          if (inString) continue;
+          if (ch === '[') openBrackets++;
+          else if (ch === ']') openBrackets = Math.max(0, openBrackets-1);
+          else if (ch === '{') openBraces++;
+          else if (ch === '}') openBraces = Math.max(0, openBraces-1);
+        }
+        if (inString) repaired += '"';
+        while (openBrackets > 0) { repaired += ']'; openBrackets--; }
+        while (openBraces > 0) { repaired += '}'; openBraces--; }
+        sections = JSON.parse(repaired);
+        console.log('[BoardReport] JSON repaired successfully');
+      } catch(repairErr) {
+        console.error('[BoardReport] Repair also failed:', repairErr.message);
+        console.error('[BoardReport] Raw (last 500):', raw.slice(-500));
+        // Return a minimal valid sections object so the report can still render
+        sections = {
+          executiveSummary: 'Report generation encountered an error — please regenerate. Raw AI response was truncated.',
+          financialTableRows: [{period: monthName + ' ' + yr, result: 'See finance emails', resultClass: '', keyDriver: 'Report generation error — please retry'}],
+          financeNote: '',
+          financialAnalysis: 'Report generation error. Please click Generate again.',
+          peopleIntro: '',
+          peopleRows: [],
+          clientIntro: '',
+          clientRows: [],
+          newBusiness: [],
+          complianceItems: [],
+          boardItems: []
+        };
+        console.warn('[BoardReport] Using fallback empty sections');
       }
-      if (inString) repaired += '"';
-      while (openBrackets > 0) { repaired += ']'; openBrackets--; }
-      while (openBraces > 0) { repaired += '}'; openBraces--; }
-      sections = JSON.parse(repaired);
-      console.log('[BoardReport] JSON repaired and parsed successfully');
     }
     console.log('[BoardReport] Sections:', Object.keys(sections).join(', '));
   } catch(e) {
@@ -1798,61 +1820,105 @@ async function sendBoardReportNotification(meetingSubject, meetingDate, daysUnti
   monthDate.setMonth(monthDate.getMonth()-1);
   const monthName = monthDate.toLocaleString('en-AU',{month:'long'});
   const yr = monthDate.getFullYear();
-
-  const emailBody = 'Hi Kandia,\n\nYour COO board report for ' + monthName + ' ' + yr + ' has been prepared and is ready for your review.\n\n' +
-    'BOARD MEETING: ' + meetingSubject + '\n' +
-    'DATE: ' + meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'}) + '\n' +
-    'DAYS UNTIL MEETING: ' + daysUntil + '\n\n' +
-    'TO DOWNLOAD YOUR REPORT:\n' +
-    'Log into Cinderella → COO Duties tab → Board Report section → Download Report\n' +
-    'Direct link: https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net\n\n' +
-    'The report has been auto-generated using:\n' +
-    '• Staff check-ins and capacity data\n' +
-    '• Key emails received during the month\n' +
-    '• Client project status from Monday.com\n' +
-    '• Open action items from your tracker\n\n' +
-    'Please review the report and add any additional context before the board meeting.\n\n' +
-    'Cinderella\nExecutive Assistant to Kandia Du Bruyn, COO\nRisk 2 Solution';
+  const meetingDateStr = meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Australia/Brisbane'});
 
   const token = await getValidToken();
   const recipientEmail = await getKandiaEmail();
-  const subject = '📋 Board Report Ready — ' + monthName + ' ' + yr + ' (Meeting in ' + daysUntil + ' days)';
+  const subject = '📋 Board Report Ready — ' + monthName + ' ' + yr + ' (Meeting in ' + daysUntil + ' day' + (daysUntil!==1?'s':'') + ')';
 
-  // Create a draft in Outlook (Mail.ReadWrite — confirmed working)
+  // Build Outlook-compatible HTML email body
+  const htmlBody = `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:20px;background:#F2F1EE;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:580px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;">
+  <tr><td style="background:linear-gradient(105deg,#07706B,#56D4CE 55%,#F0B8CC 82%,#F8D2DE);padding:24px 28px;">
+    <p style="margin:0;font-family:Georgia,serif;font-size:26px;font-style:italic;color:#ffffff;font-weight:bold;">Cinderella</p>
+    <p style="margin:4px 0 0;font-family:Arial,sans-serif;font-size:10px;color:rgba(255,255,255,0.8);letter-spacing:2px;text-transform:uppercase;">EXECUTIVE ASSISTANT &middot; RISK 2 SOLUTION</p>
+  </td></tr>
+  <tr><td style="padding:24px 28px 12px;border-bottom:2px solid #1B3A6B;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:17px;font-weight:bold;color:#111110;">📋 Board Report Ready &mdash; ${monthName} ${yr}</p>
+  </td></tr>
+  <tr><td style="padding:20px 28px;">
+    <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi Kandia,</p>
+    <p style="margin:0 0 20px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Your COO Board Paper for <strong>${monthName} ${yr}</strong> has been generated and is attached to this email. Please review before your board meeting.</p>
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#F2F1EE;border-radius:8px;margin-bottom:20px;">
+      <tr><td style="padding:16px 18px;">
+        <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Meeting details</p>
+        <table cellpadding="0" cellspacing="0">
+          <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#9A9693;padding:2px 0;min-width:80px;">Meeting</td><td style="font-family:Arial,sans-serif;font-size:12px;color:#111110;font-weight:600;padding:2px 8px;">${meetingSubject}</td></tr>
+          <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#9A9693;padding:2px 0;">Date</td><td style="font-family:Arial,sans-serif;font-size:12px;color:#111110;font-weight:600;padding:2px 8px;">${meetingDateStr}</td></tr>
+          <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#9A9693;padding:2px 0;">Days away</td><td style="font-family:Arial,sans-serif;font-size:12px;color:${daysUntil<=2?'#C8211E':'#0D8A62'};font-weight:700;padding:2px 8px;">${daysUntil} day${daysUntil!==1?'s':''}</td></tr>
+        </table>
+      </td></tr>
+    </table>
+    <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">This report was generated using</p>
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:20px">
+      <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0;">&bull;&nbsp;&nbsp;Staff check-in and capacity data</td></tr>
+      <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0;">&bull;&nbsp;&nbsp;Key emails and Teams messages from the month</td></tr>
+      <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0;">&bull;&nbsp;&nbsp;Client project status from Aurora and inbox</td></tr>
+      <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0;">&bull;&nbsp;&nbsp;Open actions, compliance items and board carry-forwards</td></tr>
+    </table>
+    <p style="margin:0 0 20px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">The report is attached as a Word-compatible document. Please review and add any additional context before the meeting.</p>
+    <table cellpadding="0" cellspacing="0"><tr><td style="background:#0D8A62;border-radius:6px;padding:10px 20px;">
+      <a href="https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net" style="font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#ffffff;text-decoration:none;">Open Cinderella &rarr;</a>
+    </td></tr></table>
+  </td></tr>
+  <tr><td style="padding:16px 28px;background:#F2F1EE;border-top:1px solid #E8E6E1;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#9A9693;">Cinderella &nbsp;&middot;&nbsp; Executive Assistant to Kandia Du Bruyn, COO &nbsp;&middot;&nbsp; Risk 2 Solution</p>
+  </td></tr>
+</table></body></html>`;
+
+  // Read the report file to attach it
+  let attachments = [];
+  try {
+    const reportPath = '/home/' + filename;
+    const reportContent = readFileSync(reportPath);
+    const b64 = reportContent.toString('base64');
+    const attachName = filename.replace('board-report-', 'COO-Board-Paper-').replace('.doc', '.html');
+    attachments = [{
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: attachName,
+      contentType: 'text/html',
+      contentBytes: b64
+    }];
+    console.log('[BoardReport] Report file attached:', attachName, '(' + Math.round(reportContent.length/1024) + 'KB)');
+  } catch(attachErr) {
+    console.warn('[BoardReport] Could not attach report file:', attachErr.message, '— email will be sent without attachment');
+  }
+
+  // Create draft with HTML body and attachment
+  const draftPayload = {
+    subject,
+    body: { contentType: 'HTML', content: htmlBody },
+    toRecipients: [{ emailAddress: { address: recipientEmail } }],
+    importance: 'high'
+  };
+  if (attachments.length > 0) draftPayload.attachments = attachments;
+
   const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
     method:'POST',
     headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
-    body:JSON.stringify({
-      subject,
-      body:{contentType:'Text', content:emailBody},
-      toRecipients:[{emailAddress:{address:recipientEmail}}],
-      importance:'high'
-    })
+    body:JSON.stringify(draftPayload)
   });
   const draft = await draftRes.json();
-  if (!draft.id) {
-    throw new Error('Draft creation failed: ' + JSON.stringify(draft.error||draft).substring(0,200));
-  }
-  console.log('[BoardReport] ✅ Draft created in Outlook Drafts — id:', draft.id.substring(0,30)+'...');
-  console.log('[BoardReport] Recipient:', recipientEmail, '| Subject:', subject);
+  if (!draft.id) throw new Error('Draft creation failed: ' + JSON.stringify(draft.error||draft).substring(0,200));
+  console.log('[BoardReport] ✅ Draft created:', draft.id.substring(0,30)+'...');
 
-  // Try to send it directly (requires Mail.Send — may fail, that is OK)
+  // Try to send
   try {
-    const sendRes = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send', {
-      method:'POST', headers:{Authorization:'Bearer '+token}
-    });
+    const sendRes = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send',
+      {method:'POST', headers:{Authorization:'Bearer '+token}});
     if (sendRes.status === 202) {
-      console.log('[BoardReport] ✅ Draft sent successfully from Outlook');
+      console.log('[BoardReport] ✅ Sent successfully');
     } else {
       const err = await sendRes.json().catch(()=>({}));
       if ((err.error||{}).code === 'ErrorAccessDenied') {
-        console.log('[BoardReport] ℹ Mail.Send not granted — draft saved to Outlook Drafts. Kandia can open and send from there.');
+        console.log('[BoardReport] ℹ Saved to Drafts — Mail.Send not granted');
       } else {
-        console.warn('[BoardReport] Send attempt returned', sendRes.status, JSON.stringify(err).substring(0,200));
+        console.warn('[BoardReport] Send returned', sendRes.status, JSON.stringify(err).substring(0,100));
       }
     }
   } catch(e) {
-    console.warn('[BoardReport] Send attempt failed (draft still saved):', e.message);
+    console.warn('[BoardReport] Send failed (draft still saved):', e.message);
   }
   return draft.id;
 }
@@ -2082,11 +2148,21 @@ app.get('/board-report/test-email', requireAuth, async (req, res) => {
 });
 
 app.post('/board-report/generate', requireAuth, async (req, res) => {
+  // Set a header immediately so the connection doesn't time out silently
+  res.setHeader('Content-Type', 'application/json');
   try {
     const now = new Date();
-    const filename = await generateBoardReport(req.body.meetingDate ? new Date(req.body.meetingDate) : new Date(now.getTime() + 14*24*60*60*1000), req.body.meetingSubject || 'Board Meeting');
+    const meetingDate = req.body.meetingDate ? new Date(req.body.meetingDate) : new Date(now.getTime() + 14*24*60*60*1000);
+    const meetingSubject = req.body.meetingSubject || 'Board Meeting';
+    console.log('[BoardReport] Generate request for', meetingDate.toDateString(), meetingSubject);
+    const filename = await generateBoardReport(meetingDate, meetingSubject);
     res.json({ success: true, filename });
-  } catch(e) { res.status(500).json({ error: e.message }); }
+  } catch(e) {
+    console.error('[BoardReport] Generate endpoint error:', e.message, e.stack?.substring(0,500));
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message || 'Unknown error generating board report' });
+    }
+  }
 });
 
 app.get('/board-report/latest', requireAuth, (req, res) => {
