@@ -522,6 +522,7 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
     <button class="ni" id="actionTrackerBtn" onclick="show('tracker',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>Open actions<span class="nb nb-r" id="trackerBadge" style="display:none">0</span></button>
     <button class="ni" id="auroraNavBtn" onclick="show('aurora',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l1.5 4.5H14l-3.5 2.5 1.5 4.5L8 11l-4 2.5 1.5-4.5L2 6.5h4.5z"/></svg>Aurora projects<span class="nb nb-a" id="auroraBadge" style="display:none">0</span></button>
     <button class="ni" id="clockifyNavBtn" onclick="show('clockify',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg>Clockify<span class="nb nb-r" id="clockifyBadge" style="display:none">0</span></button>
+    <button class="ni" id="leaveNavBtn" onclick="show('leave',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M5 2v12M11 8H8M11 10H8"/></svg>Leave<span class="nb nb-a" id="leaveBadge" style="display:none">0</span></button>
     <button class="ni" id="complianceNavBtn" onclick="show('compliance',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1l5 2v5c0 3-5 6-5 6S3 11 3 8V3l5-2z"/></svg>Compliance<span class="nb nb-r" id="complianceBadge" style="display:none">0</span></button>
 
     <button class="ni" onclick="show('auto',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 8A5 5 0 113 8"/><path d="M8 3V1M8 3l-2 2M8 3l2 2"/></svg>Automation</button>
@@ -1128,6 +1129,25 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 
     </div>
 
+    <!-- LEAVE MANAGEMENT -->
+    <div class="pnl" id="pnl-leave">
+
+      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Leave Management — Key Person Risk</span>
+        <div style="display:flex;gap:6px">
+          <button onclick="loadLeaveEntries()" style="font-size:11px;padding:4px 10px;background:var(--bg2);border:0.5px solid var(--bm);border-radius:8px;cursor:pointer;color:var(--t2);font-family:var(--f)">↻ Refresh</button>
+          <button onclick="showAddLeave()" style="font-size:11px;padding:4px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f);font-weight:600">+ Add leave</button>
+        </div>
+      </div>
+
+      <div class="card" style="background:var(--bl2);border-left:3px solid var(--b);margin-bottom:14px">
+        <div style="font-size:12px;color:var(--t1);line-height:1.6"><strong>Policy reminder:</strong> All staff taking 3+ consecutive days leave must complete the handover checklist. Trigger date is 2 weeks before leave starts. Leave is only approved once all 3 sign-off phases are complete.</div>
+      </div>
+
+      <div id="leaveList"><div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Loading leave entries...</div></div>
+
+    </div>
+
     <!-- AUTOMATION -->
 
     <div class="pnl" id="pnl-auto">
@@ -1402,10 +1422,17 @@ function downloadBoardReport() {
 
 async function generateBoardReportManual() {
   var el = document.getElementById('boardReportStatus');
-  if (el) el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">⏳ Generating report — this takes 30-60 seconds, please wait...</div>';
+  if (el) el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">⏳ Generating report — this takes 60-90 seconds with email analysis, please wait...</div>';
   try {
     var r = await fetch('/board-report/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
-    var d = await r.json();
+    var text = await r.text();
+    var d;
+    try { d = JSON.parse(text); }
+    catch(parseErr) {
+      console.error('Board report response parse error:', parseErr.message, 'Response:', text.substring(0,200));
+      if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Server error — check Azure logs and try again. The report generation may have timed out.</div>';
+      return;
+    }
     if (d.success) {
       await loadBoardReportStatus();
     } else {
@@ -4756,6 +4783,7 @@ function show(id,btn){
 
   if(id==='clockify') loadClockify();
   if(id==='compliance') loadCompliance();
+  if(id==='leave') loadLeaveEntries();
 
 }
 
@@ -7415,6 +7443,225 @@ async function generateHRProcess(type) {
   } catch(e) {
     document.getElementById('m-body').innerHTML = '<div style="font-size:12px;color:var(--r);padding:8px 0">Error: ' + e.message + '</div><button onclick="closeModal()" class="m-btn sec" style="margin-top:10px">Close</button>';
   }
+}
+
+
+// ══ LEAVE MANAGEMENT ══════════════════════════════════════
+
+const LEAVE_STAFF_LIST = [
+  {name:'Janita Zhang',    email:'janita.z@risk2solution.com'},
+  {name:'Diane Kruger',    email:'diane.k@risk2solution.com'},
+  {name:'Garima Arora',    email:'garima.a@risk2solution.com'},
+  {name:'Reinette Kruger', email:'reinette.k@risk2solution.com'},
+  {name:'Dani Stevenson',  email:'dani.s@risk2solution.com'},
+  {name:'Ross Mackenzie',  email:'ross.m@risk2solution.com'},
+  {name:'Cherry Abadeza',  email:'cherry.a@risk2solution.com'},
+  {name:'Paul Johnston',   email:'paul.j@risk2solution.com'},
+  {name:'Rionoch Goodwin', email:'rionoch.g@risk2solution.com'},
+];
+
+const CHECKLIST_ITEMS_CLIENT = [
+  {id:'contacts',    section:'1. Contacts & Access',        label:'Key contacts listed for each active project/relationship'},
+  {id:'access',      section:'1. Contacts & Access',        label:'Instructions for covering colleague to obtain system/drive/account access'},
+  {id:'external',    section:'1. Contacts & Access',        label:'External parties notified of absence and redirected'},
+  {id:'status',      section:'2. Current State of Work',    label:'Status update prepared for each active project/task'},
+  {id:'deadlines',   section:'2. Current State of Work',    label:'Deadlines and deliverables due during absence identified and dated'},
+  {id:'stalling',    section:'2. Current State of Work',    label:'Items that could stall identified (pending approvals, awaited decisions)'},
+  {id:'sharepoint',  section:'3. Resources & Links',        label:'SharePoint links added (master folder, client folder, templates, correspondence)'},
+  {id:'sp_verified', section:'3. Resources & Links',        label:'All SharePoint links tested and accessible by covering colleague'},
+  {id:'decisions',   section:'4. Decisions & Judgement',    label:'Matters needing a decision identified with recommendation or boundaries'},
+  {id:'risks',       section:'4. Decisions & Judgement',    label:'Known risks and sensitivities noted (difficult client, sensitive matters)'},
+  {id:'discussion',  section:'5. Handover Discussion',      label:'Handover discussion held with covering colleague (not just document sent)'},
+  {id:'understood',  section:'5. Handover Discussion',      label:'Covering colleague confirms understanding and escalation path'},
+  {id:'emergency',   section:'5. Handover Discussion',      label:'Emergency contact method agreed (business critical only)'},
+  {id:'phase1_signed',section:'6. Sign Off',                label:'Phase 1 SIGNED — staff member going on leave'},
+  {id:'phase2_signed',section:'6. Sign Off',                label:'Phase 2 SIGNED — covering colleague'},
+  {id:'phase3_signed',section:'6. Sign Off',                label:'Phase 3 SIGNED — Kandia Du Bruyn (Manager)'},
+];
+
+const STATUS_LABELS = {
+  detected:'Detected',notified:'Notified',checklist_sent:'Checklist Sent',
+  in_progress:'In Progress',approved:'Approved',on_leave:'On Leave',returned:'Returned',cancelled:'Cancelled'
+};
+const STATUS_COLORS = {
+  detected:'var(--a)',notified:'var(--b)',checklist_sent:'var(--b)',
+  in_progress:'var(--a)',approved:'var(--g)',on_leave:'var(--r)',returned:'var(--t3)',cancelled:'var(--t3)'
+};
+
+async function loadLeaveEntries() {
+  var el = document.getElementById('leaveList');
+  if (!el) return;
+  try {
+    var r = await fetch('/leave');
+    var entries = await r.json();
+    var badge = document.getElementById('leaveBadge');
+    var active = entries.filter(function(e){ return e.status !== 'returned' && e.status !== 'cancelled'; });
+    if (badge) { badge.textContent = active.length; badge.style.display = active.length > 0 ? 'inline-block' : 'none'; }
+    if (!entries.length) {
+      el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:24px 0;text-align:center">No leave entries yet.<br>Click + Add leave to log a staff member\'s leave and start the handover process.</div>';
+      return;
+    }
+    el.innerHTML = entries.map(function(e) {
+      var total = CHECKLIST_ITEMS_CLIENT.length;
+      var done = CHECKLIST_ITEMS_CLIENT.filter(function(i){ return e.checklist && e.checklist[i.id]; }).length;
+      var pct = Math.round(done/total*100);
+      var statusCol = STATUS_COLORS[e.status] || 'var(--t3)';
+      var startStr = new Date(e.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+      var endStr = new Date(e.endDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+      var trigStr = new Date(e.triggerDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+      var daysLeft = Math.ceil((new Date(e.startDate) - new Date()) / (24*60*60*1000));
+      var urgency = daysLeft < 7 && e.status !== 'approved' && e.status !== 'returned' && e.status !== 'on_leave';
+      return '<div class="card" style="margin-bottom:12px;'+(urgency?'border-left:3px solid var(--r)':'')+'">' +
+        '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">' +
+          '<div><div style="font-size:13px;font-weight:700;color:var(--t1)">' + e.staffName + '</div>' +
+            '<div style="font-size:11px;color:var(--t3);margin-top:2px">' + startStr + ' – ' + endStr +
+              (e.coveringColleague?' &nbsp;·&nbsp; Cover: <strong>'+e.coveringColleague+'</strong>':'') + '</div></div>' +
+          '<span style="font-size:9.5px;font-weight:700;padding:2px 10px;border-radius:999px;background:var(--bg2);color:'+statusCol+'">' + (STATUS_LABELS[e.status]||e.status).toUpperCase() + '</span>' +
+        '</div>' +
+        '<div style="margin-bottom:10px">' +
+          '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">' +
+            '<span style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Checklist progress</span>' +
+            '<span style="font-size:12px;font-weight:700;color:'+(pct===100?'var(--g)':urgency?'var(--r)':'var(--a)')+'">'+done+'/'+total+' — '+pct+'%</span>' +
+          '</div>' +
+          '<div style="height:8px;background:var(--bg2);border-radius:999px;overflow:hidden">' +
+            '<div style="height:100%;width:'+pct+'%;background:'+(pct===100?'var(--g)':urgency?'var(--r)':'var(--a)')+';border-radius:999px;transition:width .3s"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="font-size:10.5px;color:var(--t3);margin-bottom:10px">Trigger date: <strong>'+trigStr+'</strong>' +
+          (daysLeft > 0 ? ' &nbsp;·&nbsp; '+daysLeft+' days until leave' : daysLeft === 0 ? ' &nbsp;·&nbsp; <span style="color:var(--r)">Leave starts today</span>' : ' &nbsp;·&nbsp; <span style="color:var(--t3)">Staff currently on leave</span>') +
+        '</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+          '<button onclick="openLeaveChecklist(\''+e.id+'\')" class="m-btn" style="font-size:11px;padding:5px 12px">View checklist</button>' +
+          '<button onclick="sendLeaveChecklistNow(\''+e.id+'\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">📧 Send checklist email</button>' +
+          '<button onclick="deleteLeaveEntry(\''+e.id+'\')" class="m-btn sec" style="font-size:11px;padding:5px 12px;color:var(--r)">Delete</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch(e) { if (el) el.innerHTML = '<div style="font-size:12px;color:var(--r)">Error: ' + e.message + '</div>'; }
+}
+
+function showAddLeave() {
+  var staffOptions = LEAVE_STAFF_LIST.map(function(s){ return '<option value="'+s.name+'|'+s.email+'">'+s.name+'</option>'; }).join('');
+  var today = new Date().toISOString().substring(0,10);
+  openModal('Add Staff Leave', 'Log leave and start the handover process',
+    '<div style="display:grid;gap:10px">' +
+      '<div><div class="mfl">Staff member *</div><select id="lv_staff" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)"><option value="">Select staff member...</option>'+staffOptions+'</select></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<div><div class="mfl">Leave start date *</div><input id="lv_start" type="date" min="'+today+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
+        '<div><div class="mfl">Leave end date *</div><input id="lv_end" type="date" min="'+today+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
+      '</div>' +
+      '<div><div class="mfl">Covering colleague</div><select id="lv_cover" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)"><option value="">Select covering colleague...</option>'+staffOptions+'<option value="Kandia Du Bruyn|kandia@risk2solution.com">Kandia Du Bruyn</option></select></div>' +
+      '<div><div class="mfl">Notes (optional)</div><textarea id="lv_notes" rows="2" placeholder="Any context about this leave..." style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);resize:vertical"></textarea></div>' +
+      '<div style="background:var(--al);border-radius:8px;padding:10px 12px;font-size:11.5px;color:var(--t2)">Cinderella will immediately notify you with the handover timeline, then send the checklist email to the staff member 2 weeks before leave starts.</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;margin-top:14px">' +
+      '<button class="m-btn" onclick="submitAddLeave()" style="flex:1">Log leave & start process</button>' +
+      '<button class="m-btn sec" onclick="closeModal()" style="flex:1">Cancel</button>' +
+    '</div>'
+  );
+}
+
+async function submitAddLeave() {
+  var staffSel = (document.getElementById('lv_staff')||{}).value || '';
+  var start = (document.getElementById('lv_start')||{}).value;
+  var end = (document.getElementById('lv_end')||{}).value;
+  var coverSel = (document.getElementById('lv_cover')||{}).value || '';
+  var notes = (document.getElementById('lv_notes')||{}).value || '';
+  if (!staffSel || !start || !end) { showToast('Please fill in staff member and dates'); return; }
+  var staffParts = staffSel.split('|');
+  var coverParts = coverSel.split('|');
+  try {
+    var r = await fetch('/leave', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      staffName: staffParts[0], staffEmail: staffParts[1]||'',
+      startDate: start, endDate: end,
+      coveringColleague: coverParts[0]||'', coveringEmail: coverParts[1]||'',
+      notes
+    })});
+    var d = await r.json();
+    if (d.success) {
+      closeModal();
+      showToast('Leave logged — Cinderella will send you a notification shortly');
+      loadLeaveEntries();
+    } else { showToast('Error: '+(d.error||'Failed')); }
+  } catch(e) { showToast('Error: '+e.message); }
+}
+
+async function openLeaveChecklist(id) {
+  var r = await fetch('/leave');
+  var entries = await r.json();
+  var entry = entries.find(function(e){ return e.id === id; });
+  if (!entry) return;
+
+  var lastSection = '';
+  var rows = CHECKLIST_ITEMS_CLIENT.map(function(item) {
+    var done = entry.checklist && entry.checklist[item.id];
+    var isSignOff = item.section === '6. Sign Off';
+    var sectionHdr = '';
+    if (item.section !== lastSection) {
+      sectionHdr = '<div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin:12px 0 5px;padding-top:8px;border-top:1px solid var(--bl)">'+item.section+'</div>';
+      lastSection = item.section;
+    }
+    var bgCol = done ? (isSignOff ? 'var(--gl)' : 'var(--bg2)') : (isSignOff ? 'var(--rl)' : 'var(--bg)');
+    var borderCol = done ? 'var(--g)' : (isSignOff ? 'var(--r)' : 'var(--bm)');
+    return sectionHdr + '<div onclick="toggleLeaveItem(\''+id+'\',\''+item.id+'\')" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;background:'+bgCol+';margin-bottom:4px;border:1px solid '+borderCol+';transition:all .1s">' +
+      '<div style="width:18px;height:18px;border-radius:4px;border:2px solid '+(done?'var(--g)':'var(--bm)')+';background:'+(done?'var(--g)':'transparent')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">' +
+        (done?'<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2.5 2.5L8 3" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>':'') +
+      '</div>' +
+      '<span style="font-size:11.5px;color:var(--t1);line-height:1.4;text-decoration:'+(done&&!isSignOff?'line-through':'none')+';color:'+(done&&!isSignOff?'var(--t3)':'var(--t1)')+'">'+item.label+'</span>' +
+    '</div>';
+  }).join('');
+
+  var done = CHECKLIST_ITEMS_CLIENT.filter(function(i){ return entry.checklist && entry.checklist[i.id]; }).length;
+  var pct = Math.round(done/CHECKLIST_ITEMS_CLIENT.length*100);
+
+  openModal(entry.staffName + ' — Leave Handover Checklist',
+    new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ' – ' +
+    new Date(entry.endDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) +
+    (entry.coveringColleague?' &nbsp;·&nbsp; Cover: '+entry.coveringColleague:''),
+    '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">' +
+      '<span style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Completion</span>' +
+      '<span style="font-size:16px;font-weight:800;color:'+(pct===100?'var(--g)':pct>50?'var(--a)':'var(--r)')+'">'+pct+'%</span>' +
+    '</div>' +
+    '<div style="height:8px;background:var(--bg2);border-radius:999px;overflow:hidden;margin-bottom:14px">' +
+      '<div style="height:100%;width:'+pct+'%;background:'+(pct===100?'var(--g)':pct>50?'var(--a)':'var(--r)')+';border-radius:999px"></div>' +
+    '</div>' +
+    '<div style="max-height:50vh;overflow-y:auto;padding-right:4px">' + rows + '</div>' +
+    '<div style="display:flex;gap:8px;margin-top:14px;border-top:1px solid var(--bl);padding-top:12px">' +
+      '<button onclick="sendLeaveChecklistNow(\''+id+'\')" class="m-btn sec" style="flex:1;font-size:11px">📧 Send checklist email</button>' +
+      '<button onclick="closeModal()" class="m-btn sec" style="flex:1;font-size:11px">Close</button>' +
+    '</div>'
+  );
+}
+
+async function toggleLeaveItem(leaveId, itemId) {
+  try {
+    var r = await fetch('/leave');
+    var entries = await r.json();
+    var entry = entries.find(function(e){ return e.id === leaveId; });
+    if (!entry) return;
+    var update = {};
+    update[itemId] = !(entry.checklist && entry.checklist[itemId]);
+    await fetch('/leave/'+leaveId+'/checklist', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(update)});
+    openLeaveChecklist(leaveId);
+    loadLeaveEntries();
+  } catch(e) { showToast('Error: '+e.message); }
+}
+
+async function sendLeaveChecklistNow(id) {
+  showToast('Sending checklist email...');
+  try {
+    var r = await fetch('/leave/'+id+'/send-checklist', {method:'POST'});
+    var d = await r.json();
+    if (d.success) { showToast('Checklist email sent — check Outlook'); loadLeaveEntries(); }
+    else showToast('Error: '+(d.error||'Failed'));
+  } catch(e) { showToast('Error: '+e.message); }
+}
+
+async function deleteLeaveEntry(id) {
+  if (!confirm('Delete this leave entry?')) return;
+  await fetch('/leave/'+id, {method:'DELETE'});
+  loadLeaveEntries();
+  showToast('Leave entry deleted');
 }
 
 </script>
