@@ -7550,7 +7550,7 @@ function showAddLeave() {
         '<div><div class="mfl">Leave start date *</div><input id="lv_start" type="date" min="'+today+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
         '<div><div class="mfl">Leave end date *</div><input id="lv_end" type="date" min="'+today+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
       '</div>' +
-      '<div><div class="mfl">Covering colleague</div><select id="lv_cover" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)"><option value="">Select covering colleague...</option>'+staffOptions+'<option value="Kandia Du Bruyn|kandia@risk2solution.com">Kandia Du Bruyn</option></select></div>' +
+      '<div><div class="mfl">Covering colleague(s) <span style="font-weight:400;color:var(--t3)">(hold Ctrl/Cmd to select multiple)</span></div><select id="lv_cover" multiple style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg);height:100px">'+staffOptions+'<option value="Kandia Du Bruyn|kandia@risk2solution.com">Kandia Du Bruyn</option></select></div>' +
       '<div><div class="mfl">Notes (optional)</div><textarea id="lv_notes" rows="2" placeholder="Any context about this leave..." style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);resize:vertical"></textarea></div>' +
       '<div style="background:var(--al);border-radius:8px;padding:10px 12px;font-size:11.5px;color:var(--t2)">Cinderella will immediately notify you with the handover timeline, then send the checklist email to the staff member 2 weeks before leave starts.</div>' +
     '</div>' +
@@ -7569,12 +7569,24 @@ async function submitAddLeave() {
   var notes = (document.getElementById('lv_notes')||{}).value || '';
   if (!staffSel || !start || !end) { showToast('Please fill in staff member and dates'); return; }
   var staffParts = staffSel.split('|');
-  var coverParts = coverSel.split('|');
+  // Collect multiple covering colleagues
+  var coverSelect = document.getElementById('lv_cover');
+  var coverNames = [], coverEmails = [];
+  if (coverSelect) {
+    Array.from(coverSelect.selectedOptions).forEach(function(opt) {
+      var parts = opt.value.split('|');
+      if (parts[0]) coverNames.push(parts[0]);
+      if (parts[1]) coverEmails.push(parts[1]);
+    });
+  }
   try {
     var r = await fetch('/leave', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       staffName: staffParts[0], staffEmail: staffParts[1]||'',
       startDate: start, endDate: end,
-      coveringColleague: coverParts[0]||'', coveringEmail: coverParts[1]||'',
+      coveringColleague: coverNames.join(', '),
+      coveringEmail: coverEmails.join(','),
+      coveringColleagues: coverNames,
+      coveringEmails: coverEmails,
       notes
     })});
     var d = await r.json();
