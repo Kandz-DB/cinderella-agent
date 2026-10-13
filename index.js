@@ -4450,6 +4450,724 @@ Be specific — use actual staff names. Flag any coverage risks given current hi
   }
 });
 
+
+// ════════════════════════════════════════════════════════════
+// ── STAFF LEAVE MANAGEMENT SYSTEM ──
+// ════════════════════════════════════════════════════════════
+const LEAVE_STATE_PATH = '/home/leave-state.json';
+
+function loadLeaveState() {
+  try { return JSON.parse(readFileSync(LEAVE_STATE_PATH,'utf8')||'{"leaveEntries":[]}'); }
+  catch(e) { return { leaveEntries: [] }; }
+}
+function saveLeaveState(s) {
+  try { writeFileSync(LEAVE_STATE_PATH, JSON.stringify(s,null,2)); } catch(e) {}
+}
+
+const CHECKLIST_ITEMS = [
+  { id:'contacts',       section:1, label:'Key contacts listed for each active project/relationship (name, role, contact details)' },
+  { id:'access',         section:1, label:'Instructions provided for covering colleague to obtain system/drive/account access' },
+  { id:'external',       section:1, label:'External parties notified of absence and directed to correct contact' },
+  { id:'status',         section:2, label:'Status update prepared for each active project/task (done vs outstanding)' },
+  { id:'deadlines',      section:2, label:'Deadlines and deliverables due during absence identified and dated' },
+  { id:'stalling',       section:2, label:'Items in progress that could stall identified (pending approvals, awaited decisions)' },
+  { id:'sharepoint',     section:3, label:'SharePoint links added to checklist (master folder, client folder, templates, correspondence)' },
+  { id:'sp_verified',    section:3, label:'All SharePoint links tested and confirmed accessible by covering colleague' },
+  { id:'decisions',      section:4, label:'Matters needing a decision identified, with recommendation or decision boundaries' },
+  { id:'risks',          section:4, label:'Known risks and sensitivities noted (difficult client, sensitive matter, tricky negotiation)' },
+  { id:'discussion',     section:5, label:'Handover discussion held between staff member and covering colleague (not just document sent)' },
+  { id:'understood',     section:5, label:'Covering colleague confirms understanding of expectations and escalation path' },
+  { id:'emergency',      section:5, label:'Emergency contact method agreed (business critical work only)' },
+  { id:'phase1_signed',  section:6, label:'Phase 1 signed by staff member going on leave' },
+  { id:'phase2_signed',  section:6, label:'Phase 2 reviewed and signed by covering colleague' },
+  { id:'phase3_signed',  section:6, label:'Phase 3 approved and signed by Kandia Du Bruyn (Manager)' },
+];
+
+// Build an Outlook-compatible HTML email for leave notifications
+function buildLeaveEmail(type, entry) {
+  const TEAL = '#07706B';
+  const staff = entry.staffName;
+  const cover = entry.coveringColleague || 'To be confirmed';
+  const start = new Date(entry.startDate).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  const end   = new Date(entry.endDate).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  const trigger = new Date(entry.triggerDate).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  const completedItems = CHECKLIST_ITEMS.filter(i => entry.checklist && entry.checklist[i.id]);
+  const pendingItems = CHECKLIST_ITEMS.filter(i => !entry.checklist || !entry.checklist[i.id]);
+
+  const header = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:20px;background:#F2F1EE;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#fff;border-radius:10px;overflow:hidden;">
+<tr><td style="background:linear-gradient(105deg,#07706B,#56D4CE 55%,#F0B8CC 82%);padding:22px 28px;">
+  <p style="margin:0;font-family:Georgia,serif;font-size:24px;font-style:italic;color:#fff;font-weight:bold;">Cinderella</p>
+  <p style="margin:4px 0 0;font-family:Arial,sans-serif;font-size:9px;color:rgba(255,255,255,.8);letter-spacing:2px;text-transform:uppercase;">STAFF LEAVE MANAGEMENT &middot; RISK 2 SOLUTION</p>
+</td></tr>`;
+
+  const footer = `<tr><td style="padding:14px 28px;background:#F2F1EE;border-top:1px solid #E8E6E1;">
+  <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#9A9693;">Cinderella &middot; Executive Assistant to Kandia Du Bruyn, COO &middot; Risk 2 Solution</p>
+</td></tr></table></body></html>`;
+
+  function row(label, value, bold) {
+    return `<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#9A9693;padding:4px 0;min-width:130px;vertical-align:top">${label}</td>` +
+           `<td style="font-family:Arial,sans-serif;font-size:12px;color:#111;${bold?'font-weight:bold;':''}padding:4px 8px;vertical-align:top">${value}</td></tr>`;
+  }
+
+  const detailsTable = `<table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+    ${row('Staff member', staff, true)}${row('Leave start', start, false)}${row('Leave end', end, false)}
+    ${row('Covering colleague', cover, true)}${row('Handover trigger date', trigger, true)}
+  </table>`;
+
+  if (type === 'kandia_notification') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">🗓 Leave Detected — ${staff}</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi Kandia,</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">I have detected that <strong>${staff}</strong> has applied for leave. Here are the details and the process I will run:</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">What Cinderella will do</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Now:</strong> Log this leave in the Leave Management panel in Cinderella</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>${trigger}:</strong> Send handover checklist email to ${staff} (CC you) with Excel attachment</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Ongoing:</strong> Monitor checklist completion and alert you, ${staff}, and ${cover} at each stage</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>7 days before:</strong> Final reminder if checklist not complete</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Leave start:</strong> Confirmation email to you and ${cover}</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666;line-height:1.5;">Please confirm the covering colleague in the Leave Management panel in Cinderella, or reply to this email with any corrections.</p>
+    </td></tr>` + footer;
+  }
+
+  if (type === 'checklist_email') {
+    const checkRows = CHECKLIST_ITEMS.map(item => {
+      const done = entry.checklist && entry.checklist[item.id];
+      const sectionLabels = {1:'Contacts & Access',2:'Current State of Work',3:'Resources & Links',4:'Decisions & Judgement',5:'Handover Discussion',6:'Sign Off'};
+      return `<tr><td style="font-family:Arial,sans-serif;font-size:12px;padding:5px 0;color:${done?'#9A9693':'#111'};text-decoration:${done?'line-through':'none'};vertical-align:top">
+        <span style="display:inline-block;width:18px;height:18px;border:2px solid ${done?'#0D8A62':'#9A9693'};border-radius:3px;margin-right:8px;text-align:center;line-height:16px;color:#0D8A62;font-weight:bold">${done?'&#10003;':''}</span>
+        <strong style="color:#666;font-size:10px">${sectionLabels[item.section]}: </strong>${item.label}
+      </td></tr>`;
+    }).join('');
+
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 Leave Handover Checklist — Action Required</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${staff.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Your leave starts on <strong>${start}</strong>. As per R2S policy, your handover must be completed <strong>by ${trigger}</strong> (two weeks before leave start). Please work through the checklist below and complete the attached Excel document.</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Handover checklist — please complete all items</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:20px;width:100%">${checkRows}</table>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:12px;color:#444;line-height:1.6;">The Excel checklist is attached. Please complete it, arrange a handover discussion with <strong>${cover}</strong>, and have all three signature phases signed before <strong>${trigger}</strong>.</p>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#666">Per R2S Leave Handover Policy V1.0 — leave approval is only granted once all phases are signed. Questions? Contact Kandia.</p>
+    </td></tr>` + footer;
+  }
+
+  if (type === 'reminder') {
+    const daysLeft = Math.ceil((new Date(entry.startDate) - new Date()) / (24*60*60*1000));
+    const pendingList = pendingItems.map(i => `<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#C8211E;padding:3px 0">&bull;&nbsp;&nbsp;${i.label}</td></tr>`).join('');
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #C8211E;">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">⚠ Leave Handover — ${pendingItems.length} Items Still Outstanding</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">${staff}'s leave starts in <strong>${daysLeft} days</strong> (${start}). The following handover items are still incomplete:</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">${pendingList}</table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Please complete these items before ${trigger}. Per R2S policy, leave cannot be approved until all phases are signed.</p>
+    </td></tr>` + footer;
+  }
+
+  const pendingList = pendingItems.map(i=>`<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#C8211E;padding:3px 0">&bull;&nbsp;&nbsp;${i.label}</td></tr>`).join('');
+  const doneList = completedItems.map(i=>`<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#0D8A62;padding:3px 0">&#10003;&nbsp;&nbsp;${i.label}</td></tr>`).join('');
+  const daysLeft = Math.ceil((new Date(entry.startDate) - new Date()) / (24*60*60*1000));
+
+  // Covering colleague: nominated
+  if (type === 'cover_nominated') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 You have been nominated as covering colleague</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">You have been nominated to cover <strong>${staff}</strong> during their upcoming leave. Here are the details:</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">What to expect</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>${trigger}:</strong> You will receive a detailed handover briefing from Cinderella</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Before leave:</strong> Review the handover document prepared by ${staff}</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Day before:</strong> Final briefing email from Cinderella with everything you need</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>During leave:</strong> You are the primary contact for ${staff}'s responsibilities</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Please confirm with Kandia that you are able to cover during this period. If you have any concerns about capacity, raise them now.</p>
+    </td></tr>` + footer;
+  }
+
+  // Covering colleague: 2-week briefing
+  if (type === 'cover_briefing') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 Handover briefing: covering ${staff}</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">The handover process for ${staff}'s leave has started. As the covering colleague, here is what you need to do over the next two weeks:</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Your responsibilities as covering colleague</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">1.&nbsp;&nbsp;Review the handover document once ${staff} shares it with you</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">2.&nbsp;&nbsp;Arrange and attend a 15-20 minute handover discussion with ${staff}</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">3.&nbsp;&nbsp;Test that you can access all SharePoint links and shared drives listed in the document</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">4.&nbsp;&nbsp;Raise any gaps or questions with ${staff} before the leave starts</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">5.&nbsp;&nbsp;Sign Phase 2 of the handover checklist once satisfied</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">6.&nbsp;&nbsp;Contact Kandia immediately if anything is unclear or outside your scope</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Cinderella is tracking progress. You will receive updates as the handover checklist is completed and a full briefing the day before leave starts.</p>
+    </td></tr>` + footer;
+  }
+
+  // 10-day reminder
+  if (type === 'reminder_10day') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #D97706;">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 10-day check: handover is ${pctDone}% complete</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${staff.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Your leave starts in <strong>10 days (${startStr})</strong>. Your handover checklist is only <strong>${pctDone}% complete</strong>. Please action the following items urgently:</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">${pendingList}</table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">The checklist must be completed by ${trigger} per R2S Leave Handover Policy. Contact Kandia if you need support.</p>
+    </td></tr>` + footer;
+  }
+
+  // 5-day escalation to Kandia
+  if (type === 'escalation_5day') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #C8211E;">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#C8211E;font-family:Arial,sans-serif;">🔴 ESCALATION: Phase 1 not signed — leave in 5 days</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi Kandia,</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;"><strong>${staff}</strong> leaves in 5 days and has not yet signed Phase 1 of the handover checklist. Per R2S policy, leave cannot be approved without this. <strong>Immediate action is required.</strong></p>
+      ${detailsTable}
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px;background:#FEE2E2;border-radius:8px;padding:12px 14px;width:100%">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#C8211E;padding-bottom:6px">Outstanding checklist items (${pendingItems.length}):</td></tr>
+        ${pendingList}
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Recommended action: contact ${staff} directly today to resolve this before leave starts.</p>
+    </td></tr>` + footer;
+  }
+
+  // 3-day final warning
+  if (type === 'final_warning') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #C8211E;">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#C8211E;font-family:Arial,sans-serif;">🔴 FINAL WARNING: Handover incomplete — leave in ${daysLeft} days</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${staff.split(' ')[0]} and ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Leave starts in <strong>${daysLeft} days</strong> and the handover is not fully complete. This is a formal reminder that per R2S policy, leave approval is contingent on all three phases being signed.</p>
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Still outstanding</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:12px">${pendingList}</table>
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Completed items</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">${doneList}</table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Contact Kandia immediately if any item cannot be completed before leave starts.</p>
+    </td></tr>` + footer;
+  }
+
+  // Covering colleague: day before
+  if (type === 'cover_day_before') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 Tomorrow: your coverage of ${staff} begins</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;"><strong>${staff}</strong>'s leave starts tomorrow (${startStr}). Here is your final pre-coverage summary:</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Before you start tomorrow</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Confirm you can access all SharePoint folders and shared drives</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Review the handover document one final time</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Have ${staff}'s key client contact list accessible</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Know the escalation path — anything outside your scope goes to Kandia</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Emergency contact for ${staff}: agreed method only, and only for business-critical matters</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Kandia is across everything. Contact her at any point if you need support or a decision outside your scope.</p>
+    </td></tr>` + footer;
+  }
+
+  // Covering colleague: leave has started — activation
+  if (type === 'cover_activation') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #D97706;">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">🟡 Coverage active: ${staff} is now on leave</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;"><strong>${staff} is now on leave.</strong> You are the primary contact for their responsibilities from today until <strong>${endStr}</strong>.</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">While ${staff} is away</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Handle all incoming queries for ${staff}'s projects per the handover document</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Log anything unusual or outside scope — do not let it sit</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Escalate to Kandia immediately for decisions beyond your scope</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Only contact ${staff} directly if it is a genuine business-critical emergency</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Note anything for handback when ${staff} returns on ${endStr}</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Cinderella will check in with you and Kandia during the leave period. You are doing great — reach out to Kandia any time.</p>
+    </td></tr>` + footer;
+  }
+
+  // Mid-leave check-in
+  if (type === 'mid_leave_checkin') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 Mid-leave check: ${staff}</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi Kandia,</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">${staff} has been on leave for approximately 5 days. This is a check-in to confirm coverage is going smoothly.</p>
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Please confirm</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;${cover} is handling coverage without issues</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;No client or project matters have fallen through the cracks</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Any issues that have arisen are being managed</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">${staff} is due to return on ${endStr}. Cinderella will send a handback prompt on their return day.</p>
+    </td></tr>` + footer;
+  }
+
+  // Return day
+  if (type === 'return_day') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">✅ Welcome back: ${staff} — handback today</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${staff.split(' ')[0]} and ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;"><strong>Welcome back ${staff.split(' ')[0]}!</strong> Today is your first day back. Please arrange a quick handback discussion with ${cover} to ensure a smooth transition.</p>
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Return day handback — please complete today</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&#9744;&nbsp;&nbsp;Brief handback discussion between ${staff} and ${cover} (15 mins)</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&#9744;&nbsp;&nbsp;${cover} to hand over any in-progress matters, decisions made, and items to action</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&#9744;&nbsp;&nbsp;Review emails, Teams messages, and any client correspondence from during leave</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&#9744;&nbsp;&nbsp;Confirm with Kandia that coverage period closed without outstanding issues</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&#9744;&nbsp;&nbsp;Note any improvements for next handover (update Cinderella leave record)</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Thank you ${cover.split(' ')[0]} for covering — please flag anything that needs Kandia's attention before handing back.</p>
+    </td></tr>` + footer;
+  }
+
+  return header + `<tr><td style="padding:20px 28px;"><p style="font-family:Arial,sans-serif">Leave notification for ${staff}</p></td></tr>` + footer;
+}
+
+// Generate Excel checklist using xlsx
+async function generateLeaveChecklistXlsx(entry) {
+  const XLSX = require('xlsx');
+  const staff = entry.staffName;
+  const cover = entry.coveringColleague || '';
+  const startDate = new Date(entry.startDate).toLocaleDateString('en-AU');
+  const endDate = new Date(entry.endDate).toLocaleDateString('en-AU');
+  const triggerDate = new Date(entry.triggerDate).toLocaleDateString('en-AU');
+
+  const wb = XLSX.utils.book_new();
+  const rows = [
+    ['RISK 2 SOLUTION — STAFF LEAVE HANDOVER CHECKLIST','','',''],
+    ['To be completed no later than two weeks before the leave start date','','',''],
+    [''],
+    ['Staff Member Going on Leave', staff, '', ''],
+    ['Position', '', '', ''],
+    ['Leave Start Date', startDate, '', ''],
+    ['Leave End Date', endDate, '', ''],
+    ['Covering Colleague', cover, '', ''],
+    ['Manager', 'Kandia Du Bruyn', '', ''],
+    ['Handover Due Date (2 weeks before)', triggerDate, '', ''],
+    [''],
+    ['SECTION', 'CHECKLIST ITEM', 'COMPLETE?', 'NOTES'],
+    ['1. Contacts & Access', 'Key contacts listed for each active project/relationship (name, role, contact details)', entry.checklist?.contacts?'YES':'', ''],
+    ['1. Contacts & Access', 'Instructions provided for covering colleague to obtain system/drive/account access', entry.checklist?.access?'YES':'', ''],
+    ['1. Contacts & Access', 'External parties notified of absence and redirected to correct contact', entry.checklist?.external?'YES':'', ''],
+    ['2. Current State of Work', 'Status update prepared for each active project/task', entry.checklist?.status?'YES':'', ''],
+    ['2. Current State of Work', 'Deadlines and deliverables due during absence identified and dated', entry.checklist?.deadlines?'YES':'', ''],
+    ['2. Current State of Work', 'Items that could stall identified (pending approvals, awaited decisions)', entry.checklist?.stalling?'YES':'', ''],
+    ['3. Resources & Links', 'SharePoint links added (master folder, client folder, templates, correspondence)', entry.checklist?.sharepoint?'YES':'', ''],
+    ['3. Resources & Links', 'All SharePoint links tested and accessible by covering colleague', entry.checklist?.sp_verified?'YES':'', ''],
+    ['3. Resources & Links', 'Master Project Folder link:', '', ''],
+    ['3. Resources & Links', 'Client/Account Folder link:', '', ''],
+    ['3. Resources & Links', 'Templates and Precedents link:', '', ''],
+    ['3. Resources & Links', 'Correspondence/Email Archive link:', '', ''],
+    ['4. Decisions & Judgement', 'Matters needing a decision identified with recommendation or decision boundaries', entry.checklist?.decisions?'YES':'', ''],
+    ['4. Decisions & Judgement', 'Known risks and sensitivities noted (difficult client, sensitive matter)', entry.checklist?.risks?'YES':'', ''],
+    ['5. Handover Discussion', 'Handover discussion held with covering colleague (not just document sent)', entry.checklist?.discussion?'YES':'', ''],
+    ['5. Handover Discussion', 'Covering colleague understands expectations and escalation path', entry.checklist?.understood?'YES':'', ''],
+    ['5. Handover Discussion', 'Emergency contact method agreed (business critical work only)', entry.checklist?.emergency?'YES':'', ''],
+    [''],
+    ['SIGN OFF — ALL THREE PHASES REQUIRED BEFORE LEAVE IS APPROVED','','',''],
+    ['Phase 1: Staff Member Going on Leave','Name:', staff,'Date:'],
+    ['Phase 1: Staff Member Going on Leave','Signed:', entry.checklist?.phase1_signed?'SIGNED':'PENDING',''],
+    ['Phase 2: Covering Colleague','Name:', cover,'Date:'],
+    ['Phase 2: Covering Colleague','Signed:', entry.checklist?.phase2_signed?'SIGNED':'PENDING',''],
+    ['Phase 3: Manager (Kandia Du Bruyn)','Name:', 'Kandia Du Bruyn','Date:'],
+    ['Phase 3: Manager (Kandia Du Bruyn)','Signed:', entry.checklist?.phase3_signed?'SIGNED':'PENDING',''],
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:30},{wch:60},{wch:12},{wch:30}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Handover Checklist');
+  const buf = XLSX.write(wb, {type:'buffer', bookType:'xlsx'});
+  const path = '/home/leave-checklist-' + entry.id + '.xlsx';
+  require('fs').writeFileSync(path, buf);
+  return path;
+}
+
+// Send leave checklist email with Excel attachment
+async function sendLeaveChecklistEmail(entry) {
+  if (!tokenStore.access_token) return;
+  try {
+    const token = await getValidToken();
+    const kandiaEmail = await getKandiaEmail();
+    const staffEmail = entry.staffEmail;
+    const coverEmail = entry.coveringEmail;
+    const subject = 'Action Required: Leave Handover Checklist — ' + entry.staffName + ' (Leave from ' + new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ')';
+
+    // Generate Excel
+    const xlsxPath = await generateLeaveChecklistXlsx(entry);
+    const xlsxContent = readFileSync(xlsxPath);
+    const xlsxB64 = xlsxContent.toString('base64');
+    const xlsxName = 'Leave_Handover_Checklist_' + entry.staffName.replace(/\s+/g,'_') + '.xlsx';
+
+    const htmlBody = buildLeaveEmail('checklist_email', entry);
+
+    const recipients = [
+      { emailAddress: { address: staffEmail } }
+    ];
+    const ccRecipients = [
+      { emailAddress: { address: kandiaEmail } }
+    ];
+    if (coverEmail && coverEmail !== kandiaEmail) {
+      ccRecipients.push({ emailAddress: { address: coverEmail } });
+    }
+
+    const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        subject, importance:'high',
+        body:{contentType:'HTML',content:htmlBody},
+        toRecipients: recipients,
+        ccRecipients,
+        attachments:[{
+          '@odata.type':'#microsoft.graph.fileAttachment',
+          name: xlsxName,
+          contentType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          contentBytes: xlsxB64
+        }]
+      })
+    });
+    const msg = await draft.json();
+    if (msg.id) {
+      const send = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',
+        {method:'POST',headers:{Authorization:'Bearer '+token}});
+      if (send.status === 202) console.log('[Leave] ✅ Checklist email sent to', staffEmail);
+      else console.log('[Leave] Checklist email saved to Drafts');
+    }
+    return msg.id;
+  } catch(e) {
+    console.error('[Leave] Checklist email error:', e.message);
+  }
+}
+
+// Detect leave from emails/Teams
+async function detectLeaveFromEmails() {
+  if (!tokenStore.access_token) return;
+  try {
+    const since = new Date(Date.now()-7*24*60*60*1000).toISOString();
+    const emails = await graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$top=100&$select=subject,from,bodyPreview,receivedDateTime`);
+    const LEAVE_KEYWORDS = ['annual leave','leave request','leave application','taking leave','going on leave','out of office from','away from','leave from','leave starting','leave begins'];
+    const DATE_PATTERN = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{2,4})/gi;
+
+    const state = loadLeaveState();
+    const existingStaff = new Set((state.leaveEntries||[]).map(e=>e.staffName.toLowerCase()));
+
+    for (const email of (emails.value||[])) {
+      const subj = (email.subject||'').toLowerCase();
+      const preview = (email.bodyPreview||'').toLowerCase();
+      const combined = subj + ' ' + preview;
+      const hasLeaveKeyword = LEAVE_KEYWORDS.some(k=>combined.includes(k));
+      if (!hasLeaveKeyword) continue;
+
+      const fromName = email.from?.emailAddress?.name || '';
+      const fromAddr = email.from?.emailAddress?.address || '';
+      // Only internal R2S staff
+      if (!fromAddr.includes('risk2solution.com')) continue;
+      if (existingStaff.has(fromName.toLowerCase())) continue;
+
+      const dates = (email.subject + ' ' + email.bodyPreview).match(DATE_PATTERN);
+      if (!dates || dates.length < 1) continue;
+
+      console.log('[Leave] Possible leave detected from:', fromName, '| Subject:', email.subject, '| Dates:', dates);
+      // Flag for manual review — don't auto-create, just alert Kandia
+      await draftToKandia(
+        '🗓 Possible leave detected — ' + fromName,
+        'Hi Kandia,\n\nI detected what may be a leave request from ' + fromName + '.\n\nEmail: "' + email.subject + '"\nPreview: ' + email.bodyPreview.substring(0,200) + '\nDates mentioned: ' + (dates||[]).join(', ') + '\n\nPlease add this leave in the Leave Management panel in Cinderella if confirmed:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net\n\nCinderella',
+        true
+      );
+      // Mark as alerted
+      existingStaff.add(fromName.toLowerCase());
+    }
+  } catch(e) {
+    console.error('[Leave] Detection error:', e.message);
+  }
+}
+
+// Helper: send a leave alert email
+async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance) {
+  try {
+    const token = await getValidToken();
+    const toRecipients = toEmails.filter(Boolean).map(a=>({emailAddress:{address:a}}));
+    const ccRecipients = (ccEmails||[]).filter(Boolean).map(a=>({emailAddress:{address:a}}));
+    const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({subject, importance:importance||'high', body:{contentType:'HTML',content:htmlBody}, toRecipients, ccRecipients})
+    });
+    const msg = await draft.json();
+    if (msg.id) {
+      const send = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',{method:'POST',headers:{Authorization:'Bearer '+token}});
+      return send.status === 202;
+    }
+  } catch(e) { console.error('[Leave] Alert send error:', e.message); }
+  return false;
+}
+
+// Monitor leave entries — full escalation chain
+async function monitorLeaveEntries() {
+  if (!tokenStore.access_token) return;
+  const state = loadLeaveState();
+  const now = new Date();
+  let changed = false;
+  const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+
+  for (const entry of (state.leaveEntries||[])) {
+    if (entry.status === 'cancelled') continue;
+    const startDate = new Date(entry.startDate);
+    const endDate   = new Date(entry.endDate);
+    const trigDate  = new Date(entry.triggerDate);
+    const daysToStart  = Math.ceil((startDate - now)/(24*60*60*1000));
+    const daysToTrigger = Math.ceil((trigDate - now)/(24*60*60*1000));
+    const staffEmail = entry.staffEmail || '';
+    const coverEmail = entry.coveringEmail || '';
+    const cover = entry.coveringColleague || 'covering colleague';
+    const startStr  = startDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+    const endStr    = endDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+    const trigStr   = trigDate.toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'});
+    const pending = CHECKLIST_ITEMS.filter(i => !entry.checklist || !entry.checklist[i.id]);
+    const pctDone = Math.round((CHECKLIST_ITEMS.length - pending.length) / CHECKLIST_ITEMS.length * 100);
+    const phase1Done = entry.checklist?.phase1_signed;
+    const allSigned = entry.checklist?.phase1_signed && entry.checklist?.phase2_signed && entry.checklist?.phase3_signed;
+
+    // ── STAGE 0: Initial Kandia notification ──────────────────────
+    if (entry.status === 'detected' && !entry.notifiedKandiaAt) {
+      const html = buildLeaveEmail('kandia_notification', entry);
+      const sent = await sendLeaveAlert([kandiaEmail], [], '🗓 Leave Logged — '+entry.staffName+' ('+new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})+')', html);
+      // Also notify covering colleague they've been nominated
+      if (coverEmail && coverEmail !== kandiaEmail) {
+        const coverHtml = buildLeaveEmail('cover_nominated', entry);
+        await sendLeaveAlert([coverEmail], [kandiaEmail], '📋 You have been nominated as covering colleague for '+entry.staffName, coverHtml);
+      }
+      entry.notifiedKandiaAt = now.toISOString();
+      entry.status = 'notified';
+      changed = true;
+      console.log('[Leave] Stage 0: Kandia notified + cover colleague nominated for', entry.staffName);
+    }
+
+    // ── STAGE 1: 2-week trigger — checklist email to staff member ─
+    if (entry.status === 'notified' && daysToTrigger <= 0 && !entry.checklistSentAt) {
+      await sendLeaveChecklistEmail(entry);
+      // Send covering colleague their preparation briefing
+      if (coverEmail) {
+        const coverHtml = buildLeaveEmail('cover_briefing', entry);
+        await sendLeaveAlert([coverEmail], [kandiaEmail], '📋 Handover briefing: covering '+entry.staffName+' from '+new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short'}), coverHtml);
+      }
+      entry.checklistSentAt = now.toISOString();
+      entry.status = 'checklist_sent';
+      changed = true;
+      console.log('[Leave] Stage 1: Checklists sent for', entry.staffName);
+    }
+
+    // ── STAGE 2: 10-day check — if <50% complete ──────────────────
+    if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 10 && daysToStart > 7 && !entry.tenDayAlertAt) {
+      if (pctDone < 50) {
+        const html = buildLeaveEmail('reminder_10day', entry);
+        await sendLeaveAlert([staffEmail], [kandiaEmail], '📋 10-day check: handover checklist less than 50% complete — '+entry.staffName, html);
+        entry.tenDayAlertAt = now.toISOString();
+        changed = true;
+        console.log('[Leave] Stage 2: 10-day alert sent (', pctDone, '% complete)');
+      } else {
+        entry.tenDayAlertAt = now.toISOString(); // Mark as checked even if OK
+        changed = true;
+      }
+    }
+
+    // ── STAGE 3: 7-day reminder ───────────────────────────────────
+    if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 7 && daysToStart > 5 && !entry.sevenDayAlertAt) {
+      if (pending.length > 0) {
+        const html = buildLeaveEmail('reminder', entry);
+        await sendLeaveAlert([staffEmail], [kandiaEmail], '⚠ 7-day reminder: leave handover items still outstanding — '+entry.staffName, html);
+      }
+      entry.sevenDayAlertAt = now.toISOString();
+      changed = true;
+      console.log('[Leave] Stage 3: 7-day alert, pending:', pending.length);
+    }
+
+    // ── STAGE 4: 5-day escalation to Kandia if Phase 1 not signed ─
+    if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 5 && daysToStart > 3 && !entry.fiveDayAlertAt) {
+      if (!phase1Done) {
+        const html = buildLeaveEmail('escalation_5day', entry);
+        await sendLeaveAlert([kandiaEmail], [], '🔴 ESCALATION: Leave handover Phase 1 not signed — '+entry.staffName+' leaves in 5 days', html);
+      }
+      entry.fiveDayAlertAt = now.toISOString();
+      changed = true;
+      console.log('[Leave] Stage 4: 5-day escalation, phase1 signed:', !!phase1Done);
+    }
+
+    // ── STAGE 5: 3-day final warning ─────────────────────────────
+    if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 3 && daysToStart > 1 && !entry.threeDayAlertAt) {
+      if (!allSigned) {
+        const html = buildLeaveEmail('final_warning', entry);
+        await sendLeaveAlert([staffEmail, coverEmail], [kandiaEmail], '🔴 FINAL WARNING: Handover must be complete before leave — '+entry.staffName+' leaves in '+daysToStart+' days', html);
+      }
+      // Send covering colleague their pre-leave briefing regardless
+      if (coverEmail) {
+        const html = buildLeaveEmail('cover_3day', entry);
+        await sendLeaveAlert([coverEmail], [kandiaEmail], '📋 3 days to go: final preparation for covering '+entry.staffName, html);
+      }
+      entry.threeDayAlertAt = now.toISOString();
+      changed = true;
+      console.log('[Leave] Stage 5: 3-day final warning sent');
+    }
+
+    // ── STAGE 6: 1-day before — full briefing to covering colleague
+    if (['checklist_sent','in_progress','approved'].includes(entry.status) && daysToStart === 1 && !entry.oneDayAlertAt) {
+      if (coverEmail) {
+        const html = buildLeaveEmail('cover_day_before', entry);
+        await sendLeaveAlert([coverEmail], [kandiaEmail], '📋 Tomorrow: '+entry.staffName+' starts leave — your coverage begins', html);
+      }
+      entry.oneDayAlertAt = now.toISOString();
+      changed = true;
+      console.log('[Leave] Stage 6: 1-day briefing sent to cover colleague');
+    }
+
+    // ── STAGE 7: Leave starts — activation email to covering colleague
+    if (!['on_leave','returned','cancelled'].includes(entry.status) && daysToStart <= 0 && daysToStart > -1 && !entry.activationSentAt) {
+      entry.status = 'on_leave';
+      if (coverEmail) {
+        const html = buildLeaveEmail('cover_activation', entry);
+        await sendLeaveAlert([coverEmail], [kandiaEmail], '🟡 ACTIVE: '+entry.staffName+' is now on leave — you are covering from today', html);
+      }
+      entry.activationSentAt = now.toISOString();
+      changed = true;
+      console.log('[Leave] Stage 7: Leave started, cover activation sent');
+    }
+
+    // ── STAGE 8: Mid-leave check-in (after 5 working days) ────────
+    if (entry.status === 'on_leave' && !entry.midLeaveCheckAt) {
+      const daysIn = Math.abs(daysToStart);
+      if (daysIn >= 5) {
+        const html = buildLeaveEmail('mid_leave_checkin', entry);
+        await sendLeaveAlert([kandiaEmail], coverEmail?[coverEmail]:[], '📋 Mid-leave check: '+entry.staffName+' — coverage going OK?', html);
+        entry.midLeaveCheckAt = now.toISOString();
+        changed = true;
+        console.log('[Leave] Stage 8: Mid-leave check-in sent');
+      }
+    }
+
+    // ── STAGE 9: Return day — handback prompt ─────────────────────
+    if (entry.status === 'on_leave' && now >= endDate && now < new Date(endDate.getTime() + 24*60*60*1000) && !entry.returnAlertAt) {
+      const html = buildLeaveEmail('return_day', entry);
+      await sendLeaveAlert([staffEmail, coverEmail], [kandiaEmail], '✅ Welcome back: '+entry.staffName+' — handback process', html);
+      entry.returnAlertAt = now.toISOString();
+      entry.status = 'returned';
+      changed = true;
+      console.log('[Leave] Stage 9: Return day handback sent');
+    }
+
+    // Final returned status
+    if (entry.status === 'on_leave' && now > new Date(endDate.getTime() + 24*60*60*1000)) {
+      entry.status = 'returned';
+      changed = true;
+    }
+  }
+
+  if (changed) saveLeaveState(state);
+}
+
+// ── LEAVE API ENDPOINTS ──
+
+app.get('/leave', requireAuth, (req, res) => {
+  const state = loadLeaveState();
+  res.json(state.leaveEntries || []);
+});
+
+app.post('/leave', requireAuth, async (req, res) => {
+  try {
+    const { staffName, staffEmail, startDate, endDate, coveringColleague, coveringEmail } = req.body;
+    if (!staffName || !startDate || !endDate) return res.status(400).json({error:'staffName, startDate, endDate required'});
+    const start = new Date(startDate);
+    const triggerDate = new Date(start.getTime() - 14*24*60*60*1000); // 2 weeks before
+    const entry = {
+      id: 'leave_' + Date.now(),
+      staffName, staffEmail: staffEmail || '',
+      startDate, endDate,
+      coveringColleague: coveringColleague || '',
+      coveringEmail: coveringEmail || '',
+      triggerDate: triggerDate.toISOString().substring(0,10),
+      status: 'detected',
+      checklist: {},
+      createdAt: new Date().toISOString(),
+      notifiedKandiaAt: null,
+      checklistSentAt: null,
+      sevenDayAlertAt: null,
+      notes: req.body.notes || ''
+    };
+    const state = loadLeaveState();
+    if (!state.leaveEntries) state.leaveEntries = [];
+    state.leaveEntries.push(entry);
+    saveLeaveState(state);
+    // Trigger notification immediately
+    setTimeout(() => monitorLeaveEntries(), 500);
+    res.json({success:true, entry});
+  } catch(e) {
+    res.status(500).json({error:e.message});
+  }
+});
+
+app.put('/leave/:id', requireAuth, (req, res) => {
+  try {
+    const state = loadLeaveState();
+    const idx = (state.leaveEntries||[]).findIndex(e=>e.id===req.params.id);
+    if (idx < 0) return res.status(404).json({error:'Not found'});
+    Object.assign(state.leaveEntries[idx], req.body);
+    // Recalculate trigger if dates changed
+    if (req.body.startDate) {
+      const start = new Date(req.body.startDate);
+      state.leaveEntries[idx].triggerDate = new Date(start.getTime()-14*24*60*60*1000).toISOString().substring(0,10);
+    }
+    saveLeaveState(state);
+    res.json({success:true, entry:state.leaveEntries[idx]});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+app.delete('/leave/:id', requireAuth, (req, res) => {
+  const state = loadLeaveState();
+  state.leaveEntries = (state.leaveEntries||[]).filter(e=>e.id!==req.params.id);
+  saveLeaveState(state);
+  res.json({success:true});
+});
+
+app.put('/leave/:id/checklist', requireAuth, (req, res) => {
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    if (!entry.checklist) entry.checklist = {};
+    Object.assign(entry.checklist, req.body);
+    // Update status based on completion
+    const totalItems = CHECKLIST_ITEMS.filter(i=>i.id!=='phase1_signed'&&i.id!=='phase2_signed'&&i.id!=='phase3_signed').length;
+    const completedItems = CHECKLIST_ITEMS.filter(i=>i.id!=='phase1_signed'&&i.id!=='phase2_signed'&&i.id!=='phase3_signed'&&entry.checklist[i.id]).length;
+    if (entry.checklist.phase3_signed) entry.status = 'approved';
+    else if (completedItems > 0) entry.status = 'in_progress';
+    saveLeaveState(state);
+    res.json({success:true, checklist:entry.checklist, status:entry.status, progress:{completed:completedItems,total:totalItems}});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+app.post('/leave/:id/send-checklist', requireAuth, async (req, res) => {
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    await sendLeaveChecklistEmail(entry);
+    entry.checklistSentAt = new Date().toISOString();
+    saveLeaveState(state);
+    res.json({success:true});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
 // ── THINK LOOP ──
 async function think() {
   if (isRunning) return;
@@ -4549,6 +5267,9 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
 
     // Daily compliance check
     await checkComplianceDeadlines();
+
+    // Leave management monitoring
+    await monitorLeaveEntries();
   } catch (err) {
     console.error("❌ Error:", err.message);
   } finally {
