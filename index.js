@@ -4574,7 +4574,37 @@ function buildLeaveEmail(type, entry) {
   const doneList = completedItems.map(i=>`<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#0D8A62;padding:3px 0">&#10003;&nbsp;&nbsp;${i.label}</td></tr>`).join('');
   const daysLeft = Math.ceil((new Date(entry.startDate) - new Date()) / (24*60*60*1000));
 
-  // Covering colleague: nominated
+  // Covering colleague: combined nomination + briefing (sent at 2-week trigger — ONE email)
+  if (type === 'cover_nominated_briefing') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 You are covering ${staff} — nomination &amp; handover briefing</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">You have been nominated to cover <strong>${staff}</strong> during their upcoming leave. The handover process has now started — please read this email carefully and action the steps below.</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">What you need to do in the next two weeks</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">1.&nbsp;&nbsp;Review the handover checklist attached to this email</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">2.&nbsp;&nbsp;When ${staff} sends you the handover document, review it thoroughly before meeting</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">3.&nbsp;&nbsp;Arrange and attend a 15-20 minute handover discussion with ${staff} <strong>before ${trigger}</strong></td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">4.&nbsp;&nbsp;Test that you can access all SharePoint folders and shared drives</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">5.&nbsp;&nbsp;Raise any gaps or concerns with ${staff} while they are still available</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">6.&nbsp;&nbsp;Sign Phase 2 of the handover checklist once you are satisfied</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">7.&nbsp;&nbsp;Contact Kandia immediately if you have capacity concerns or anything falls outside your scope</td></tr>
+      </table>
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">What to expect going forward</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>3 days before leave:</strong> Final preparation reminder from Cinderella</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Day before leave:</strong> Full briefing with everything you need to cover</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Day leave starts:</strong> Activation email confirming you are now covering</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Mid-leave:</strong> Check-in from Cinderella to make sure coverage is going well</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Return day:</strong> Handback prompt so nothing falls through the cracks</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666;line-height:1.5;">The updated handover checklist is attached as an Excel file showing current progress. Please confirm with Kandia that you are able to cover during this period. Do not hesitate to contact Kandia if you have any concerns.</p>
+    </td></tr>` + footer;
+  }
+
+  // Covering colleague: nominated (kept for backwards compat — now replaced by cover_nominated_briefing)
   if (type === 'cover_nominated') {
     return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
       <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 You have been nominated as covering colleague</p>
@@ -4736,59 +4766,128 @@ function buildLeaveEmail(type, entry) {
   return header + `<tr><td style="padding:20px 28px;"><p style="font-family:Arial,sans-serif">Leave notification for ${staff}</p></td></tr>` + footer;
 }
 
-// Generate Excel checklist using xlsx
+// Generate Excel checklist — dynamic with completion status, overdue flags, issues
 async function generateLeaveChecklistXlsx(entry) {
   const XLSX = require('xlsx');
+  const now = new Date();
   const staff = entry.staffName;
-  const cover = entry.coveringColleague || '';
+  const cover = entry.coveringColleague || 'To be confirmed';
   const startDate = new Date(entry.startDate).toLocaleDateString('en-AU');
-  const endDate = new Date(entry.endDate).toLocaleDateString('en-AU');
+  const endDate   = new Date(entry.endDate).toLocaleDateString('en-AU');
   const triggerDate = new Date(entry.triggerDate).toLocaleDateString('en-AU');
+  const isPastTrigger = now > new Date(entry.triggerDate);
+  const daysToStart = Math.ceil((new Date(entry.startDate) - now) / (24*60*60*1000));
 
-  const wb = XLSX.utils.book_new();
-  const rows = [
-    ['RISK 2 SOLUTION — STAFF LEAVE HANDOVER CHECKLIST','','',''],
-    ['To be completed no later than two weeks before the leave start date','','',''],
-    [''],
-    ['Staff Member Going on Leave', staff, '', ''],
-    ['Position', '', '', ''],
-    ['Leave Start Date', startDate, '', ''],
-    ['Leave End Date', endDate, '', ''],
-    ['Covering Colleague', cover, '', ''],
-    ['Manager', 'Kandia Du Bruyn', '', ''],
-    ['Handover Due Date (2 weeks before)', triggerDate, '', ''],
-    [''],
-    ['SECTION', 'CHECKLIST ITEM', 'COMPLETE?', 'NOTES'],
-    ['1. Contacts & Access', 'Key contacts listed for each active project/relationship (name, role, contact details)', entry.checklist?.contacts?'YES':'', ''],
-    ['1. Contacts & Access', 'Instructions provided for covering colleague to obtain system/drive/account access', entry.checklist?.access?'YES':'', ''],
-    ['1. Contacts & Access', 'External parties notified of absence and redirected to correct contact', entry.checklist?.external?'YES':'', ''],
-    ['2. Current State of Work', 'Status update prepared for each active project/task', entry.checklist?.status?'YES':'', ''],
-    ['2. Current State of Work', 'Deadlines and deliverables due during absence identified and dated', entry.checklist?.deadlines?'YES':'', ''],
-    ['2. Current State of Work', 'Items that could stall identified (pending approvals, awaited decisions)', entry.checklist?.stalling?'YES':'', ''],
-    ['3. Resources & Links', 'SharePoint links added (master folder, client folder, templates, correspondence)', entry.checklist?.sharepoint?'YES':'', ''],
-    ['3. Resources & Links', 'All SharePoint links tested and accessible by covering colleague', entry.checklist?.sp_verified?'YES':'', ''],
-    ['3. Resources & Links', 'Master Project Folder link:', '', ''],
-    ['3. Resources & Links', 'Client/Account Folder link:', '', ''],
-    ['3. Resources & Links', 'Templates and Precedents link:', '', ''],
-    ['3. Resources & Links', 'Correspondence/Email Archive link:', '', ''],
-    ['4. Decisions & Judgement', 'Matters needing a decision identified with recommendation or decision boundaries', entry.checklist?.decisions?'YES':'', ''],
-    ['4. Decisions & Judgement', 'Known risks and sensitivities noted (difficult client, sensitive matter)', entry.checklist?.risks?'YES':'', ''],
-    ['5. Handover Discussion', 'Handover discussion held with covering colleague (not just document sent)', entry.checklist?.discussion?'YES':'', ''],
-    ['5. Handover Discussion', 'Covering colleague understands expectations and escalation path', entry.checklist?.understood?'YES':'', ''],
-    ['5. Handover Discussion', 'Emergency contact method agreed (business critical work only)', entry.checklist?.emergency?'YES':'', ''],
-    [''],
-    ['SIGN OFF — ALL THREE PHASES REQUIRED BEFORE LEAVE IS APPROVED','','',''],
-    ['Phase 1: Staff Member Going on Leave','Name:', staff,'Date:'],
-    ['Phase 1: Staff Member Going on Leave','Signed:', entry.checklist?.phase1_signed?'SIGNED':'PENDING',''],
-    ['Phase 2: Covering Colleague','Name:', cover,'Date:'],
-    ['Phase 2: Covering Colleague','Signed:', entry.checklist?.phase2_signed?'SIGNED':'PENDING',''],
-    ['Phase 3: Manager (Kandia Du Bruyn)','Name:', 'Kandia Du Bruyn','Date:'],
-    ['Phase 3: Manager (Kandia Du Bruyn)','Signed:', entry.checklist?.phase3_signed?'SIGNED':'PENDING',''],
+  const checkItems = [
+    {section:'1. Contacts & Access',    id:'contacts',    label:'Key contacts listed for each active project/relationship (name, role, contact details)'},
+    {section:'1. Contacts & Access',    id:'access',      label:'Instructions for covering colleague to obtain system/drive/account access'},
+    {section:'1. Contacts & Access',    id:'external',    label:'External parties notified of absence and redirected to correct contact'},
+    {section:'2. Current State of Work',id:'status',      label:'Status update prepared for each active project/task'},
+    {section:'2. Current State of Work',id:'deadlines',   label:'Deadlines and deliverables due during absence identified and dated'},
+    {section:'2. Current State of Work',id:'stalling',    label:'Items that could stall identified (pending approvals, awaited decisions)'},
+    {section:'3. Resources & Links',    id:'sharepoint',  label:'SharePoint links added (master folder, client folder, templates, correspondence)'},
+    {section:'3. Resources & Links',    id:'sp_verified', label:'All SharePoint links tested and accessible by covering colleague'},
+    {section:'4. Decisions & Judgement',id:'decisions',   label:'Matters needing a decision identified with recommendation or decision boundaries'},
+    {section:'4. Decisions & Judgement',id:'risks',       label:'Known risks and sensitivities noted (difficult client, sensitive matters)'},
+    {section:'5. Handover Discussion',  id:'discussion',  label:'Handover discussion held with covering colleague (not just document sent)'},
+    {section:'5. Handover Discussion',  id:'understood',  label:'Covering colleague confirms understanding and escalation path'},
+    {section:'5. Handover Discussion',  id:'emergency',   label:'Emergency contact method agreed (business critical only)'},
   ];
 
-  const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:30},{wch:60},{wch:12},{wch:30}];
-  XLSX.utils.book_append_sheet(wb, ws, 'Handover Checklist');
+  const completed = checkItems.filter(i => entry.checklist && entry.checklist[i.id]);
+  const pending   = checkItems.filter(i => !entry.checklist || !entry.checklist[i.id]);
+  const overdue   = isPastTrigger ? pending : [];
+  const issues    = [];
+  if (daysToStart <= 5 && !entry.checklist?.phase1_signed) issues.push('🔴 CRITICAL: Phase 1 not signed — leave starts in '+daysToStart+' days');
+  if (daysToStart <= 3 && !entry.checklist?.phase2_signed) issues.push('🔴 CRITICAL: Phase 2 not signed — covering colleague has not confirmed');
+  if (overdue.length > 0) issues.push('⚠ '+overdue.length+' checklist items past due date (trigger was '+triggerDate+')');
+  if (!cover || cover === 'To be confirmed') issues.push('⚠ No covering colleague assigned');
+
+  const wb = XLSX.utils.book_new();
+
+  // ── SUMMARY SHEET ──────────────────────────────────────────
+  const summaryRows = [
+    ['RISK 2 SOLUTION — LEAVE HANDOVER SUMMARY','',''],
+    ['Generated:', new Date().toLocaleString('en-AU',{timeZone:'Australia/Brisbane'}),''],
+    [''],
+    ['STAFF MEMBER', staff,''],
+    ['LEAVE DATES', startDate + ' to ' + endDate,''],
+    ['COVERING COLLEAGUE(S)', cover,''],
+    ['TRIGGER DATE (due by)', triggerDate, isPastTrigger ? '⚠ PAST DUE' : 'OK'],
+    ['DAYS UNTIL LEAVE', daysToStart > 0 ? daysToStart+' days' : 'LEAVE HAS STARTED',''],
+    [''],
+    ['PROGRESS SUMMARY','',''],
+    ['Total checklist items', checkItems.length,''],
+    ['✅ Completed', completed.length,''],
+    ['⏳ Outstanding', pending.length,''],
+    ['🔴 Overdue (past trigger date)', overdue.length,''],
+    [''],
+    ['SIGN-OFF STATUS','',''],
+    ['Phase 1 — Staff member signed', entry.checklist?.phase1_signed ? '✅ SIGNED' : (daysToStart<=5?'🔴 OVERDUE':'⏳ PENDING'),''],
+    ['Phase 2 — Covering colleague signed', entry.checklist?.phase2_signed ? '✅ SIGNED' : (daysToStart<=3?'🔴 OVERDUE':'⏳ PENDING'),''],
+    ['Phase 3 — Kandia Du Bruyn signed', entry.checklist?.phase3_signed ? '✅ APPROVED' : '⏳ PENDING',''],
+    ['LEAVE APPROVED?', (entry.checklist?.phase1_signed && entry.checklist?.phase2_signed && entry.checklist?.phase3_signed) ? '✅ YES — ALL PHASES COMPLETE' : '🔴 NO — PENDING SIGN-OFF',''],
+  ];
+  if (issues.length > 0) {
+    summaryRows.push(['']);
+    summaryRows.push(['⚠ ISSUES REQUIRING ATTENTION','','']);
+    issues.forEach(issue => summaryRows.push([issue,'','']));
+  }
+
+  const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+  wsSummary['!cols'] = [{wch:35},{wch:45},{wch:20}];
+  XLSX.utils.book_append_sheet(wb, wsSummary, '📊 Summary');
+
+  // ── CHECKLIST SHEET ────────────────────────────────────────
+  const clRows = [
+    ['RISK 2 SOLUTION — STAFF LEAVE HANDOVER CHECKLIST','','','',''],
+    ['To be completed no later than two weeks before leave start date','','','',''],
+    [''],
+    ['Staff Member', staff, '', 'Trigger Date', triggerDate],
+    ['Covering Colleague', cover, '', 'Leave Starts', startDate],
+    ['Manager', 'Kandia Du Bruyn', '', 'Leave Ends', endDate],
+    [''],
+    ['SECTION','CHECKLIST ITEM','STATUS','NOTES',''],
+  ];
+
+  let lastSection = '';
+  checkItems.forEach(item => {
+    const done = entry.checklist && entry.checklist[item.id];
+    const isOverdue = !done && isPastTrigger;
+    const status = done ? '✅ COMPLETE' : isOverdue ? '🔴 OVERDUE' : '⏳ OUTSTANDING';
+    if (item.section !== lastSection) {
+      clRows.push(['','','','','']);
+      clRows.push([item.section,'','','','']);
+      lastSection = item.section;
+    }
+    clRows.push(['', item.label, status,'','']);
+  });
+
+  clRows.push(['']);
+  clRows.push(['RESOURCES & SHAREPOINT LINKS','','','','']);
+  clRows.push(['Master Project Folder','[Insert link]','','','']);
+  clRows.push(['Client/Account Folder','[Insert link]','','','']);
+  clRows.push(['Templates & Precedents','[Insert link]','','','']);
+  clRows.push(['Correspondence/Email Archive','[Insert link]','','','']);
+  clRows.push(['Other Relevant Folder','[Insert link]','','','']);
+  clRows.push(['All links tested by covering colleague?', entry.checklist?.sp_verified?'✅ YES':'⏳ NOT YET','','','']);
+
+  clRows.push(['']);
+  clRows.push(['SIGN-OFF — ALL THREE PHASES REQUIRED BEFORE LEAVE IS APPROVED','','','','']);
+  clRows.push(['Phase 1: Staff Member','Signed by:', staff, 'Status:', entry.checklist?.phase1_signed?'✅ SIGNED':(daysToStart<=5?'🔴 OVERDUE':'⏳ PENDING')]);
+  clRows.push(['Phase 2: Covering Colleague','Signed by:', cover, 'Status:', entry.checklist?.phase2_signed?'✅ SIGNED':(daysToStart<=3?'🔴 OVERDUE':'⏳ PENDING')]);
+  clRows.push(['Phase 3: Manager (Kandia Du Bruyn)','Signed by:', 'Kandia Du Bruyn', 'Status:', entry.checklist?.phase3_signed?'✅ APPROVED':'⏳ PENDING']);
+
+  if (issues.length > 0) {
+    clRows.push(['']);
+    clRows.push(['⚠ ISSUES FLAGGED BY CINDERELLA','','','','']);
+    issues.forEach(issue => clRows.push([issue,'','','','']));
+  }
+
+  const wsChecklist = XLSX.utils.aoa_to_sheet(clRows);
+  wsChecklist['!cols'] = [{wch:32},{wch:60},{wch:16},{wch:25},{wch:16}];
+  XLSX.utils.book_append_sheet(wb, wsChecklist, '📋 Checklist');
+
   const buf = XLSX.write(wb, {type:'buffer', bookType:'xlsx'});
   const path = '/home/leave-checklist-' + entry.id + '.xlsx';
   require('fs').writeFileSync(path, buf);
@@ -4901,15 +5000,29 @@ async function detectLeaveFromEmails() {
   }
 }
 
-// Helper: send a leave alert email
-async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance) {
+// Helper: send a leave alert email with optional Excel checklist attachment
+async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance, entry) {
   try {
     const token = await getValidToken();
     const toRecipients = toEmails.filter(Boolean).map(a=>({emailAddress:{address:a}}));
     const ccRecipients = (ccEmails||[]).filter(Boolean).map(a=>({emailAddress:{address:a}}));
+    const payload = {subject, importance:importance||'high', body:{contentType:'HTML',content:htmlBody}, toRecipients, ccRecipients};
+    // Attach updated Excel checklist if entry provided
+    if (entry) {
+      try {
+        const xlsxPath = await generateLeaveChecklistXlsx(entry);
+        const xlsxBuf = require('fs').readFileSync(xlsxPath);
+        payload.attachments = [{
+          '@odata.type': '#microsoft.graph.fileAttachment',
+          name: 'Leave_Handover_Checklist_' + entry.staffName.replace(/\s+/g,'_') + '.xlsx',
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          contentBytes: xlsxBuf.toString('base64')
+        }];
+      } catch(xlErr) { console.warn('[Leave] Excel attach error:', xlErr.message); }
+    }
     const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
       method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
-      body:JSON.stringify({subject, importance:importance||'high', body:{contentType:'HTML',content:htmlBody}, toRecipients, ccRecipients})
+      body:JSON.stringify(payload)
     });
     const msg = await draft.json();
     if (msg.id) {
@@ -4948,32 +5061,36 @@ async function monitorLeaveEntries() {
 
     // ── STAGE 0: Initial Kandia notification ──────────────────────
     if (entry.status === 'detected' && !entry.notifiedKandiaAt) {
+      // Mark BEFORE sending to prevent duplicate sends on concurrent cycles
+      entry.notifiedKandiaAt = now.toISOString();
+      entry.status = 'notified';
+      changed = true;
+      saveLeaveState(state);
       const html = buildLeaveEmail('kandia_notification', entry);
-      const sent = await sendLeaveAlert([kandiaEmail], [], '🗓 Leave Logged — '+entry.staffName+' ('+new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})+')', html);
+      const sent = await sendLeaveAlert([kandiaEmail], [], '🗓 Leave Logged — '+entry.staffName+' ('+new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})+')', html, entry);
       // Also notify covering colleague they've been nominated
       const allCoverEmails0 = entry.coveringEmails && entry.coveringEmails.length > 0 ? entry.coveringEmails : (coverEmail ? [coverEmail] : []);
       for (const cEm of allCoverEmails0.filter(e=>e&&e!==kandiaEmail)) {
         const coverHtml = buildLeaveEmail('cover_nominated', entry);
         await sendLeaveAlert([cEm], [kandiaEmail], '📋 You have been nominated as covering colleague for '+entry.staffName, coverHtml);
       }
-      entry.notifiedKandiaAt = now.toISOString();
-      entry.status = 'notified';
-      changed = true;
       console.log('[Leave] Stage 0: Kandia notified + cover colleague nominated for', entry.staffName);
     }
 
     // ── STAGE 1: 2-week trigger — checklist email to staff member ─
     if (entry.status === 'notified' && daysToTrigger <= 0 && !entry.checklistSentAt) {
+      // Mark BEFORE sending to prevent race condition duplicates
+      entry.checklistSentAt = now.toISOString();
+      entry.status = 'checklist_sent';
+      changed = true;
+      saveLeaveState(state);
       await sendLeaveChecklistEmail(entry);
-      // Send covering colleague their preparation briefing
+      // Send ONE combined email to cover colleague(s) — nomination + briefing together
       const allCoverEmails1 = entry.coveringEmails && entry.coveringEmails.length > 0 ? entry.coveringEmails : (coverEmail ? [coverEmail] : []);
       if (allCoverEmails1.length > 0) {
         const coverHtml = buildLeaveEmail('cover_briefing', entry);
         await sendLeaveAlert(allCoverEmails1, [kandiaEmail], '📋 Handover briefing: covering '+entry.staffName+' from '+new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short'}), coverHtml);
       }
-      entry.checklistSentAt = now.toISOString();
-      entry.status = 'checklist_sent';
-      changed = true;
       console.log('[Leave] Stage 1: Checklists sent for', entry.staffName);
     }
 
@@ -4981,9 +5098,10 @@ async function monitorLeaveEntries() {
     if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 10 && daysToStart > 7 && !entry.tenDayAlertAt) {
       if (pctDone < 50) {
         const html = buildLeaveEmail('reminder_10day', entry);
-        await sendLeaveAlert([staffEmail], [kandiaEmail], '📋 10-day check: handover checklist less than 50% complete — '+entry.staffName, html);
+        await sendLeaveAlert([staffEmail], [kandiaEmail], '📋 10-day check: handover checklist less than 50% complete — '+entry.staffName, html, entry);
         entry.tenDayAlertAt = now.toISOString();
         changed = true;
+        saveLeaveState(state); // Prevent race condition
         console.log('[Leave] Stage 2: 10-day alert sent (', pctDone, '% complete)');
       } else {
         entry.tenDayAlertAt = now.toISOString(); // Mark as checked even if OK
@@ -4995,10 +5113,11 @@ async function monitorLeaveEntries() {
     if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 7 && daysToStart > 5 && !entry.sevenDayAlertAt) {
       if (pending.length > 0) {
         const html = buildLeaveEmail('reminder', entry);
-        await sendLeaveAlert([staffEmail], [kandiaEmail], '⚠ 7-day reminder: leave handover items still outstanding — '+entry.staffName, html);
+        await sendLeaveAlert([staffEmail], [kandiaEmail], '⚠ 7-day reminder: leave handover items still outstanding — '+entry.staffName, html, entry);
       }
       entry.sevenDayAlertAt = now.toISOString();
       changed = true;
+      saveLeaveState(state);
       console.log('[Leave] Stage 3: 7-day alert, pending:', pending.length);
     }
 
@@ -5006,7 +5125,7 @@ async function monitorLeaveEntries() {
     if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 5 && daysToStart > 3 && !entry.fiveDayAlertAt) {
       if (!phase1Done) {
         const html = buildLeaveEmail('escalation_5day', entry);
-        await sendLeaveAlert([kandiaEmail], [], '🔴 ESCALATION: Leave handover Phase 1 not signed — '+entry.staffName+' leaves in 5 days', html);
+        await sendLeaveAlert([kandiaEmail], [], '🔴 ESCALATION: Leave handover Phase 1 not signed — '+entry.staffName+' leaves in 5 days', html, entry);
       }
       entry.fiveDayAlertAt = now.toISOString();
       changed = true;
@@ -5017,13 +5136,13 @@ async function monitorLeaveEntries() {
     if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 3 && daysToStart > 1 && !entry.threeDayAlertAt) {
       if (!allSigned) {
         const html = buildLeaveEmail('final_warning', entry);
-        await sendLeaveAlert([staffEmail, coverEmail], [kandiaEmail], '🔴 FINAL WARNING: Handover must be complete before leave — '+entry.staffName+' leaves in '+daysToStart+' days', html);
+        await sendLeaveAlert([staffEmail, coverEmail], [kandiaEmail], '🔴 FINAL WARNING: Handover must be complete before leave — '+entry.staffName+' leaves in '+daysToStart+' days', html, entry);
       }
       // Send covering colleague their pre-leave briefing regardless
       const allCE3 = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
       if (allCE3.length > 0) {
         const html = buildLeaveEmail('cover_3day', entry);
-        await sendLeaveAlert(allCE3, [kandiaEmail], '📋 3 days to go: final preparation for covering '+entry.staffName, html);
+        await sendLeaveAlert(allCE3, [kandiaEmail], '📋 3 days to go: final preparation for covering '+entry.staffName, html, entry);
       }
       entry.threeDayAlertAt = now.toISOString();
       changed = true;
@@ -5035,7 +5154,7 @@ async function monitorLeaveEntries() {
       const allCE1 = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
       if (allCE1.length > 0) {
         const html = buildLeaveEmail('cover_day_before', entry);
-        await sendLeaveAlert(allCE1, [kandiaEmail], '📋 Tomorrow: '+entry.staffName+' starts leave — your coverage begins', html);
+        await sendLeaveAlert(allCE1, [kandiaEmail], '📋 Tomorrow: '+entry.staffName+' starts leave — your coverage begins', html, entry);
       }
       entry.oneDayAlertAt = now.toISOString();
       changed = true;
@@ -5048,7 +5167,7 @@ async function monitorLeaveEntries() {
       const allCEA = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
       if (allCEA.length > 0) {
         const html = buildLeaveEmail('cover_activation', entry);
-        await sendLeaveAlert(allCEA, [kandiaEmail], '🟡 ACTIVE: '+entry.staffName+' is now on leave — you are covering from today', html);
+        await sendLeaveAlert(allCEA, [kandiaEmail], '🟡 ACTIVE: '+entry.staffName+' is now on leave — you are covering from today', html, entry);
       }
       entry.activationSentAt = now.toISOString();
       changed = true;
@@ -5061,9 +5180,10 @@ async function monitorLeaveEntries() {
       if (daysIn >= 5) {
         const html = buildLeaveEmail('mid_leave_checkin', entry);
         const allCEM = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
-        await sendLeaveAlert([kandiaEmail], allCEM, '📋 Mid-leave check: '+entry.staffName+' — coverage going OK?', html);
+        await sendLeaveAlert([kandiaEmail], allCEM, '📋 Mid-leave check: '+entry.staffName+' — coverage going OK?', html, entry);
         entry.midLeaveCheckAt = now.toISOString();
         changed = true;
+        saveLeaveState(state);
         console.log('[Leave] Stage 8: Mid-leave check-in sent');
       }
     }
@@ -5072,7 +5192,7 @@ async function monitorLeaveEntries() {
     if (entry.status === 'on_leave' && now >= endDate && now < new Date(endDate.getTime() + 24*60*60*1000) && !entry.returnAlertAt) {
       const html = buildLeaveEmail('return_day', entry);
       const allCER = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
-        await sendLeaveAlert([staffEmail,...allCER], [kandiaEmail], '✅ Welcome back: '+entry.staffName+' — handback process', html);
+        await sendLeaveAlert([staffEmail,...allCER], [kandiaEmail], '✅ Welcome back: '+entry.staffName+' — handback process', html, entry);
       entry.returnAlertAt = now.toISOString();
       entry.status = 'returned';
       changed = true;
