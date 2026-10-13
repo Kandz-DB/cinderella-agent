@@ -4819,9 +4819,15 @@ async function sendLeaveChecklistEmail(entry) {
     const ccRecipients = [
       { emailAddress: { address: kandiaEmail } }
     ];
-    if (coverEmail && coverEmail !== kandiaEmail) {
-      ccRecipients.push({ emailAddress: { address: coverEmail } });
-    }
+    // CC all covering colleagues
+    const allCoverEmails = entry.coveringEmails && entry.coveringEmails.length > 0
+      ? entry.coveringEmails
+      : coverEmail ? [coverEmail] : [];
+    allCoverEmails.forEach(em => {
+      if (em && em !== kandiaEmail && em !== staffEmail) {
+        ccRecipients.push({ emailAddress: { address: em } });
+      }
+    });
 
     const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
       method:'POST',
@@ -4945,9 +4951,10 @@ async function monitorLeaveEntries() {
       const html = buildLeaveEmail('kandia_notification', entry);
       const sent = await sendLeaveAlert([kandiaEmail], [], '🗓 Leave Logged — '+entry.staffName+' ('+new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})+')', html);
       // Also notify covering colleague they've been nominated
-      if (coverEmail && coverEmail !== kandiaEmail) {
+      const allCoverEmails0 = entry.coveringEmails && entry.coveringEmails.length > 0 ? entry.coveringEmails : (coverEmail ? [coverEmail] : []);
+      for (const cEm of allCoverEmails0.filter(e=>e&&e!==kandiaEmail)) {
         const coverHtml = buildLeaveEmail('cover_nominated', entry);
-        await sendLeaveAlert([coverEmail], [kandiaEmail], '📋 You have been nominated as covering colleague for '+entry.staffName, coverHtml);
+        await sendLeaveAlert([cEm], [kandiaEmail], '📋 You have been nominated as covering colleague for '+entry.staffName, coverHtml);
       }
       entry.notifiedKandiaAt = now.toISOString();
       entry.status = 'notified';
@@ -4959,9 +4966,10 @@ async function monitorLeaveEntries() {
     if (entry.status === 'notified' && daysToTrigger <= 0 && !entry.checklistSentAt) {
       await sendLeaveChecklistEmail(entry);
       // Send covering colleague their preparation briefing
-      if (coverEmail) {
+      const allCoverEmails1 = entry.coveringEmails && entry.coveringEmails.length > 0 ? entry.coveringEmails : (coverEmail ? [coverEmail] : []);
+      if (allCoverEmails1.length > 0) {
         const coverHtml = buildLeaveEmail('cover_briefing', entry);
-        await sendLeaveAlert([coverEmail], [kandiaEmail], '📋 Handover briefing: covering '+entry.staffName+' from '+new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short'}), coverHtml);
+        await sendLeaveAlert(allCoverEmails1, [kandiaEmail], '📋 Handover briefing: covering '+entry.staffName+' from '+new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short'}), coverHtml);
       }
       entry.checklistSentAt = now.toISOString();
       entry.status = 'checklist_sent';
@@ -5012,9 +5020,10 @@ async function monitorLeaveEntries() {
         await sendLeaveAlert([staffEmail, coverEmail], [kandiaEmail], '🔴 FINAL WARNING: Handover must be complete before leave — '+entry.staffName+' leaves in '+daysToStart+' days', html);
       }
       // Send covering colleague their pre-leave briefing regardless
-      if (coverEmail) {
+      const allCE3 = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
+      if (allCE3.length > 0) {
         const html = buildLeaveEmail('cover_3day', entry);
-        await sendLeaveAlert([coverEmail], [kandiaEmail], '📋 3 days to go: final preparation for covering '+entry.staffName, html);
+        await sendLeaveAlert(allCE3, [kandiaEmail], '📋 3 days to go: final preparation for covering '+entry.staffName, html);
       }
       entry.threeDayAlertAt = now.toISOString();
       changed = true;
@@ -5023,9 +5032,10 @@ async function monitorLeaveEntries() {
 
     // ── STAGE 6: 1-day before — full briefing to covering colleague
     if (['checklist_sent','in_progress','approved'].includes(entry.status) && daysToStart === 1 && !entry.oneDayAlertAt) {
-      if (coverEmail) {
+      const allCE1 = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
+      if (allCE1.length > 0) {
         const html = buildLeaveEmail('cover_day_before', entry);
-        await sendLeaveAlert([coverEmail], [kandiaEmail], '📋 Tomorrow: '+entry.staffName+' starts leave — your coverage begins', html);
+        await sendLeaveAlert(allCE1, [kandiaEmail], '📋 Tomorrow: '+entry.staffName+' starts leave — your coverage begins', html);
       }
       entry.oneDayAlertAt = now.toISOString();
       changed = true;
@@ -5035,9 +5045,10 @@ async function monitorLeaveEntries() {
     // ── STAGE 7: Leave starts — activation email to covering colleague
     if (!['on_leave','returned','cancelled'].includes(entry.status) && daysToStart <= 0 && daysToStart > -1 && !entry.activationSentAt) {
       entry.status = 'on_leave';
-      if (coverEmail) {
+      const allCEA = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
+      if (allCEA.length > 0) {
         const html = buildLeaveEmail('cover_activation', entry);
-        await sendLeaveAlert([coverEmail], [kandiaEmail], '🟡 ACTIVE: '+entry.staffName+' is now on leave — you are covering from today', html);
+        await sendLeaveAlert(allCEA, [kandiaEmail], '🟡 ACTIVE: '+entry.staffName+' is now on leave — you are covering from today', html);
       }
       entry.activationSentAt = now.toISOString();
       changed = true;
@@ -5049,7 +5060,8 @@ async function monitorLeaveEntries() {
       const daysIn = Math.abs(daysToStart);
       if (daysIn >= 5) {
         const html = buildLeaveEmail('mid_leave_checkin', entry);
-        await sendLeaveAlert([kandiaEmail], coverEmail?[coverEmail]:[], '📋 Mid-leave check: '+entry.staffName+' — coverage going OK?', html);
+        const allCEM = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
+        await sendLeaveAlert([kandiaEmail], allCEM, '📋 Mid-leave check: '+entry.staffName+' — coverage going OK?', html);
         entry.midLeaveCheckAt = now.toISOString();
         changed = true;
         console.log('[Leave] Stage 8: Mid-leave check-in sent');
@@ -5059,7 +5071,8 @@ async function monitorLeaveEntries() {
     // ── STAGE 9: Return day — handback prompt ─────────────────────
     if (entry.status === 'on_leave' && now >= endDate && now < new Date(endDate.getTime() + 24*60*60*1000) && !entry.returnAlertAt) {
       const html = buildLeaveEmail('return_day', entry);
-      await sendLeaveAlert([staffEmail, coverEmail], [kandiaEmail], '✅ Welcome back: '+entry.staffName+' — handback process', html);
+      const allCER = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
+        await sendLeaveAlert([staffEmail,...allCER], [kandiaEmail], '✅ Welcome back: '+entry.staffName+' — handback process', html);
       entry.returnAlertAt = now.toISOString();
       entry.status = 'returned';
       changed = true;
@@ -5089,12 +5102,22 @@ app.post('/leave', requireAuth, async (req, res) => {
     if (!staffName || !startDate || !endDate) return res.status(400).json({error:'staffName, startDate, endDate required'});
     const start = new Date(startDate);
     const triggerDate = new Date(start.getTime() - 14*24*60*60*1000); // 2 weeks before
+    // Support both single and multiple covering colleagues
+    const colleagues = req.body.coveringColleagues && req.body.coveringColleagues.length > 0
+      ? req.body.coveringColleagues
+      : coveringColleague ? [coveringColleague] : [];
+    const colleagueEmails = req.body.coveringEmails && req.body.coveringEmails.length > 0
+      ? req.body.coveringEmails
+      : coveringEmail ? [coveringEmail] : [];
+
     const entry = {
       id: 'leave_' + Date.now(),
       staffName, staffEmail: staffEmail || '',
       startDate, endDate,
-      coveringColleague: coveringColleague || '',
-      coveringEmail: coveringEmail || '',
+      coveringColleague: colleagues.join(', '),   // display string
+      coveringEmail: colleagueEmails[0] || '',     // primary email (backwards compat)
+      coveringColleagues: colleagues,              // array of names
+      coveringEmails: colleagueEmails,             // array of emails
       triggerDate: triggerDate.toISOString().substring(0,10),
       status: 'detected',
       checklist: {},
