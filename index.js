@@ -4768,7 +4768,7 @@ function buildLeaveEmail(type, entry) {
 
 // Generate Excel checklist — dynamic with completion status, overdue flags, issues
 async function generateLeaveChecklistXlsx(entry) {
-  const XLSX = require('xlsx');
+  // XLSX imported at top
   const now = new Date();
   const staff = entry.staffName;
   const cover = entry.coveringColleague || 'To be confirmed';
@@ -4890,7 +4890,7 @@ async function generateLeaveChecklistXlsx(entry) {
 
   const buf = XLSX.write(wb, {type:'buffer', bookType:'xlsx'});
   const path = '/home/leave-checklist-' + entry.id + '.xlsx';
-  require('fs').writeFileSync(path, buf);
+  writeFileSync(path, buf);
   return path;
 }
 
@@ -5011,7 +5011,7 @@ async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance,
     if (entry) {
       try {
         const xlsxPath = await generateLeaveChecklistXlsx(entry);
-        const xlsxBuf = require('fs').readFileSync(xlsxPath);
+        const xlsxBuf = readFileSync(xlsxPath);
         payload.attachments = [{
           '@odata.type': '#microsoft.graph.fileAttachment',
           name: 'Leave_Handover_Checklist_' + entry.staffName.replace(/\s+/g,'_') + '.xlsx',
@@ -5033,187 +5033,223 @@ async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance,
   return false;
 }
 
-// Monitor leave entries — full escalation chain
+// Monitor leave entries — new flow requiring Kandia confirmation before any emails
 async function monitorLeaveEntries() {
   if (!tokenStore.access_token) return;
   const state = loadLeaveState();
   const now = new Date();
+  const { bHour, bMin } = getBrisbaneNow();
   let changed = false;
   const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
 
   for (const entry of (state.leaveEntries||[])) {
-    if (entry.status === 'cancelled') continue;
-    const startDate = new Date(entry.startDate);
-    const endDate   = new Date(entry.endDate);
-    const trigDate  = new Date(entry.triggerDate);
-    const daysToStart  = Math.ceil((startDate - now)/(24*60*60*1000));
-    const daysToTrigger = Math.ceil((trigDate - now)/(24*60*60*1000));
-    const staffEmail = entry.staffEmail || '';
-    const coverEmail = entry.coveringEmail || '';
-    const cover = entry.coveringColleague || 'covering colleague';
-    const startStr  = startDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
-    const endStr    = endDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
-    const trigStr   = trigDate.toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'});
-    const pending = CHECKLIST_ITEMS.filter(i => !entry.checklist || !entry.checklist[i.id]);
-    const pctDone = Math.round((CHECKLIST_ITEMS.length - pending.length) / CHECKLIST_ITEMS.length * 100);
-    const phase1Done = entry.checklist?.phase1_signed;
-    const allSigned = entry.checklist?.phase1_signed && entry.checklist?.phase2_signed && entry.checklist?.phase3_signed;
+    if (['cancelled','returned'].includes(entry.status)) continue;
 
-    // ── STAGE 0: Initial Kandia notification ──────────────────────
-    if (entry.status === 'detected' && !entry.notifiedKandiaAt) {
-      // Mark BEFORE sending to prevent duplicate sends on concurrent cycles
-      entry.notifiedKandiaAt = now.toISOString();
-      entry.status = 'notified';
+    const startDate  = new Date(entry.startDate);
+    const endDate    = new Date(entry.endDate);
+    const daysToStart = Math.ceil((startDate - now) / (24*60*60*1000));
+    const allCoverEmails = (entry.coveringEmails&&entry.coveringEmails.length>0
+      ? entry.coveringEmails : entry.coveringEmail ? [entry.coveringEmail] : []);
+    const staffEmail = entry.staffEmail||'';
+
+    // ── STAGE 0: pending_confirmation — notify Kandia to confirm ──
+    // This fires when leave is detected (from email/manual) but NOT yet confirmed
+    if (entry.status === 'pending_confirmation' && !entry.kandiaAlertedAt) {
+      entry.kandiaAlertedAt = now.toISOString();
       changed = true;
       saveLeaveState(state);
-      const html = buildLeaveEmail('kandia_notification', entry);
-      const sent = await sendLeaveAlert([kandiaEmail], [], '🗓 Leave Logged — '+entry.staffName+' ('+new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})+')', html, entry);
-      // Also notify covering colleague they've been nominated
-      const allCoverEmails0 = entry.coveringEmails && entry.coveringEmails.length > 0 ? entry.coveringEmails : (coverEmail ? [coverEmail] : []);
-      for (const cEm of allCoverEmails0.filter(e=>e&&e!==kandiaEmail)) {
-        const coverHtml = buildLeaveEmail('cover_nominated', entry);
-        await sendLeaveAlert([cEm], [kandiaEmail], '📋 You have been nominated as covering colleague for '+entry.staffName, coverHtml);
-      }
-      console.log('[Leave] Stage 0: Kandia notified + cover colleague nominated for', entry.staffName);
+      const html = buildLeaveEmail('kandia_confirm_request', entry);
+      await sendLeaveAlert([kandiaEmail], [],
+        '🔔 Possible leave detected — please confirm: ' + entry.staffName,
+        html, 'high');
+      console.log('[Leave] Stage 0: Kandia asked to confirm leave for', entry.staffName);
+      continue; // Wait for Kandia to confirm before doing anything else
     }
 
-    // ── STAGE 1: 2-week trigger — checklist email to staff member ─
-    if (entry.status === 'notified' && daysToTrigger <= 0 && !entry.checklistSentAt) {
-      // Mark BEFORE sending to prevent race condition duplicates
-      entry.checklistSentAt = now.toISOString();
-      entry.status = 'checklist_sent';
+    // Everything below only runs AFTER Kandia has confirmed (status === 'confirmed' or later)
+    if (entry.status === 'pending_confirmation') continue;
+
+    // ── STAGE 1: confirmed — send first email to covering colleagues ──
+    if (entry.status === 'confirmed' && !entry.firstEmailSentAt) {
+      if (!allCoverEmails.length) {
+        console.warn('[Leave] Cannot start process for', entry.staffName, '— no covering colleagues set');
+        continue;
+      }
+      entry.firstEmailSentAt = now.toISOString();
+      entry.status = 'process_started';
       changed = true;
       saveLeaveState(state);
-      await sendLeaveChecklistEmail(entry);
-      // Send ONE combined email to cover colleague(s) — nomination + briefing together
-      const allCoverEmails1 = entry.coveringEmails && entry.coveringEmails.length > 0 ? entry.coveringEmails : (coverEmail ? [coverEmail] : []);
-      if (allCoverEmails1.length > 0) {
-        const coverHtml = buildLeaveEmail('cover_briefing', entry);
-        await sendLeaveAlert(allCoverEmails1, [kandiaEmail], '📋 Handover briefing: covering '+entry.staffName+' from '+new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short'}), coverHtml);
-      }
-      console.log('[Leave] Stage 1: Checklists sent for', entry.staffName);
+      // ONE email to covering colleagues, CC staff taking leave
+      const html = buildLeaveEmail('cover_nominated_briefing', entry);
+      const ccList = staffEmail ? [staffEmail] : [];
+      const sent = await sendLeaveAlert(allCoverEmails, ccList,
+        '📋 You are covering ' + entry.staffName + ' — nomination & handover briefing attached',
+        html, 'high', entry);
+      console.log('[Leave] Stage 1: Covering colleague email sent:', sent, '| To:', allCoverEmails.join(','));
+      continue;
     }
 
-    // ── STAGE 2: 10-day check — if <50% complete ──────────────────
-    if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 10 && daysToStart > 7 && !entry.tenDayAlertAt) {
-      if (pctDone < 50) {
-        const html = buildLeaveEmail('reminder_10day', entry);
-        await sendLeaveAlert([staffEmail], [kandiaEmail], '📋 10-day check: handover checklist less than 50% complete — '+entry.staffName, html, entry);
-        entry.tenDayAlertAt = now.toISOString();
-        changed = true;
-        saveLeaveState(state); // Prevent race condition
-        console.log('[Leave] Stage 2: 10-day alert sent (', pctDone, '% complete)');
-      } else {
-        entry.tenDayAlertAt = now.toISOString(); // Mark as checked even if OK
-        changed = true;
-      }
-    }
+    // ── STAGE 2: Every 3 days — automated reminder with due items ──
+    if (['process_started','in_progress'].includes(entry.status)) {
+      const lastReminder = entry.lastReminderAt ? new Date(entry.lastReminderAt) : new Date(entry.firstEmailSentAt||now);
+      const daysSinceReminder = Math.floor((now - lastReminder) / (24*60*60*1000));
+      const pending = CHECKLIST_ITEMS.filter(i => !entry.checklist || !entry.checklist[i.id]);
 
-    // ── STAGE 3: 7-day reminder ───────────────────────────────────
-    if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 7 && daysToStart > 5 && !entry.sevenDayAlertAt) {
-      if (pending.length > 0) {
-        const html = buildLeaveEmail('reminder', entry);
-        await sendLeaveAlert([staffEmail], [kandiaEmail], '⚠ 7-day reminder: leave handover items still outstanding — '+entry.staffName, html, entry);
-      }
-      entry.sevenDayAlertAt = now.toISOString();
-      changed = true;
-      saveLeaveState(state);
-      console.log('[Leave] Stage 3: 7-day alert, pending:', pending.length);
-    }
-
-    // ── STAGE 4: 5-day escalation to Kandia if Phase 1 not signed ─
-    if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 5 && daysToStart > 3 && !entry.fiveDayAlertAt) {
-      if (!phase1Done) {
-        const html = buildLeaveEmail('escalation_5day', entry);
-        await sendLeaveAlert([kandiaEmail], [], '🔴 ESCALATION: Leave handover Phase 1 not signed — '+entry.staffName+' leaves in 5 days', html, entry);
-      }
-      entry.fiveDayAlertAt = now.toISOString();
-      changed = true;
-      console.log('[Leave] Stage 4: 5-day escalation, phase1 signed:', !!phase1Done);
-    }
-
-    // ── STAGE 5: 3-day final warning ─────────────────────────────
-    if (['checklist_sent','in_progress'].includes(entry.status) && daysToStart <= 3 && daysToStart > 1 && !entry.threeDayAlertAt) {
-      if (!allSigned) {
-        const html = buildLeaveEmail('final_warning', entry);
-        await sendLeaveAlert([staffEmail, coverEmail], [kandiaEmail], '🔴 FINAL WARNING: Handover must be complete before leave — '+entry.staffName+' leaves in '+daysToStart+' days', html, entry);
-      }
-      // Send covering colleague their pre-leave briefing regardless
-      const allCE3 = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
-      if (allCE3.length > 0) {
-        const html = buildLeaveEmail('cover_3day', entry);
-        await sendLeaveAlert(allCE3, [kandiaEmail], '📋 3 days to go: final preparation for covering '+entry.staffName, html, entry);
-      }
-      entry.threeDayAlertAt = now.toISOString();
-      changed = true;
-      console.log('[Leave] Stage 5: 3-day final warning sent');
-    }
-
-    // ── STAGE 6: 1-day before — full briefing to covering colleague
-    if (['checklist_sent','in_progress','approved'].includes(entry.status) && daysToStart === 1 && !entry.oneDayAlertAt) {
-      const allCE1 = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
-      if (allCE1.length > 0) {
-        const html = buildLeaveEmail('cover_day_before', entry);
-        await sendLeaveAlert(allCE1, [kandiaEmail], '📋 Tomorrow: '+entry.staffName+' starts leave — your coverage begins', html, entry);
-      }
-      entry.oneDayAlertAt = now.toISOString();
-      changed = true;
-      console.log('[Leave] Stage 6: 1-day briefing sent to cover colleague');
-    }
-
-    // ── STAGE 7: Leave starts — activation email to covering colleague
-    if (!['on_leave','returned','cancelled'].includes(entry.status) && daysToStart <= 0 && daysToStart > -1 && !entry.activationSentAt) {
-      entry.status = 'on_leave';
-      const allCEA = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
-      if (allCEA.length > 0) {
-        const html = buildLeaveEmail('cover_activation', entry);
-        await sendLeaveAlert(allCEA, [kandiaEmail], '🟡 ACTIVE: '+entry.staffName+' is now on leave — you are covering from today', html, entry);
-      }
-      entry.activationSentAt = now.toISOString();
-      changed = true;
-      console.log('[Leave] Stage 7: Leave started, cover activation sent');
-    }
-
-    // ── STAGE 8: Mid-leave check-in (after 5 working days) ────────
-    if (entry.status === 'on_leave' && !entry.midLeaveCheckAt) {
-      const daysIn = Math.abs(daysToStart);
-      if (daysIn >= 5) {
-        const html = buildLeaveEmail('mid_leave_checkin', entry);
-        const allCEM = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
-        await sendLeaveAlert([kandiaEmail], allCEM, '📋 Mid-leave check: '+entry.staffName+' — coverage going OK?', html, entry);
-        entry.midLeaveCheckAt = now.toISOString();
+      if (daysSinceReminder >= 3 && pending.length > 0 && !entry.awaitingReply) {
+        entry.lastReminderAt = now.toISOString();
+        entry.awaitingReply = true;
+        entry.awaitingReplySince = now.toISOString();
         changed = true;
         saveLeaveState(state);
-        console.log('[Leave] Stage 8: Mid-leave check-in sent');
+        const html = buildLeaveEmail('reminder_3day', entry);
+        await sendLeaveAlert(allCoverEmails, staffEmail ? [staffEmail] : [],
+          '⏰ Reminder: leave handover items due — ' + entry.staffName + ' (please reply to confirm completed)',
+          html, 'normal', entry);
+        console.log('[Leave] Stage 2: 3-day reminder sent, awaiting reply. Days since last:', daysSinceReminder);
+      }
+
+      // End-of-day reminder at 5pm AEST if no reply since morning reminder
+      if (entry.awaitingReply && bHour === 17 && bMin < 30 && !entry.eodReminderSentToday) {
+        const awaitingSince = new Date(entry.awaitingReplySince||now);
+        const hoursSince = (now - awaitingSince) / (60*60*1000);
+        if (hoursSince >= 4) { // Been waiting at least 4 hours
+          entry.eodReminderSentToday = now.toISOString().substring(0,10);
+          changed = true;
+          saveLeaveState(state);
+          const html = buildLeaveEmail('eod_reminder', entry);
+          await sendLeaveAlert(allCoverEmails, staffEmail ? [staffEmail] : [],
+            '📌 End of day: awaiting your reply — leave handover for ' + entry.staffName,
+            html, 'high');
+          console.log('[Leave] Stage 2b: 5pm EOD reminder sent');
+        }
       }
     }
 
-    // ── STAGE 9: Return day — handback prompt ─────────────────────
-    if (entry.status === 'on_leave' && now >= endDate && now < new Date(endDate.getTime() + 24*60*60*1000) && !entry.returnAlertAt) {
-      const html = buildLeaveEmail('return_day', entry);
-      const allCER = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:(coverEmail?[coverEmail]:[]);
-        await sendLeaveAlert([staffEmail,...allCER], [kandiaEmail], '✅ Welcome back: '+entry.staffName+' — handback process', html, entry);
+    // ── STAGE 3: Phase complete — send to sign-off person ──
+    if (['process_started','in_progress'].includes(entry.status)) {
+      const phase1Items = CHECKLIST_ITEMS.filter(i => i.section <= 5 && i.id !== 'phase1_signed' && i.id !== 'phase2_signed' && i.id !== 'phase3_signed');
+      const phase1Done = phase1Items.every(i => entry.checklist && entry.checklist[i.id]);
+      if (phase1Done && !entry.checklist?.phase1_signed && !entry.phase1SignoffSentAt) {
+        entry.phase1SignoffSentAt = now.toISOString();
+        changed = true;
+        saveLeaveState(state);
+        const html = buildLeaveEmail('phase1_signoff_request', entry);
+        await sendLeaveAlert([staffEmail], [kandiaEmail],
+          '✅ All checklist items complete — please sign off Phase 1: ' + entry.staffName,
+          html, 'high', entry);
+        console.log('[Leave] Stage 3: Phase 1 sign-off request sent to', staffEmail);
+      }
+    }
+
+    // ── STAGE 4: Leave starts ──
+    if (!['on_leave','returned'].includes(entry.status) && daysToStart <= 0 && daysToStart > -200 && !entry.activationSentAt) {
+      entry.activationSentAt = now.toISOString();
+      entry.status = 'on_leave';
+      changed = true;
+      saveLeaveState(state);
+      if (allCoverEmails.length) {
+        const html = buildLeaveEmail('cover_activation', entry);
+        await sendLeaveAlert(allCoverEmails, [kandiaEmail],
+          '🟡 ACTIVE: ' + entry.staffName + ' is now on leave — coverage begins today',
+          html, 'high', entry);
+      }
+      console.log('[Leave] Stage 4: Leave started for', entry.staffName);
+    }
+
+    // ── STAGE 5: Return day ──
+    if (entry.status === 'on_leave' && now >= endDate && now < new Date(endDate.getTime()+24*60*60*1000) && !entry.returnAlertAt) {
       entry.returnAlertAt = now.toISOString();
       entry.status = 'returned';
       changed = true;
-      console.log('[Leave] Stage 9: Return day handback sent');
+      saveLeaveState(state);
+      const returnEmails = [...new Set([staffEmail, ...allCoverEmails].filter(Boolean))];
+      const html = buildLeaveEmail('return_day', entry);
+      await sendLeaveAlert(returnEmails, [kandiaEmail],
+        '✅ Welcome back: ' + entry.staffName + ' — handback process today',
+        html, 'normal');
+      console.log('[Leave] Stage 5: Return day handback sent');
     }
 
-    // Final returned status
-    if (entry.status === 'on_leave' && now > new Date(endDate.getTime() + 24*60*60*1000)) {
-      entry.status = 'returned';
-      changed = true;
+    // Mark returned if past end date
+    if (entry.status === 'on_leave' && now > new Date(endDate.getTime()+24*60*60*1000)) {
+      entry.status = 'returned'; changed = true;
     }
   }
 
+  // Scan email replies to auto-update checklist
+  await scanLeaveReplies(state);
+
   if (changed) saveLeaveState(state);
 }
+
+// Scan inbox for replies confirming checklist items completed
+async function scanLeaveReplies(state) {
+  if (!tokenStore.access_token) return;
+  try {
+    const since = new Date(Date.now() - 2*24*60*60*1000).toISOString();
+    const recentEmails = await graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$top=50&$select=subject,from,bodyPreview,conversationId,receivedDateTime`);
+    const msgs = recentEmails.value||[];
+    let changed = false;
+    for (const entry of (state.leaveEntries||[])) {
+      if (!entry.awaitingReply) continue;
+      // Look for replies from covering colleagues or staff member
+      const relevantEmails = entry.coveringEmails||[];
+      if (entry.staffEmail) relevantEmails.push(entry.staffEmail);
+      const replies = msgs.filter(m => {
+        const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
+        return relevantEmails.some(e => fromAddr.includes(e.toLowerCase().split('@')[0]));
+      });
+      for (const reply of replies) {
+        const body = (reply.bodyPreview||'').toLowerCase();
+        if (!body.includes('complet') && !body.includes('done') && !body.includes('confirm') && !body.includes('yes') && !body.includes('tick')) continue;
+        console.log('[Leave] Possible reply from', reply.from?.emailAddress?.address, ':', body.substring(0,100));
+        // Note the reply — Kandia reviews and ticks items manually in Cinderella
+        // Auto-ticking based on email content alone is too risky for accuracy
+        if (!entry.pendingReplyReview) {
+          entry.pendingReplyReview = {
+            from: reply.from?.emailAddress?.name,
+            receivedAt: reply.receivedDateTime,
+            preview: reply.bodyPreview?.substring(0,200)
+          };
+          entry.awaitingReply = false;
+          changed = true;
+          console.log('[Leave] Reply detected — flagged for Kandia review in Cinderella');
+        }
+      }
+    }
+    if (changed) saveLeaveState(state);
+  } catch(e) { console.warn('[Leave] Reply scan error:', e.message); }
+}
+// (old monitor replaced)
+
 
 // ── LEAVE API ENDPOINTS ──
 
 app.get('/leave', requireAuth, (req, res) => {
   const state = loadLeaveState();
   res.json(state.leaveEntries || []);
+});
+
+// Kandia confirms leave — starts the process
+app.post('/leave/:id/confirm', requireAuth, async (req, res) => {
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    const { coveringColleagues, coveringEmails, startDate, endDate, notes } = req.body;
+    // Update entry with confirmed details
+    if (coveringColleagues) { entry.coveringColleagues = coveringColleagues; entry.coveringColleague = coveringColleagues.join(', '); }
+    if (coveringEmails) { entry.coveringEmails = coveringEmails; entry.coveringEmail = coveringEmails[0]||''; }
+    if (startDate) { entry.startDate = startDate; entry.triggerDate = new Date(new Date(startDate).getTime()-14*24*60*60*1000).toISOString().substring(0,10); }
+    if (endDate) entry.endDate = endDate;
+    if (notes) entry.notes = notes;
+    entry.status = 'confirmed';
+    entry.confirmedAt = new Date().toISOString();
+    saveLeaveState(state);
+    // Trigger monitoring immediately so Stage 1 email goes out
+    setTimeout(() => monitorLeaveEntries(), 500);
+    res.json({success:true, entry});
+  } catch(e) { res.status(500).json({error:e.message}); }
 });
 
 app.post('/leave', requireAuth, async (req, res) => {
@@ -5239,7 +5275,7 @@ app.post('/leave', requireAuth, async (req, res) => {
       coveringColleagues: colleagues,              // array of names
       coveringEmails: colleagueEmails,             // array of emails
       triggerDate: triggerDate.toISOString().substring(0,10),
-      status: 'detected',
+      status: req.body.confirmed ? 'confirmed' : 'pending_confirmation',
       checklist: {},
       createdAt: new Date().toISOString(),
       notifiedKandiaAt: null,
@@ -5300,16 +5336,24 @@ app.put('/leave/:id/checklist', requireAuth, (req, res) => {
 });
 
 app.post('/leave/:id/send-checklist', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
   try {
     const state = loadLeaveState();
     const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
-    if (!entry) return res.status(404).json({error:'Not found'});
+    if (!entry) return res.status(404).json({error:'Leave entry not found'});
+    if (!entry.staffEmail) return res.status(400).json({error:'Staff member has no email address — please check the leave entry'});
+    console.log('[Leave] Sending checklist email for', entry.staffName, 'to', entry.staffEmail);
     await sendLeaveChecklistEmail(entry);
     entry.checklistSentAt = new Date().toISOString();
     saveLeaveState(state);
-    res.json({success:true});
-  } catch(e) { res.status(500).json({error:e.message}); }
+    res.json({success:true, message:'Checklist email sent to '+entry.staffEmail});
+  } catch(e) {
+    console.error('[Leave] send-checklist error:', e.message, e.stack?.substring(0,300));
+    res.status(500).json({error: e.message || 'Failed to send checklist email'});
+  }
 });
+
+
 
 // ── THINK LOOP ──
 async function think() {
@@ -5410,6 +5454,8 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
 
     // Daily compliance check
     await checkComplianceDeadlines();
+
+
 
     // Leave management monitoring
     await monitorLeaveEntries();
