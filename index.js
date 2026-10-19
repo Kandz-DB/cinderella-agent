@@ -4114,7 +4114,8 @@ async function scanLeaveReplies(state) {
           const allCoverEmails = entry.coveringEmails && entry.coveringEmails.length > 0
             ? entry.coveringEmails : entry.coveringEmail ? [entry.coveringEmail] : [];
           const toEmails = [...new Set([...allCoverEmails, entry.staffEmail].filter(Boolean))];
-          const ccEmails = [kandiaEmail];
+          // Exclude Kandia from CC if she's already in the TO list
+          const ccEmails = toEmails.includes(kandiaEmail) ? [] : [kandiaEmail];
 
           const html = buildLeaveEmail('checklist_updated', entry);
           await sendLeaveAlert(toEmails, ccEmails,
@@ -4918,6 +4919,38 @@ function buildLeaveEmail(type, entry) {
     </td></tr>` + footer;
   }
 
+  // Checklist updated — sent every time items are ticked by reply scan
+  if (type === 'checklist_updated') {
+    const done = completedItems.length;
+    const total = CHECKLIST_ITEMS.length;
+    const pct = Math.round(done/total*100);
+    const barCol = pct === 100 ? '#0D8A62' : pct > 50 ? '#D97706' : '#C8211E';
+    const doneRows = completedItems.map(i =>
+      `<tr><td bgcolor="#F0FDF4" style="background:#F0FDF4;padding:5px 10px;border-radius:4px;margin-bottom:3px;font-family:Arial,sans-serif;font-size:12px;color:#0D8A62">&#9745;&nbsp;&nbsp;${i.label}</td></tr><tr><td style="height:3px"></td></tr>`
+    ).join('');
+    const pendingRows = pendingItems.map(i =>
+      `<tr><td style="padding:4px 10px;font-family:Arial,sans-serif;font-size:12px;color:#444">&#9744;&nbsp;&nbsp;${i.label}</td></tr>`
+    ).join('');
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">&#128203; Leave checklist updated &mdash; ${pct}% complete</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi all, Cinderella has updated the leave handover checklist for <strong>${staff}</strong> based on a recent reply. The updated checklist is attached.</p>
+      ${detailsTable}
+      <table cellpadding="0" cellspacing="0" bgcolor="#F8F8F6" style="background:#F8F8F6;border-radius:8px;width:100%;margin-bottom:16px"><tr><td style="padding:14px 16px">
+        <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">Progress: ${done}/${total} items complete</p>
+        <table cellpadding="0" cellspacing="0" width="100%"><tr>
+          <td bgcolor="#E8E6E1" style="background:#E8E6E1;border-radius:999px;height:10px;overflow:hidden">
+            <table cellpadding="0" cellspacing="0" width="${pct}%"><tr><td bgcolor="${barCol}" style="background:${barCol};height:10px;border-radius:999px"></td></tr></table>
+          </td>
+          <td style="padding-left:10px;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:${barCol};white-space:nowrap">${pct}%</td>
+        </tr></table>
+        ${done > 0 ? `<p style="margin:12px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#0D8A62;text-transform:uppercase;letter-spacing:1px">Completed:</p><table cellpadding="0" cellspacing="0" width="100%">${doneRows}</table>` : ''}
+        ${pendingItems.length > 0 ? `<p style="margin:10px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1px">Still outstanding:</p><table cellpadding="0" cellspacing="0" width="100%">${pendingRows}</table>` : ''}
+      </td></tr></table>
+      ${pct < 100 ? `<p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Cinderella will continue monitoring replies and updating the checklist automatically.</p>` : `<p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#0D8A62;font-weight:bold">&#10003; All checklist items complete &mdash; sign-off phase now begins.</p>`}
+    </td></tr>` + footer;
+  }
+
   return header + `<tr><td style="padding:20px 28px;"><p style="font-family:Arial,sans-serif">Leave notification for ${staff}</p></td></tr>` + footer;
 }
 
@@ -5174,7 +5207,21 @@ async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance,
         }];
         console.log('[Leave] ✅ Populated checklist attached');
       } catch(e) {
-        console.error('[Leave] Checklist attach failed:', e.message);
+        console.error('[Leave] Dynamic checklist failed:', e.message, '— trying static template');
+        try {
+          const TEMPLATE_PATHS = ['/home/leave-checklist-template.docx','/home/site/wwwroot/leave-checklist-template.docx'];
+          for (const tp of TEMPLATE_PATHS) {
+            try {
+              const buf = readFileSync(tp);
+              payload.attachments = [{'@odata.type':'#microsoft.graph.fileAttachment',
+                name:'R2S_Staff_Leave_Handover_Checklist.docx',
+                contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                contentBytes:buf.toString('base64')}];
+              console.log('[Leave] ✅ Static template attached as fallback');
+              break;
+            } catch(e2) {}
+          }
+        } catch(e3) { console.error('[Leave] All attachment methods failed'); }
       }
     }
     const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
