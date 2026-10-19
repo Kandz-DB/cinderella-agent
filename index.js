@@ -4084,23 +4084,70 @@ async function scanLeaveReplies(state) {
 
         const allDone = /all (items|sections|tasks|checklist|of it) (are )?(complete|done|finished|confirmed)/.test(bodyText) || /everything (is )?(complete|done|finished)/.test(bodyText);
 
-        let itemsUpdated = false;
-        if (!entry.checklist) entry.checklist = {};
-
-        if (allDone) {
-          CHECKLIST_ITEMS.filter(i => !i.id.includes('signed')).forEach(i => {
-            if (!entry.checklist[i.id]) { entry.checklist[i.id] = true; itemsUpdated = true; }
-          });
-          console.log('[Leave] All items marked complete from reply');
+        // Route to the correct per-colleague checklist
+        if (!entry.colleagueChecklists) entry.colleagueChecklists = {};
+        const replyAddr = reply.from?.emailAddress?.address?.toLowerCase();
+        // Find which colleague sent this reply
+        let targetChecklist = null;
+        let targetColleagueName = null;
+        const colleagues2 = (entry.coveringColleagues||[]).map((name,i) => ({name, email:(entry.coveringEmails||[])[i]||''}));
+        const matchedColleague = colleagues2.find(c => c.email && replyAddr === c.email.toLowerCase());
+        // If from a covering colleague, use their checklist
+        if (matchedColleague) {
+          if (!entry.colleagueChecklists[matchedColleague.email]) entry.colleagueChecklists[matchedColleague.email] = {name:matchedColleague.name, checklist:{}};
+          targetChecklist = entry.colleagueChecklists[matchedColleague.email].checklist;
+          targetColleagueName = matchedColleague.name;
+        } else if (replyAddr === (entry.staffEmail||'').toLowerCase()) {
+          // Reply from staff member — could be about any colleague; check body for name mention
+          const mentionedColleague = colleagues2.find(c => bodyText.includes(c.name.split(' ')[0].toLowerCase()));
+          if (mentionedColleague) {
+            if (!entry.colleagueChecklists[mentionedColleague.email]) entry.colleagueChecklists[mentionedColleague.email] = {name:mentionedColleague.name, checklist:{}};
+            targetChecklist = entry.colleagueChecklists[mentionedColleague.email].checklist;
+            targetColleagueName = mentionedColleague.name;
+          } else {
+            // Update all colleague checklists if no specific name mentioned
+            targetChecklist = null;
+          }
         } else {
-          for (const mapping of KEYWORD_MAP) {
-            if (mapping.keys.some(k => bodyText.includes(k))) {
-              mapping.items.forEach(item => {
-                if (!entry.checklist[item]) { entry.checklist[item] = true; itemsUpdated = true; }
-              });
+          continue; // Unknown sender — skip
+        }
+
+        let itemsUpdated = false;
+        // Helper to update a checklist object
+        const updateChecklist = (cl) => {
+          if (allDone) {
+            CHECKLIST_ITEMS.filter(i => !i.id.includes('signed')).forEach(i => {
+              if (!cl[i.id]) { cl[i.id] = true; itemsUpdated = true; }
+            });
+          } else {
+            for (const mapping of KEYWORD_MAP) {
+              if (mapping.keys.some(k => bodyText.includes(k))) {
+                mapping.items.forEach(item => { if (!cl[item]) { cl[item] = true; itemsUpdated = true; } });
+              }
             }
           }
+        };
+
+        if (targetChecklist) {
+          updateChecklist(targetChecklist);
+        } else {
+          // Update all colleagues
+          colleagues2.forEach(c => {
+            if (!entry.colleagueChecklists[c.email]) entry.colleagueChecklists[c.email] = {name:c.name,checklist:{}};
+            updateChecklist(entry.colleagueChecklists[c.email].checklist);
+          });
         }
+
+        // Also maintain the overall checklist for backwards compat
+        if (!entry.checklist) entry.checklist = {};
+        if (allDone) {
+          CHECKLIST_ITEMS.filter(i=>!i.id.includes('signed')).forEach(i=>{if(!entry.checklist[i.id]){entry.checklist[i.id]=true;}});
+        } else {
+          for (const mapping of KEYWORD_MAP) {
+            if (mapping.keys.some(k=>bodyText.includes(k))) mapping.items.forEach(item=>{entry.checklist[item]=true;});
+          }
+        }
+        console.log('[Leave] Items updated for', targetColleagueName||'all colleagues');
 
         // Extract SharePoint links
         const spLinks = ((reply.body?.content||'') + (reply.bodyPreview||'')).match(/https:\/\/[^\s<>"]+sharepoint[^\s<>"]+/gi)||[];
@@ -4130,10 +4177,14 @@ async function scanLeaveReplies(state) {
           const LEAVE_TESTING_MODE = true;
           const toEmails = LEAVE_TESTING_MODE ? [kandiaEmail] : [...new Set([...allCoverEmails, entry.staffEmail].filter(Boolean))];
           const ccEmails = LEAVE_TESTING_MODE ? [] : (toEmails.includes(kandiaEmail)?[]:[kandiaEmail]);
-          const html = buildLeaveEmail('checklist_updated', entry);
+          // Send updated checklist — individual copy for the colleague whose items were updated
+          const colleagueEntry2 = targetColleagueName
+            ? {...entry, coveringColleague:targetColleagueName, coveringColleagues:[targetColleagueName]}
+            : entry;
+          const html = buildLeaveEmail('checklist_updated', colleagueEntry2);
           await sendLeaveAlert(toEmails, ccEmails,
-            (LEAVE_TESTING_MODE?'[TEST] ':'')+'📋 Checklist updated: '+pct+'% complete — '+entry.staffName+' leave handover',
-            html, 'normal', entry);
+            (LEAVE_TESTING_MODE?'[TEST] ':'')+'📋 Checklist updated: '+pct+'% complete — '+entry.staffName+' / '+( targetColleagueName||'all covering colleagues'),
+            html, 'normal', colleagueEntry2);
           console.log('[Leave] ✅ Checklist update email sent ('+done+'/'+total+' items)');
           break;
         }
@@ -5297,13 +5348,25 @@ async function monitorLeaveEntries() {
       entry.status = 'process_started';
       changed = true;
       saveLeaveState(state);
-      // ONE email to covering colleagues, CC staff taking leave
-      const html = buildLeaveEmail('cover_nominated_briefing', entry);
-      const ccList = staffEmail ? [staffEmail] : [];
-      const sent = await sendLeaveAlert(allCoverEmails, ccList,
-        '📋 You are covering ' + entry.staffName + ' — nomination & handover briefing attached',
-        html, 'high', entry);
-      console.log('[Leave] Stage 1: Covering colleague email sent:', sent, '| To:', allCoverEmails.join(','));
+      // INDIVIDUAL email to EACH covering colleague separately — each gets their own checklist
+      if (!entry.colleagueChecklists) entry.colleagueChecklists = {};
+      const colleagues3 = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
+        ? entry.coveringColleagues.map((name,i)=>({name, email:(entry.coveringEmails||[])[i]||''}))
+        : [{name:entry.coveringColleague||'', email:entry.coveringEmail||''}];
+      const LEAVE_TESTING_MODE = true;
+      for (const colleague3 of colleagues3) {
+        if (!colleague3.email) continue;
+        if (!entry.colleagueChecklists[colleague3.email]) entry.colleagueChecklists[colleague3.email] = {name:colleague3.name, checklist:{}};
+        const entryForColleague = {...entry, coveringColleague:colleague3.name, coveringEmail:colleague3.email,
+          coveringColleagues:[colleague3.name], coveringEmails:[colleague3.email]};
+        const html3 = buildLeaveEmail('cover_nominated_briefing', entryForColleague);
+        const to3 = LEAVE_TESTING_MODE ? [kandiaEmail] : [colleague3.email];
+        const cc3 = LEAVE_TESTING_MODE ? [] : (staffEmail && staffEmail !== colleague3.email ? [staffEmail] : []);
+        const subj3 = (LEAVE_TESTING_MODE?'[TEST - to: '+colleague3.name+'] ':'') +
+          '📋 Your handover checklist: covering '+entry.staffName+' — '+colleague3.name;
+        await sendLeaveAlert(to3, cc3, subj3, html3, 'high', entryForColleague);
+        console.log('[Leave] Stage 1: Individual checklist sent to', colleague3.name);
+      }
       continue;
     }
 
@@ -5504,15 +5567,21 @@ app.put('/leave/:id/checklist', requireAuth, (req, res) => {
     const state = loadLeaveState();
     const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
     if (!entry) return res.status(404).json({error:'Not found'});
+    // Support per-colleague checklist: body may include { colleagueEmail, ...items }
+    const { colleagueEmail, ...items } = req.body;
+    if (colleagueEmail && entry.colleagueChecklists) {
+      if (!entry.colleagueChecklists[colleagueEmail]) entry.colleagueChecklists[colleagueEmail] = {name:colleagueEmail, checklist:{}};
+      Object.assign(entry.colleagueChecklists[colleagueEmail].checklist, items);
+    }
+    // Always update the overall checklist too
     if (!entry.checklist) entry.checklist = {};
-    Object.assign(entry.checklist, req.body);
-    // Update status based on completion
-    const totalItems = CHECKLIST_ITEMS.filter(i=>i.id!=='phase1_signed'&&i.id!=='phase2_signed'&&i.id!=='phase3_signed').length;
-    const completedItems = CHECKLIST_ITEMS.filter(i=>i.id!=='phase1_signed'&&i.id!=='phase2_signed'&&i.id!=='phase3_signed'&&entry.checklist[i.id]).length;
+    Object.assign(entry.checklist, items);
+    const totalItems = CHECKLIST_ITEMS.filter(i=>!i.id.includes('signed')).length;
+    const completedItems = CHECKLIST_ITEMS.filter(i=>!i.id.includes('signed')&&entry.checklist[i.id]).length;
     if (entry.checklist.phase3_signed) entry.status = 'approved';
     else if (completedItems > 0) entry.status = 'in_progress';
     saveLeaveState(state);
-    res.json({success:true, checklist:entry.checklist, status:entry.status, progress:{completed:completedItems,total:totalItems}});
+    res.json({success:true, checklist:entry.checklist, colleagueChecklists:entry.colleagueChecklists, status:entry.status, progress:{completed:completedItems,total:totalItems}});
   } catch(e) { res.status(500).json({error:e.message}); }
 });
 
