@@ -6234,9 +6234,6 @@ async function renderSkillsMatrix(){
 
     const ini=name.split(' ').map(w=>w[0]||'').join('').substring(0,2).toUpperCase();
 
-    const tags=skills.length>0?skills.map(sk=>'<span style="font-size:9px;padding:2px 7px;border-radius:8px;background:var(--gl);color:#0F6E56;display:inline-block;margin:2px 2px 2px 0">'+sk[0].toUpperCase()+sk.slice(1)+'</span>').join(''):'<span style="font-size:10px;color:var(--t3);font-style:italic">No skills recorded yet</span>';
-
-    html+='<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:0.5px solid var(--bl)">'+
 
       '<div style="display:flex;align-items:center;gap:6px;min-width:120px;flex-shrink:0;padding-top:2px">'+
 
@@ -7592,6 +7589,7 @@ async function loadLeaveEntries() {
         '</div>' +
         '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
           '<button onclick="openLeaveChecklist(\'' + e.id + '\')" class="m-btn" style="font-size:11px;padding:5px 12px">View checklist</button>' +
+          '<button onclick="editLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">✏ Edit</button>' +
           '<button onclick="sendLeaveChecklistNow(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">📧 Send checklist email</button>' +
           '<button onclick="deleteLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px;color:var(--r)">Delete</button>' +
         '</div>' +
@@ -7619,8 +7617,7 @@ function showAddLeave() {
       '</div>' +
       '<div><div class="mfl">Covering colleague(s) <span style="font-weight:400;color:var(--t3)">(hold Ctrl/Cmd to select multiple)</span></div><select id="lv_cover" multiple style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg);height:100px">'+staffOptions+'<option value="Kandia Du Bruyn|kandia@risk2solution.com">Kandia Du Bruyn</option></select></div>' +
       '<div><div class="mfl">Notes (optional)</div><textarea id="lv_notes" rows="2" placeholder="Any context about this leave..." style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);resize:vertical"></textarea></div>' +
-      '<div style="background:var(--al);border-radius:8px;padding:10px 12px;font-size:11.5px;color:var(--t2)">Cinderella will flag this as a potential leave entry and ask you to confirm. <strong>No emails are sent until you confirm.</strong> After confirmation, you select covering colleagues and the process starts.</div>' +
-    '</div>' +
+      '<div style="background:#DCEEE6;border-radius:8px;padding:10px 12px;font-size:12px;color:#111;line-height:1.5"><b>What happens next:</b> Cinderella emails the covering colleagues with the checklist attached. Staff member is CC&rsquo;d. Automated 3-day reminders follow.</div>' +
     '<div style="display:flex;gap:8px;margin-top:14px">' +
       '<button class="m-btn" onclick="submitAddLeave()" style="flex:1">Log leave & start process</button>' +
       '<button class="m-btn sec" onclick="closeModal()" style="flex:1">Cancel</button>' +
@@ -7630,13 +7627,11 @@ function showAddLeave() {
 
 async function submitAddLeave() {
   var staffSel = (document.getElementById('lv_staff')||{}).value || '';
-  var start = (document.getElementById('lv_start')||{}).value;
-  var end = (document.getElementById('lv_end')||{}).value;
-  var coverSel = (document.getElementById('lv_cover')||{}).value || '';
-  var notes = (document.getElementById('lv_notes')||{}).value || '';
+  var start    = (document.getElementById('lv_start')||{}).value;
+  var end      = (document.getElementById('lv_end')||{}).value;
+  var notes    = (document.getElementById('lv_notes')||{}).value || '';
   if (!staffSel || !start || !end) { showToast('Please fill in staff member and dates'); return; }
   var staffParts = staffSel.split('|');
-  // Collect multiple covering colleagues
   var coverSelect = document.getElementById('lv_cover');
   var coverNames = [], coverEmails = [];
   if (coverSelect) {
@@ -7646,24 +7641,33 @@ async function submitAddLeave() {
       if (parts[1]) coverEmails.push(parts[1]);
     });
   }
+  if (!coverNames.length) { showToast('Please select at least one covering colleague'); return; }
   try {
-    var r = await fetch('/leave', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      staffName: staffParts[0], staffEmail: staffParts[1]||'',
-      startDate: start, endDate: end,
-      coveringColleague: coverNames.join(', '),
-      coveringEmail: coverEmails.join(','),
-      coveringColleagues: coverNames,
-      coveringEmails: coverEmails,
-      notes
-    })});
+    var r = await fetch('/leave', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        staffName:      staffParts[0],
+        staffEmail:     staffParts[1]||'',
+        startDate:      start,
+        endDate:        end,
+        coveringColleague: coverNames.join(', '),
+        coveringEmail:  coverEmails[0]||'',
+        coveringColleagues: coverNames,
+        coveringEmails: coverEmails,
+        notes,
+        confirmed: true
+      })
+    });
     var d = await r.json();
     if (d.success) {
       closeModal();
-      showToast('Leave logged — Cinderella will send you a notification shortly');
+      showToast('Leave logged — handover email being sent to covering colleague(s) now');
       loadLeaveEntries();
     } else { showToast('Error: '+(d.error||'Failed')); }
   } catch(e) { showToast('Error: '+e.message); }
 }
+
 
 async function openLeaveChecklist(id) {
   var r = await fetch('/leave');
@@ -7815,6 +7819,87 @@ async function clearReplyFlag(id) {
   await fetch('/leave/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({pendingReplyReview:null})});
   loadLeaveEntries();
+}
+
+
+async function editLeaveEntry(id) {
+  var r = await fetch('/leave');
+  var entries = await r.json();
+  var e = entries.find(function(x){ return x.id === id; });
+  if (!e) return;
+
+  var staffOpts = LEAVE_STAFF_LIST.map(function(s){
+    return '<option value="'+s.name+'|'+s.email+'"' + (e.staffName===s.name?' selected':'') + '>'+s.name+'</option>';
+  }).join('');
+
+  var coverOpts = LEAVE_STAFF_LIST.map(function(s){
+    var selected = e.coveringColleagues && e.coveringColleagues.includes(s.name) ? ' selected' : '';
+    return '<option value="'+s.name+'|'+s.email+'"'+selected+'>'+s.name+'</option>';
+  }).join('') + '<option value="Kandia Du Bruyn|kandia@risk2solution.com"' + (e.coveringColleagues&&e.coveringColleagues.includes('Kandia Du Bruyn')?' selected':'') + '>Kandia Du Bruyn</option>';
+
+  openModal('Edit leave — ' + e.staffName, 'Update any details and save',
+    '<div style="display:grid;gap:10px">' +
+      '<div><div class="mfl">Staff member</div>' +
+        '<select id="ed_staff" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)">'+staffOpts+'</select></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<div><div class="mfl">Leave start date</div><input id="ed_start" type="date" value="'+e.startDate+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
+        '<div><div class="mfl">Leave end date</div><input id="ed_end" type="date" value="'+e.endDate+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
+      '</div>' +
+      '<div><div class="mfl">Covering colleague(s) <span style="font-weight:400;color:var(--t3)">(Ctrl/Cmd for multiple)</span></div>' +
+        '<select id="ed_cover" multiple style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);height:100px">'+coverOpts+'</select></div>' +
+      '<div><div class="mfl">Status</div>' +
+        '<select id="ed_status" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)">' +
+          ['pending_confirmation','confirmed','process_started','in_progress','approved','on_leave','returned','cancelled'].map(function(s){
+            return '<option value="'+s+'"'+(e.status===s?' selected':'')+'>'+s.charAt(0).toUpperCase()+s.slice(1).replace(/_/g,' ')+'</option>';
+          }).join('') +
+        '</select></div>' +
+      '<div><div class="mfl">Notes</div><textarea id="ed_notes" rows="2" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);resize:vertical">'+(e.notes||'')+'</textarea></div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;margin-top:14px">' +
+      '<button class="m-btn" onclick="saveLeaveEdit(\''+id+'\')" style="flex:1">Save changes</button>' +
+      '<button class="m-btn sec" onclick="closeModal()" style="flex:1">Cancel</button>' +
+    '</div>'
+  );
+}
+
+async function saveLeaveEdit(id) {
+  var staffSel = (document.getElementById('ed_staff')||{}).value||'';
+  var start    = (document.getElementById('ed_start')||{}).value;
+  var end      = (document.getElementById('ed_end')||{}).value;
+  var status   = (document.getElementById('ed_status')||{}).value;
+  var notes    = (document.getElementById('ed_notes')||{}).value||'';
+  var coverSel = document.getElementById('ed_cover');
+  var coverNames = [], coverEmails = [];
+  if (coverSel) Array.from(coverSel.selectedOptions).forEach(function(opt) {
+    var parts = opt.value.split('|');
+    if (parts[0]) coverNames.push(parts[0]);
+    if (parts[1]) coverEmails.push(parts[1]);
+  });
+  var staffParts = staffSel.split('|');
+  try {
+    var r = await fetch('/leave/'+id, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        staffName:         staffParts[0]||undefined,
+        staffEmail:        staffParts[1]||undefined,
+        startDate:         start,
+        endDate:           end,
+        status,
+        notes,
+        coveringColleague: coverNames.join(', '),
+        coveringEmail:     coverEmails[0]||'',
+        coveringColleagues: coverNames,
+        coveringEmails:    coverEmails
+      })
+    });
+    var d = await r.json();
+    if (d.success) {
+      closeModal();
+      showToast('Leave entry updated');
+      loadLeaveEntries();
+    } else { showToast('Error: '+(d.error||'Failed')); }
+  } catch(e) { showToast('Error: '+e.message); }
 }
 
 </script>
