@@ -4025,40 +4025,64 @@ async function generatePopulatedChecklist(entry) {
 async function scanLeaveReplies(state) {
   if (!tokenStore.access_token) return;
   try {
+    const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+    // Only scan last 3 days, genuine replies only
     const since = new Date(Date.now() - 3*24*60*60*1000).toISOString();
-    const recentEmails = await graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$top=100&$select=subject,from,bodyPreview,body,conversationId,receivedDateTime`);
+    const recentEmails = await graphGet(
+      `/me/messages?$filter=receivedDateTime ge ${since}&$top=100&$select=subject,from,bodyPreview,body,conversationId,receivedDateTime`
+    );
     const msgs = recentEmails.value||[];
     let changed = false;
-    const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
 
     for (const entry of (state.leaveEntries||[])) {
       if (!['process_started','in_progress','confirmed'].includes(entry.status)) continue;
+      if (!entry.firstEmailSentAt) continue; // Haven't sent checklist yet
 
-      const relevantAddrs = [...(entry.coveringEmails||[]), entry.staffEmail, entry.staffEmail].filter(Boolean);
+      const firstSentAt = new Date(entry.firstEmailSentAt);
+      const relevantAddrs = [...new Set([...(entry.coveringEmails||[]), entry.staffEmail].filter(Boolean))];
+
+      // STRICT filter: only genuine replies — Re: subject is mandatory
+      // This prevents Cinderella's own CC emails being treated as confirmations
       const replies = msgs.filter(m => {
         const addr = (m.from?.emailAddress?.address||'').toLowerCase();
-        return relevantAddrs.some(e => addr.includes(e.toLowerCase().split('@')[0]));
+        const subj = (m.subject||'').toLowerCase();
+        // Must be from a covering colleague or the staff member going on leave
+        if (!relevantAddrs.some(e => addr === e.toLowerCase())) return false;
+        // Must arrive AFTER the checklist was sent
+        if (new Date(m.receivedDateTime) <= firstSentAt) return false;
+        // MUST be a genuine reply — Re: is the only reliable indicator
+        // Cinderella's own emails (even when CC'd to Kandia) never have Re:
+        if (!subj.startsWith('re:')) return false;
+        return true;
       });
+
       if (!replies.length) continue;
 
       for (const reply of replies) {
-        const bodyText = ((reply.body?.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ') + ' ' + (reply.bodyPreview||'')).toLowerCase();
+        // Skip if we've already processed this exact email
+        const replyId = reply.conversationId + '_' + reply.receivedDateTime;
+        if ((entry.processedReplies||[]).includes(replyId)) continue;
 
-        // ── Map keywords to checklist items ──
+        const bodyText = ((reply.body?.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ') + ' ' + (reply.bodyPreview||'')).toLowerCase();
+        
+        // Must contain affirmative language — not just any email
+        const isAffirmative = /(complet|done|finish|confirm|tick|checked|yes|agreed|sorted|all good)/.test(bodyText);
+        if (!isAffirmative) continue;
+
+        console.log('[Leave] Processing reply from', reply.from?.emailAddress?.name, ':', reply.subject);
+
         const KEYWORD_MAP = [
           { keys:['contacts and access','contacts & access','contacts, access','key contacts'], items:['contacts','access','external'] },
-          { keys:['current state of work','current state','status update','project status','work status'], items:['status','deadlines','stalling'] },
-          { keys:['resources and links','sharepoint links','links','resources'], items:['sharepoint'] },
+          { keys:['current state of work','current state','status update','project status'], items:['status','deadlines','stalling'] },
+          { keys:['sharepoint links','resources and links','resources & links'], items:['sharepoint'] },
           { keys:['links tested','links confirmed','links working','confirmed accessible'], items:['sp_verified'] },
-          { keys:['decisions','judgement calls','decision'], items:['decisions','risks'] },
-          { keys:['handover discussion','discussion completed','had a discussion','met with','meeting held'], items:['discussion','understood','emergency'] },
-          { keys:['phase 1','phase one','section 1 signed','all signed'], items:['phase1_signed'] },
-          { keys:['phase 2','phase two'], items:['phase2_signed'] },
+          { keys:['decisions and judgement','decisions & judgement','decisions'], items:['decisions','risks'] },
+          { keys:['handover discussion','had our discussion','met with','discussion done'], items:['discussion','understood','emergency'] },
+          { keys:['phase 1 signed','phase 1 confirmed','section 1 signed'], items:['phase1_signed'] },
+          { keys:['phase 2 signed','phase 2 confirmed'], items:['phase2_signed'] },
         ];
 
-        // Also look for "all complete", "all done", "everything complete"
-        const allDone = /all (items |sections |tasks |checklist )?(complete|done|finished|confirmed)/.test(bodyText) ||
-                        /everything (is )?(complete|done|finished)/.test(bodyText);
+        const allDone = /all (items|sections|tasks|checklist|of it) (are )?(complete|done|finished|confirmed)/.test(bodyText) || /everything (is )?(complete|done|finished)/.test(bodyText);
 
         let itemsUpdated = false;
         if (!entry.checklist) entry.checklist = {};
@@ -4067,7 +4091,7 @@ async function scanLeaveReplies(state) {
           CHECKLIST_ITEMS.filter(i => !i.id.includes('signed')).forEach(i => {
             if (!entry.checklist[i.id]) { entry.checklist[i.id] = true; itemsUpdated = true; }
           });
-          console.log('[Leave] All items marked complete from reply by', reply.from?.emailAddress?.name);
+          console.log('[Leave] All items marked complete from reply');
         } else {
           for (const mapping of KEYWORD_MAP) {
             if (mapping.keys.some(k => bodyText.includes(k))) {
@@ -4078,57 +4102,47 @@ async function scanLeaveReplies(state) {
           }
         }
 
-        // ── Extract SharePoint links ──
-        const fullBody = reply.body?.content || reply.bodyPreview || '';
-        const spLinks = (fullBody.match(/https:\/\/[^\s<>"]+sharepoint[^\s<>"]+/gi)||[]).map(u => u.replace(/[>)"]+$/, ''));
+        // Extract SharePoint links
+        const spLinks = ((reply.body?.content||'') + (reply.bodyPreview||'')).match(/https:\/\/[^\s<>"]+sharepoint[^\s<>"]+/gi)||[];
         if (spLinks.length > 0) {
           if (!entry.sharepointLinks) entry.sharepointLinks = {};
-          const SP_FIELD_NAMES = ['masterFolder','clientFolder','templates','correspondence','other'];
-          spLinks.forEach((link, i) => {
-            const field = SP_FIELD_NAMES[i] || 'other';
-            if (!entry.sharepointLinks[field]) {
-              entry.sharepointLinks[field] = link;
-              itemsUpdated = true;
-              console.log('[Leave] SharePoint link captured:', field, link.substring(0,60));
-            }
+          const SP_FIELDS = ['masterFolder','clientFolder','templates','correspondence','other'];
+          spLinks.map(u=>u.replace(/[>)"]+$/,'')).forEach((link,i) => {
+            const field = SP_FIELDS[i]||'other';
+            if (!entry.sharepointLinks[field]) { entry.sharepointLinks[field]=link; itemsUpdated=true; }
           });
-          if (spLinks.length > 0 && !entry.checklist.sharepoint) {
-            entry.checklist.sharepoint = true; itemsUpdated = true;
-          }
+          if (!entry.checklist.sharepoint) { entry.checklist.sharepoint=true; itemsUpdated=true; }
         }
+
+        // Mark this reply as processed
+        if (!entry.processedReplies) entry.processedReplies = [];
+        entry.processedReplies.push(replyId);
 
         if (itemsUpdated) {
           entry.status = 'in_progress';
-          entry.pendingReplyReview = {
-            from: reply.from?.emailAddress?.name,
-            receivedAt: reply.receivedDateTime,
-            preview: reply.bodyPreview?.substring(0,200)
-          };
           entry.awaitingReply = false;
           changed = true;
 
-          // Send updated checklist to all parties
           const done = CHECKLIST_ITEMS.filter(i => entry.checklist[i.id]).length;
           const total = CHECKLIST_ITEMS.length;
           const pct = Math.round(done/total*100);
-          const allCoverEmails = entry.coveringEmails && entry.coveringEmails.length > 0
-            ? entry.coveringEmails : entry.coveringEmail ? [entry.coveringEmail] : [];
-          const toEmails = [...new Set([...allCoverEmails, entry.staffEmail].filter(Boolean))];
-          // Exclude Kandia from CC if she's already in the TO list
-          const ccEmails = toEmails.includes(kandiaEmail) ? [] : [kandiaEmail];
-
+          const allCoverEmails = entry.coveringEmails&&entry.coveringEmails.length>0 ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
+          const LEAVE_TESTING_MODE = true;
+          const toEmails = LEAVE_TESTING_MODE ? [kandiaEmail] : [...new Set([...allCoverEmails, entry.staffEmail].filter(Boolean))];
+          const ccEmails = LEAVE_TESTING_MODE ? [] : (toEmails.includes(kandiaEmail)?[]:[kandiaEmail]);
           const html = buildLeaveEmail('checklist_updated', entry);
           await sendLeaveAlert(toEmails, ccEmails,
-            '📋 Checklist updated: ' + pct + '% complete — ' + entry.staffName + ' leave handover',
+            (LEAVE_TESTING_MODE?'[TEST] ':'')+'📋 Checklist updated: '+pct+'% complete — '+entry.staffName+' leave handover',
             html, 'normal', entry);
-          console.log('[Leave] ✅ Updated checklist sent (' + done + '/' + total + ' items)');
-          break; // One email per leave per scan cycle
+          console.log('[Leave] ✅ Checklist update email sent ('+done+'/'+total+' items)');
+          break;
         }
       }
     }
     if (changed) saveLeaveState(state);
   } catch(e) { console.warn('[Leave] Reply scan error:', e.message); }
 }
+
 
 // ── FRIDAY CHECK-IN REMINDER ──
 // Staff on leave can be added to LEAVE_LIST — they are excluded from reminders
@@ -5554,6 +5568,19 @@ app.post('/leave/:id/send-checklist', requireAuth, async (req, res) => {
     console.error('[Leave] send-checklist error:', e.message, e.stack?.substring(0,500));
     res.status(500).json({error: e.message || 'Failed to send checklist email'});
   }
+});
+
+// Reset checklist (for testing/corrections)
+app.post('/leave/:id/reset-checklist', requireAuth, (req, res) => {
+  const state = loadLeaveState();
+  const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+  if (!entry) return res.status(404).json({error:'Not found'});
+  entry.checklist = {};
+  entry.processedReplies = [];
+  entry.sharepointLinks = {};
+  saveLeaveState(state);
+  console.log('[Leave] Checklist reset for', entry.staffName);
+  res.json({success:true, message:'Checklist reset for '+entry.staffName});
 });
 
 // Debug: show a leave entry's details
