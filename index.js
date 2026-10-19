@@ -3994,6 +3994,141 @@ app.post('/proactive/trigger/:feature', requireAuth, async (req, res) => {
   }
 });
 
+// Generate populated Word checklist from template using Python script
+async function generatePopulatedChecklist(entry) {
+  const { execSync } = await import('child_process');
+  const data = {
+    staffName:        entry.staffName || '',
+    staffRole:        entry.staffRole || '',
+    startDate:        entry.startDate || '',
+    endDate:          entry.endDate || '',
+    coveringColleague: entry.coveringColleague || '',
+    manager:          'Kandia Du Bruyn',
+    checklist:        entry.checklist || {},
+    sharepointLinks:  entry.sharepointLinks || {}
+  };
+  const SCRIPT_PATHS = [
+    '/home/generate_checklist.py',
+    '/home/site/wwwroot/generate_checklist.py',
+  ];
+  let scriptPath = null;
+  for (const p of SCRIPT_PATHS) {
+    if (existsSync(p)) { scriptPath = p; break; }
+  }
+  if (!scriptPath) throw new Error('generate_checklist.py not found');
+  const b64 = execSync(`python3 ${scriptPath} '${JSON.stringify(data).replace(/'/g,"'\''")}' `, {timeout:15000}).toString().trim();
+  if (!b64) throw new Error('Python script returned empty output');
+  return b64;
+}
+
+// Parse email replies to auto-update checklist and extract SharePoint links
+async function scanLeaveReplies(state) {
+  if (!tokenStore.access_token) return;
+  try {
+    const since = new Date(Date.now() - 3*24*60*60*1000).toISOString();
+    const recentEmails = await graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$top=100&$select=subject,from,bodyPreview,body,conversationId,receivedDateTime`);
+    const msgs = recentEmails.value||[];
+    let changed = false;
+    const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+
+    for (const entry of (state.leaveEntries||[])) {
+      if (!['process_started','in_progress','confirmed'].includes(entry.status)) continue;
+
+      const relevantAddrs = [...(entry.coveringEmails||[]), entry.staffEmail, entry.staffEmail].filter(Boolean);
+      const replies = msgs.filter(m => {
+        const addr = (m.from?.emailAddress?.address||'').toLowerCase();
+        return relevantAddrs.some(e => addr.includes(e.toLowerCase().split('@')[0]));
+      });
+      if (!replies.length) continue;
+
+      for (const reply of replies) {
+        const bodyText = ((reply.body?.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ') + ' ' + (reply.bodyPreview||'')).toLowerCase();
+
+        // ── Map keywords to checklist items ──
+        const KEYWORD_MAP = [
+          { keys:['contacts and access','contacts & access','contacts, access','key contacts'], items:['contacts','access','external'] },
+          { keys:['current state of work','current state','status update','project status','work status'], items:['status','deadlines','stalling'] },
+          { keys:['resources and links','sharepoint links','links','resources'], items:['sharepoint'] },
+          { keys:['links tested','links confirmed','links working','confirmed accessible'], items:['sp_verified'] },
+          { keys:['decisions','judgement calls','decision'], items:['decisions','risks'] },
+          { keys:['handover discussion','discussion completed','had a discussion','met with','meeting held'], items:['discussion','understood','emergency'] },
+          { keys:['phase 1','phase one','section 1 signed','all signed'], items:['phase1_signed'] },
+          { keys:['phase 2','phase two'], items:['phase2_signed'] },
+        ];
+
+        // Also look for "all complete", "all done", "everything complete"
+        const allDone = /all (items |sections |tasks |checklist )?(complete|done|finished|confirmed)/.test(bodyText) ||
+                        /everything (is )?(complete|done|finished)/.test(bodyText);
+
+        let itemsUpdated = false;
+        if (!entry.checklist) entry.checklist = {};
+
+        if (allDone) {
+          CHECKLIST_ITEMS.filter(i => !i.id.includes('signed')).forEach(i => {
+            if (!entry.checklist[i.id]) { entry.checklist[i.id] = true; itemsUpdated = true; }
+          });
+          console.log('[Leave] All items marked complete from reply by', reply.from?.emailAddress?.name);
+        } else {
+          for (const mapping of KEYWORD_MAP) {
+            if (mapping.keys.some(k => bodyText.includes(k))) {
+              mapping.items.forEach(item => {
+                if (!entry.checklist[item]) { entry.checklist[item] = true; itemsUpdated = true; }
+              });
+            }
+          }
+        }
+
+        // ── Extract SharePoint links ──
+        const fullBody = reply.body?.content || reply.bodyPreview || '';
+        const spLinks = (fullBody.match(/https:\/\/[^\s<>"]+sharepoint[^\s<>"]+/gi)||[]).map(u => u.replace(/[>)"]+$/, ''));
+        if (spLinks.length > 0) {
+          if (!entry.sharepointLinks) entry.sharepointLinks = {};
+          const SP_FIELD_NAMES = ['masterFolder','clientFolder','templates','correspondence','other'];
+          spLinks.forEach((link, i) => {
+            const field = SP_FIELD_NAMES[i] || 'other';
+            if (!entry.sharepointLinks[field]) {
+              entry.sharepointLinks[field] = link;
+              itemsUpdated = true;
+              console.log('[Leave] SharePoint link captured:', field, link.substring(0,60));
+            }
+          });
+          if (spLinks.length > 0 && !entry.checklist.sharepoint) {
+            entry.checklist.sharepoint = true; itemsUpdated = true;
+          }
+        }
+
+        if (itemsUpdated) {
+          entry.status = 'in_progress';
+          entry.pendingReplyReview = {
+            from: reply.from?.emailAddress?.name,
+            receivedAt: reply.receivedDateTime,
+            preview: reply.bodyPreview?.substring(0,200)
+          };
+          entry.awaitingReply = false;
+          changed = true;
+
+          // Send updated checklist to all parties
+          const done = CHECKLIST_ITEMS.filter(i => entry.checklist[i.id]).length;
+          const total = CHECKLIST_ITEMS.length;
+          const pct = Math.round(done/total*100);
+          const allCoverEmails = entry.coveringEmails && entry.coveringEmails.length > 0
+            ? entry.coveringEmails : entry.coveringEmail ? [entry.coveringEmail] : [];
+          const toEmails = [...new Set([...allCoverEmails, entry.staffEmail].filter(Boolean))];
+          const ccEmails = [kandiaEmail];
+
+          const html = buildLeaveEmail('checklist_updated', entry);
+          await sendLeaveAlert(toEmails, ccEmails,
+            '📋 Checklist updated: ' + pct + '% complete — ' + entry.staffName + ' leave handover',
+            html, 'normal', entry);
+          console.log('[Leave] ✅ Updated checklist sent (' + done + '/' + total + ' items)');
+          break; // One email per leave per scan cycle
+        }
+      }
+    }
+    if (changed) saveLeaveState(state);
+  } catch(e) { console.warn('[Leave] Reply scan error:', e.message); }
+}
+
 // ── FRIDAY CHECK-IN REMINDER ──
 // Staff on leave can be added to LEAVE_LIST — they are excluded from reminders
 const LEAVE_LIST = ['Ross Mackenzie', 'ross.m@risk2solution.com']; // Update as staff come/go on leave
@@ -5030,30 +5165,17 @@ async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance,
     // Attach updated Excel checklist if entry provided
     if (entry) {
       try {
-        let attachBuf, attachName, attachType;
-        try {
-          const xlsxPath = await generateLeaveChecklistXlsx(entry);
-          attachBuf = readFileSync(xlsxPath);
-          attachName = 'Leave_Handover_Checklist_' + entry.staffName.replace(/\s+/g,'_') + '.xlsx';
-          attachType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-          console.log('[Leave] XLSX attached:', attachName, '(' + attachBuf.length + 'b)');
-        } catch(xlErr) {
-          console.warn('[Leave] XLSX failed, using CSV fallback:', xlErr.message);
-          const isPastTrigger = new Date() > new Date(entry.triggerDate);
-          let csv = 'RISK 2 SOLUTION - LEAVE HANDOVER CHECKLIST\r\nStaff,' + entry.staffName + '\r\nStart,' + entry.startDate + '\r\nEnd,' + entry.endDate + '\r\nCover,' + (entry.coveringColleague||'') + '\r\nDue,' + entry.triggerDate + '\r\n\r\nSection,Item,Status\r\n';
-          CHECKLIST_ITEMS.forEach(function(item) {
-            var done = entry.checklist && entry.checklist[item.id];
-            var status = done ? 'COMPLETE' : (new Date() > new Date(entry.triggerDate)) ? 'OVERDUE' : 'OUTSTANDING';
-            csv += '"Section ' + item.section + '","' + item.label.replace(/"/g, "'") + '",' + status + '\r\n';
-          });
-          attachBuf = Buffer.from(csv, 'utf8');
-          attachName = 'Leave_Handover_Checklist_' + entry.staffName.replace(/\s+/g,'_') + '.csv';
-          attachType = 'text/csv';
-          console.log('[Leave] CSV fallback attached:', attachName);
-        }
-        payload.attachments = [{'@odata.type':'#microsoft.graph.fileAttachment', name:attachName, contentType:attachType, contentBytes:attachBuf.toString('base64')}];
-        console.log('[Leave] ✅ Attachment ready:', attachName);
-      } catch(e) { console.error('[Leave] Attachment failed completely:', e.message); }
+        const attachB64 = await generatePopulatedChecklist(entry);
+        payload.attachments = [{
+          '@odata.type': '#microsoft.graph.fileAttachment',
+          name: 'R2S_Staff_Leave_Handover_Checklist.docx',
+          contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          contentBytes: attachB64
+        }];
+        console.log('[Leave] ✅ Populated checklist attached');
+      } catch(e) {
+        console.error('[Leave] Checklist attach failed:', e.message);
+      }
     }
     const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
       method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
@@ -5218,43 +5340,6 @@ async function monitorLeaveEntries() {
 }
 
 // Scan inbox for replies confirming checklist items completed
-async function scanLeaveReplies(state) {
-  if (!tokenStore.access_token) return;
-  try {
-    const since = new Date(Date.now() - 2*24*60*60*1000).toISOString();
-    const recentEmails = await graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$top=50&$select=subject,from,bodyPreview,conversationId,receivedDateTime`);
-    const msgs = recentEmails.value||[];
-    let changed = false;
-    for (const entry of (state.leaveEntries||[])) {
-      if (!entry.awaitingReply) continue;
-      // Look for replies from covering colleagues or staff member
-      const relevantEmails = entry.coveringEmails||[];
-      if (entry.staffEmail) relevantEmails.push(entry.staffEmail);
-      const replies = msgs.filter(m => {
-        const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
-        return relevantEmails.some(e => fromAddr.includes(e.toLowerCase().split('@')[0]));
-      });
-      for (const reply of replies) {
-        const body = (reply.bodyPreview||'').toLowerCase();
-        if (!body.includes('complet') && !body.includes('done') && !body.includes('confirm') && !body.includes('yes') && !body.includes('tick')) continue;
-        console.log('[Leave] Possible reply from', reply.from?.emailAddress?.address, ':', body.substring(0,100));
-        // Note the reply — Kandia reviews and ticks items manually in Cinderella
-        // Auto-ticking based on email content alone is too risky for accuracy
-        if (!entry.pendingReplyReview) {
-          entry.pendingReplyReview = {
-            from: reply.from?.emailAddress?.name,
-            receivedAt: reply.receivedDateTime,
-            preview: reply.bodyPreview?.substring(0,200)
-          };
-          entry.awaitingReply = false;
-          changed = true;
-          console.log('[Leave] Reply detected — flagged for Kandia review in Cinderella');
-        }
-      }
-    }
-    if (changed) saveLeaveState(state);
-  } catch(e) { console.warn('[Leave] Reply scan error:', e.message); }
-}
 // (old monitor replaced)
 
 
@@ -5289,7 +5374,7 @@ app.post('/leave/:id/confirm', requireAuth, async (req, res) => {
 
 app.post('/leave', requireAuth, async (req, res) => {
   try {
-    const { staffName, staffEmail, startDate, endDate, coveringColleague, coveringEmail } = req.body;
+    const { staffName, staffEmail, startDate, endDate, coveringColleague, coveringEmail, staffRole } = req.body;
     if (!staffName || !startDate || !endDate) return res.status(400).json({error:'staffName, startDate, endDate required'});
     const start = new Date(startDate);
     const triggerDate = new Date(start.getTime() - 14*24*60*60*1000); // 2 weeks before
@@ -5303,7 +5388,7 @@ app.post('/leave', requireAuth, async (req, res) => {
 
     const entry = {
       id: 'leave_' + Date.now(),
-      staffName, staffEmail: staffEmail || '',
+      staffName, staffEmail: staffEmail||'', staffRole: staffRole||'',
       startDate, endDate,
       coveringColleague: colleagues.join(', '),   // display string
       coveringEmail: colleagueEmails[0] || '',     // primary email (backwards compat)
