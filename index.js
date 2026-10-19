@@ -3498,11 +3498,11 @@ Return ONLY a JSON object with no markdown:
 }
 
 // ── 7. COMPLIANCE DEADLINE MONITORING ────────────────────────
-async function checkComplianceDeadlines() {
+async function checkComplianceDeadlines(silentMode) {
   if (!tokenStore.access_token) return;
   const { dateStr } = getBrisbaneNow();
   const state = loadProactiveState();
-  if (state.complianceCheckDate === dateStr) return;
+  if (state.complianceCheckDate === dateStr && silentMode) return;
 
   try {
     const now = new Date();
@@ -5376,19 +5376,404 @@ app.post('/leave/:id/send-checklist', requireAuth, async (req, res) => {
     const state = loadLeaveState();
     const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
     if (!entry) return res.status(404).json({error:'Leave entry not found'});
-    if (!entry.staffEmail) return res.status(400).json({error:'Staff member has no email address — please check the leave entry'});
-    console.log('[Leave] Sending checklist email for', entry.staffName, 'to', entry.staffEmail);
-    await sendLeaveChecklistEmail(entry);
+
+    // Diagnose before sending
+    const kandiaEmail = await getKandiaEmail().catch(()=>'unknown');
+    const allCoverEmails = entry.coveringEmails && entry.coveringEmails.length > 0
+      ? entry.coveringEmails : entry.coveringEmail ? [entry.coveringEmail] : [];
+
+    console.log('[Leave] send-checklist request for:', entry.staffName);
+    console.log('[Leave] staffEmail:', entry.staffEmail || 'EMPTY');
+    console.log('[Leave] coveringEmails:', allCoverEmails.join(',') || 'NONE');
+    console.log('[Leave] kandiaEmail:', kandiaEmail);
+
+    if (!entry.staffEmail && !allCoverEmails.length) {
+      return res.status(400).json({
+        error: 'No email addresses — staffEmail and covering colleagues are both empty. Edit the leave entry to add them.',
+        debug: { staffEmail: entry.staffEmail, coveringEmails: allCoverEmails }
+      });
+    }
+
+    // Send to covering colleagues (TO) and staff + Kandia (CC)
+    // This is the CORRECT direction per the new process
+    const toEmails = allCoverEmails.length > 0 ? allCoverEmails : [entry.staffEmail];
+    const ccEmails = [];
+    if (entry.staffEmail && !toEmails.includes(entry.staffEmail)) ccEmails.push(entry.staffEmail);
+    if (kandiaEmail && !toEmails.includes(kandiaEmail)) ccEmails.push(kandiaEmail);
+
+    console.log('[Leave] Sending TO:', toEmails.join(','), '| CC:', ccEmails.join(','));
+
+    const subject = '📋 Leave Handover Checklist — ' + entry.staffName + ' (leave from ' + new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ')';
+    const html = buildLeaveEmail('cover_nominated_briefing', entry);
+    const sent = await sendLeaveAlert(toEmails, ccEmails, subject, html, 'high', entry);
+
     entry.checklistSentAt = new Date().toISOString();
     saveLeaveState(state);
-    res.json({success:true, message:'Checklist email sent to '+entry.staffEmail});
+
+    res.json({
+      success: true,
+      sent,
+      message: sent
+        ? 'Checklist email sent to ' + toEmails.join(', ') + (ccEmails.length ? ' (CC: '+ccEmails.join(', ')+')' : '')
+        : 'Email saved to Outlook Drafts — Mail.Send permission may not be granted. Open Outlook Drafts to send manually.',
+      debug: { to: toEmails, cc: ccEmails, staffEmail: entry.staffEmail, coveringEmails: allCoverEmails }
+    });
   } catch(e) {
-    console.error('[Leave] send-checklist error:', e.message, e.stack?.substring(0,300));
+    console.error('[Leave] send-checklist error:', e.message, e.stack?.substring(0,500));
     res.status(500).json({error: e.message || 'Failed to send checklist email'});
   }
 });
 
+// Debug: show a leave entry's details
+app.get('/leave/:id/debug', requireAuth, (req, res) => {
+  const state = loadLeaveState();
+  const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+  if (!entry) return res.status(404).json({error:'Not found'});
+  res.json({
+    id: entry.id,
+    staffName: entry.staffName,
+    staffEmail: entry.staffEmail || 'EMPTY - THIS IS THE PROBLEM',
+    coveringColleague: entry.coveringColleague,
+    coveringEmail: entry.coveringEmail,
+    coveringColleagues: entry.coveringColleagues,
+    coveringEmails: entry.coveringEmails,
+    startDate: entry.startDate,
+    endDate: entry.endDate,
+    status: entry.status,
+    checklistSentAt: entry.checklistSentAt,
+    notifiedKandiaAt: entry.notifiedKandiaAt
+  });
+});
 
+
+
+
+// ── COMPLIANCE EMAIL BUILDER (Outlook-safe) ────────────────────
+function buildComplianceEmail(subject, heading, items, intro, footer_note) {
+  const now = new Date();
+  const itemRows = items.map(item => {
+    const due = new Date(item.dueDate);
+    const daysOut = Math.ceil((due - now) / (24*60*60*1000));
+    const isOverdue = daysOut < 0;
+    const isUrgent = daysOut >= 0 && daysOut <= 7;
+    const statusCol = isOverdue ? '#C8211E' : isUrgent ? '#D97706' : '#0D8A62';
+    const statusBg  = isOverdue ? '#FEE2E2' : isUrgent ? '#FEF3C7' : '#F0FDF4';
+    const statusLabel = isOverdue ? 'OVERDUE' : daysOut === 0 ? 'DUE TODAY' : 'Due in '+daysOut+' day'+(daysOut!==1?'s':'');
+    return `<tr>
+      <td bgcolor="${statusBg}" style="background-color:${statusBg};padding:12px 14px;border-radius:6px;margin-bottom:8px">
+        <table cellpadding="0" cellspacing="0" width="100%"><tr>
+          <td style="vertical-align:top">
+            <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#111">${item.title}</p>
+            ${item.category ? `<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:11px;color:#777">${item.category}${item.source ? ' &middot; Source: '+item.source : ''}</p>` : ''}
+            ${item.notes ? `<p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#444">${item.notes}</p>` : ''}
+          </td>
+          <td align="right" style="vertical-align:top;padding-left:12px;white-space:nowrap">
+            <p style="margin:0 0 2px;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:${statusCol}">${statusLabel}</p>
+            <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#777">${due.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})}</p>
+          </td>
+        </tr></table>
+      </td>
+    </tr><tr><td style="height:8px"></td></tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:20px;background:#F2F1EE;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #E8E6E1;">
+<tr><td bgcolor="#07706B" style="background-color:#07706B;padding:22px 28px;">
+  <table cellpadding="0" cellspacing="0" width="100%"><tr>
+    <td>
+      <table cellpadding="0" cellspacing="0"><tr>
+        <td style="width:36px;height:36px;background-color:#ffffff;border-radius:8px;text-align:center;vertical-align:middle">
+          <span style="font-family:Georgia,serif;font-size:22px;font-weight:bold;color:#07706B;line-height:36px;display:block">C</span>
+        </td>
+        <td style="padding-left:12px;vertical-align:middle">
+          <p style="margin:0;font-family:Georgia,serif;font-size:22px;font-style:italic;color:#ffffff;font-weight:bold">Cinderella</p>
+          <p style="margin:2px 0 0;font-family:Arial,sans-serif;font-size:9px;color:rgba(255,255,255,0.85);letter-spacing:2px;text-transform:uppercase">COMPLIANCE &middot; RISK 2 SOLUTION</p>
+        </td>
+      </tr></table>
+    </td>
+  </tr></table>
+</td></tr>
+<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #07706B;">
+  <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif">${heading}</p>
+</td></tr>
+<tr><td style="padding:20px 28px;">
+  <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">${intro}</p>
+  <table cellpadding="0" cellspacing="0" width="100%">${itemRows}</table>
+  ${footer_note ? `<p style="margin:16px 0 0;font-family:Arial,sans-serif;font-size:12px;color:#666;border-top:1px solid #E8E6E1;padding-top:12px">${footer_note}</p>` : ''}
+  <table cellpadding="0" cellspacing="0" style="margin-top:18px"><tr><td style="background-color:#07706B;border-radius:6px;padding:9px 18px;">
+    <a href="https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net" style="font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#ffffff;text-decoration:none">View in Cinderella &rarr;</a>
+  </td></tr></table>
+</td></tr>
+<tr><td bgcolor="#F2F1EE" style="background-color:#F2F1EE;padding:12px 28px;border-top:1px solid #E8E6E1;">
+  <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#777">Cinderella &middot; Executive Assistant to Kandia Du Bruyn, COO &middot; Risk 2 Solution</p>
+</td></tr>
+</table></body></html>`;
+}
+
+// Monday: items due this week
+async function sendMondayComplianceBrief() {
+  if (!tokenStore.access_token) return;
+  const { dateStr, weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.mondayComplianceWeek === weekKey) return;
+
+  await checkComplianceDeadlines(true); // Refresh items silently first
+  const freshState = loadProactiveState();
+  const items = (freshState.complianceItems||[]);
+  const now = new Date();
+  const in7 = new Date(now.getTime() + 7*24*60*60*1000);
+
+  const dueThisWeek = items.filter(i => {
+    const d = new Date(i.dueDate);
+    return d >= now && d <= in7;
+  }).sort((a,b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+  const upcoming = items.filter(i => {
+    const d = new Date(i.dueDate);
+    return d > in7;
+  }).slice(0,5);
+
+  if (!dueThisWeek.length && !upcoming.length) {
+    state.mondayComplianceWeek = weekKey;
+    saveProactiveState(state);
+    return;
+  }
+
+  const allItems = [...dueThisWeek, ...upcoming];
+  const intro = dueThisWeek.length > 0
+    ? `Good morning Kandia. You have <strong>${dueThisWeek.length} compliance item${dueThisWeek.length!==1?'s':''} due this week</strong>. Please review and action these before the end of the week.`
+    : `Good morning Kandia. No compliance items are due this week — here is a preview of what is coming up.`;
+
+  const html = buildComplianceEmail(
+    '📋 Compliance brief — week of ' + new Date().toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'}),
+    '📋 Compliance Brief — ' + new Date().toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'}),
+    allItems,
+    intro,
+    'You can edit due dates and add items to your calendar in Cinderella under the Compliance tab.'
+  );
+
+  const kandiaEmail = await getKandiaEmail();
+  const token = await getValidToken();
+  const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+    method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({
+      subject: '📋 Compliance this week — ' + dueThisWeek.length + ' item' + (dueThisWeek.length!==1?'s':'')+' due',
+      importance: dueThisWeek.length > 0 ? 'high' : 'normal',
+      body: {contentType:'HTML', content:html},
+      toRecipients: [{emailAddress:{address:kandiaEmail}}]
+    })
+  });
+  const msg = await draft.json();
+  if (msg.id) {
+    const send = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',{method:'POST',headers:{Authorization:'Bearer '+token}});
+    if (send.status === 202) console.log('[Compliance] ✅ Monday brief sent');
+  }
+  state.mondayComplianceWeek = weekKey;
+  saveProactiveState(state);
+}
+
+// Friday: completed this week + preview next week
+async function sendFridayComplianceBrief() {
+  if (!tokenStore.access_token) return;
+  const { weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.fridayComplianceWeek === weekKey) return;
+
+  const items = (state.complianceItems||[]);
+  const now = new Date();
+  const nextWeekEnd = new Date(now.getTime() + 14*24*60*60*1000);
+  const nextWeekStart = new Date(now.getTime() + 3*24*60*60*1000); // Sun
+
+  const completedThisWeek = items.filter(i => i.completedAt && new Date(i.completedAt) >= new Date(now.getTime()-7*24*60*60*1000));
+  const nextWeek = items.filter(i => {
+    const d = new Date(i.dueDate);
+    return d >= nextWeekStart && d <= nextWeekEnd;
+  }).sort((a,b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+  const allItems = [...nextWeek];
+  if (!allItems.length && !completedThisWeek.length) {
+    state.fridayComplianceWeek = weekKey;
+    saveProactiveState(state);
+    return;
+  }
+
+  const completedList = completedThisWeek.length > 0
+    ? '<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">Completed this week</p>' +
+      completedThisWeek.map(i => '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;color:#0D8A62">&#10003;&nbsp;&nbsp;' + i.title + '</p>').join('')
+    : '';
+
+  const intro = `Good afternoon Kandia. Here is your end-of-week compliance summary.` + (completedThisWeek.length ? ` You completed <strong>${completedThisWeek.length} item${completedThisWeek.length!==1?'s':''}</strong> this week — great work.` : '') + (nextWeek.length ? ` There are <strong>${nextWeek.length} item${nextWeek.length!==1?'s':''} due next week</strong> to prepare for.` : ' Nothing due next week.');
+
+  const html = buildComplianceEmail(
+    '📋 Friday compliance wrap-up',
+    '📋 Friday Compliance Wrap-up',
+    allItems.length ? allItems : [{title:'No compliance items due next week', dueDate: new Date(nextWeekStart).toISOString().substring(0,10), notes:'All clear for next week', category:''}],
+    intro + (completedList ? '<br><br>' + completedList : ''),
+    'Have a great weekend. Cinderella will send your next compliance brief on Monday morning.'
+  );
+
+  const kandiaEmail = await getKandiaEmail();
+  const token = await getValidToken();
+  const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+    method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({
+      subject: '📋 Compliance wrap-up — ' + completedThisWeek.length + ' completed, ' + nextWeek.length + ' due next week',
+      body: {contentType:'HTML', content:html},
+      toRecipients: [{emailAddress:{address:kandiaEmail}}]
+    })
+  });
+  const msg = await draft.json();
+  if (msg.id) await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',{method:'POST',headers:{Authorization:'Bearer '+token}});
+  state.fridayComplianceWeek = weekKey;
+  saveProactiveState(state);
+}
+
+// ── EMAIL TRACKER INTELLIGENCE ──────────────────────────────────
+app.get('/email-tracker/brief', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const since = new Date(Date.now() - 10*24*60*60*1000).toISOString(); // Last 10 days
+    const [inboxData, sentData] = await Promise.all([
+      graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$top=100&$select=id,subject,from,bodyPreview,receivedDateTime,conversationId,webLink,importance&$orderby=receivedDateTime desc`),
+      graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$top=200&$select=subject,bodyPreview,conversationId,createdDateTime`)
+    ]);
+
+    const sentMsgs = sentData.value||[];
+    const sentConvs = new Map();
+    sentMsgs.forEach(m => {
+      if (!sentConvs.has(m.conversationId)) sentConvs.set(m.conversationId, []);
+      sentConvs.get(m.conversationId).push(m.bodyPreview||'');
+    });
+
+    // Filter inbox — only meaningful emails (exclude system, Cinderella-sent, bulk)
+    const EXCLUDE = ['noreply','no-reply','donotreply','mailer-daemon','newsletter','notifications@','alerts@','cinderella','morning brief','pre-meeting brief','board report','compliance deadline','leave handover','you are covering'];
+    const meaningful = (inboxData.value||[]).filter(m => {
+      const addr = (m.from?.emailAddress?.address||'').toLowerCase();
+      const subj = (m.subject||'').toLowerCase();
+      if (EXCLUDE.some(e => addr.includes(e) || subj.includes(e))) return false;
+      return true;
+    });
+
+    // Categorise each email
+    const emailList = meaningful.slice(0,50).map(m => {
+      const replies = sentConvs.get(m.conversationId)||[];
+      const hasReply = replies.length > 0;
+      const replyText = replies.join(' ').toLowerCase();
+      // Detect "I'll look into it" replies (still open)
+      const DEFERRED_PHRASES = ['will get back','look into','will follow up','will check','will review','will action','will investigate','will discuss','noted, i','will let you know','will come back','working on','in progress','will do','will be in touch','will send','will forward','will arrange','thank you, i','thanks, i'];
+      const CLOSED_PHRASES = ['please find attached','as discussed','as per','see attached','confirmed','done','completed','approved','sent you','please see','here is','here are','resolved'];
+      const isDeferred = hasReply && DEFERRED_PHRASES.some(p => replyText.includes(p));
+      const isClosed = hasReply && CLOSED_PHRASES.some(p => replyText.includes(p)) && !isDeferred;
+      const isMissed = !hasReply;
+
+      return {
+        id: m.id,
+        conversationId: m.conversationId,
+        subject: m.subject,
+        from: m.from?.emailAddress?.name || m.from?.emailAddress?.address,
+        fromAddr: m.from?.emailAddress?.address,
+        preview: (m.bodyPreview||'').substring(0,120),
+        received: m.receivedDateTime,
+        webLink: m.webLink,
+        hasReply,
+        isDeferred,
+        isClosed,
+        isMissed,
+        importance: m.importance
+      };
+    });
+
+    // Build AI summary for the "requires attention" emails
+    const needsAttention = emailList.filter(e => (e.isMissed || e.isDeferred) && !e.isClosed);
+    if (!needsAttention.length) return res.json({requiresAttention:[], missed:[], summary:'No emails currently require your attention.'});
+
+    // Use AI to generate a brief one-line gist for each
+    const emailSummary = needsAttention.slice(0,20).map(e =>
+      'FROM: ' + e.from + ' | SUBJECT: ' + e.subject + ' | PREVIEW: ' + e.preview + ' | STATUS: ' + (e.isMissed?'NO REPLY YET':e.isDeferred?'REPLIED BUT STILL OPEN':'')
+    ).join('\n---\n');
+
+    const ai = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+      body:JSON.stringify({model:'claude-haiku-4-5', max_tokens:1500,
+        messages:[{role:'user',content:`You are Cinderella, assistant to Kandia Du Bruyn (COO, Risk 2 Solution).
+
+Analyse these emails and write a ONE-LINE action-oriented gist for each. Be specific — name the person, what they need, any deadline mentioned.
+
+${emailSummary}
+
+Return ONLY valid JSON array. No markdown:
+[
+  {
+    "conversationId": "copy the conversationId from the email",
+    "gist": "One line: what this email needs from Kandia — specific, actionable",
+    "priority": "urgent or normal",
+    "category": "decision or task or reply or information"
+  }
+]`}]})
+    });
+    const aiData = await ai.json();
+    let gists = [];
+    try {
+      const raw = (aiData.content||[]).map(c=>c.text||'').join('').replace(/^```json\s*/,'').replace(/```$/,'').trim();
+      const j = raw.indexOf('['); const k = raw.lastIndexOf(']');
+      gists = JSON.parse(j>=0&&k>j ? raw.substring(j,k+1) : '[]');
+    } catch(e) { console.warn('[EmailTracker] AI parse error:', e.message); }
+
+    const gistMap = {};
+    gists.forEach(g => { gistMap[g.conversationId] = g; });
+
+    const result = needsAttention.map(e => ({
+      id: e.id,
+      conversationId: e.conversationId,
+      subject: e.subject,
+      from: e.from,
+      fromAddr: e.fromAddr,
+      received: e.received,
+      webLink: e.webLink,
+      status: e.isMissed ? 'missed' : 'deferred',
+      importance: e.importance,
+      gist: gistMap[e.conversationId]?.gist || e.subject,
+      priority: gistMap[e.conversationId]?.priority || 'normal',
+      category: gistMap[e.conversationId]?.category || 'reply'
+    }));
+
+    const missed = result.filter(e => e.status === 'missed');
+    const deferred = result.filter(e => e.status === 'deferred');
+    res.json({requiresAttention: deferred, missed, total: result.length});
+  } catch(e) {
+    console.error('[EmailTracker] Brief error:', e.message);
+    res.status(500).json({error: e.message});
+  }
+});
+
+// Mark email as done (dismiss from tracker)
+app.post('/email-tracker/dismiss', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  if (!state.dismissedEmails) state.dismissedEmails = [];
+  state.dismissedEmails.push({id: req.body.conversationId, dismissedAt: new Date().toISOString()});
+  // Keep only last 200 dismissals
+  if (state.dismissedEmails.length > 200) state.dismissedEmails = state.dismissedEmails.slice(-200);
+  saveProactiveState(state);
+  res.json({success:true});
+});
+
+// Compliance: update due date for an item
+app.put('/compliance/items/:id', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  const item = (state.complianceItems||[]).find(i => String(i.id) === String(req.params.id));
+  if (!item) return res.status(404).json({error:'Not found'});
+  if (req.body.dueDate) item.dueDate = req.body.dueDate;
+  if (req.body.notes) item.notes = req.body.notes;
+  if (req.body.title) item.title = req.body.title;
+  if (req.body.completed !== undefined) {
+    item.completed = req.body.completed;
+    item.completedAt = req.body.completed ? new Date().toISOString() : null;
+  }
+  saveProactiveState(state);
+  res.json({success:true, item});
+});
 
 // ── THINK LOOP ──
 async function think() {
@@ -5487,8 +5872,15 @@ Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high"
       await sendFridayCheckInReminder();
     }
 
-    // Daily compliance check
-    await checkComplianceDeadlines();
+    // Compliance: Monday morning (items due this week) + Friday afternoon (completed + preview)
+    if (bDay === 'Monday' && bHour === 8 && bMin < 30) {
+      await sendMondayComplianceBrief();
+    }
+    if (bDay === 'Friday' && bHour === 15 && bMin < 30) {
+      await sendFridayComplianceBrief();
+    }
+    // Still scan for new compliance items daily (silent — no email, just updates state)
+    await checkComplianceDeadlines(true); // true = silent mode, no email
 
 
 
