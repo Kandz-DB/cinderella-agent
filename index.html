@@ -7548,6 +7548,7 @@ async function loadLeaveEntries() {
         '</div>' +
       '</div>';
     }).join('');
+    el.innerHTML = html2 + activeHtml;
   } catch(e) { if (el) el.innerHTML = '<div style="font-size:12px;color:var(--r)">Error: ' + e.message + '</div>'; }
 }
 
@@ -7563,7 +7564,7 @@ function showAddLeave() {
       '</div>' +
       '<div><div class="mfl">Covering colleague(s) <span style="font-weight:400;color:var(--t3)">(hold Ctrl/Cmd to select multiple)</span></div><select id="lv_cover" multiple style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg);height:100px">'+staffOptions+'<option value="Kandia Du Bruyn|kandia@risk2solution.com">Kandia Du Bruyn</option></select></div>' +
       '<div><div class="mfl">Notes (optional)</div><textarea id="lv_notes" rows="2" placeholder="Any context about this leave..." style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);resize:vertical"></textarea></div>' +
-      '<div style="background:var(--al);border-radius:8px;padding:10px 12px;font-size:11.5px;color:var(--t2)">Cinderella will immediately notify you with the handover timeline, then send the checklist email to the staff member 2 weeks before leave starts.</div>' +
+      '<div style="background:var(--al);border-radius:8px;padding:10px 12px;font-size:11.5px;color:var(--t2)">Cinderella will flag this as a potential leave entry and ask you to confirm. <strong>No emails are sent until you confirm.</strong> After confirmation, you select covering colleagues and the process starts.</div>' +
     '</div>' +
     '<div style="display:flex;gap:8px;margin-top:14px">' +
       '<button class="m-btn" onclick="submitAddLeave()" style="flex:1">Log leave & start process</button>' +
@@ -7674,9 +7675,20 @@ async function sendLeaveChecklistNow(id) {
   showToast('Sending checklist email...');
   try {
     var r = await fetch('/leave/'+id+'/send-checklist', {method:'POST'});
-    var d = await r.json();
-    if (d.success) { showToast('Checklist email sent — check Outlook'); loadLeaveEntries(); }
-    else showToast('Error: '+(d.error||'Failed'));
+    var text = await r.text();
+    var d;
+    try { d = JSON.parse(text); }
+    catch(e) {
+      console.error('send-checklist response:', text.substring(0,200));
+      showToast('Server error sending checklist — check Azure logs');
+      return;
+    }
+    if (d.success) {
+      showToast(d.message || 'Checklist email sent — check Outlook Drafts');
+      loadLeaveEntries();
+    } else {
+      showToast('Error: '+(d.error||'Failed to send'));
+    }
   } catch(e) { showToast('Error: '+e.message); }
 }
 
@@ -7685,6 +7697,62 @@ async function deleteLeaveEntry(id) {
   await fetch('/leave/'+id, {method:'DELETE'});
   loadLeaveEntries();
   showToast('Leave entry deleted');
+}
+
+
+
+async function showConfirmLeave(id) {
+  var r = await fetch('/leave');
+  var entries = await r.json();
+  var e = entries.find(function(x){ return x.id === id; });
+  if (!e) return;
+  var staffOpts = LEAVE_STAFF_LIST.map(function(s){
+    return '<option value="'+s.name+'|'+s.email+'">'+s.name+'</option>';
+  }).join('') + '<option value="Kandia Du Bruyn|kandia@risk2solution.com">Kandia Du Bruyn</option>';
+  openModal('Confirm leave — ' + e.staffName, 'Review details and nominate covering colleagues',
+    '<div style="display:grid;gap:10px">' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<div><div class="mfl">Leave start date *</div><input id="cf_start" type="date" value="'+e.startDate+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
+        '<div><div class="mfl">Leave end date *</div><input id="cf_end" type="date" value="'+e.endDate+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
+      '</div>' +
+      '<div><div class="mfl">Covering colleague(s) * <span style="font-weight:400;color:var(--t3)">(hold Ctrl/Cmd for multiple)</span></div>' +
+        '<select id="cf_cover" multiple style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);height:100px">'+staffOpts+'</select></div>' +
+      '<div><div class="mfl">Notes</div><textarea id="cf_notes" rows="2" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);resize:vertical">'+( e.notes||'')+'</textarea></div>' +
+      '<div style="background:var(--gl);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--t1);line-height:1.5">' +
+        '<strong>What happens next:</strong> Cinderella will immediately send one email to the covering colleague(s) with the handover checklist attached. The staff member will be CC\'d. The automated 3-day reminder cycle then begins.' +
+      '</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;margin-top:14px">' +
+      '<button class="m-btn" onclick="submitConfirmLeave(\''+id+'\')" style="flex:1">✓ Confirm & start process</button>' +
+      '<button class="m-btn sec" onclick="closeModal()" style="flex:1">Cancel</button>' +
+    '</div>'
+  );
+}
+
+async function submitConfirmLeave(id) {
+  var start  = (document.getElementById('cf_start')||{}).value;
+  var end    = (document.getElementById('cf_end')||{}).value;
+  var notes  = (document.getElementById('cf_notes')||{}).value||'';
+  var coverSel = document.getElementById('cf_cover');
+  var coverNames = [], coverEmails = [];
+  if (coverSel) Array.from(coverSel.selectedOptions).forEach(function(opt) {
+    var parts = opt.value.split('|');
+    if (parts[0]) coverNames.push(parts[0]);
+    if (parts[1]) coverEmails.push(parts[1]);
+  });
+  if (!coverNames.length) { showToast('Please select at least one covering colleague'); return; }
+  try {
+    var r = await fetch('/leave/'+id+'/confirm', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({startDate:start, endDate:end, notes, coveringColleagues:coverNames, coveringEmails:coverEmails})
+    });
+    var d = await r.json();
+    if (d.success) {
+      closeModal();
+      showToast('Leave confirmed — handover email being sent to covering colleague(s)');
+      loadLeaveEntries();
+    } else { showToast('Error: '+(d.error||'Failed')); }
+  } catch(e) { showToast('Error: '+e.message); }
 }
 
 </script>
