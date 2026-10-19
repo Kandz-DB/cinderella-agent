@@ -4502,14 +4502,28 @@ function buildLeaveEmail(type, entry) {
   const pendingItems = CHECKLIST_ITEMS.filter(i => !entry.checklist || !entry.checklist[i.id]);
 
   const header = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:20px;background:#F2F1EE;font-family:Arial,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#fff;border-radius:10px;overflow:hidden;">
-<tr><td style="background:linear-gradient(105deg,#07706B,#56D4CE 55%,#F0B8CC 82%);padding:22px 28px;">
-  <p style="margin:0;font-family:Georgia,serif;font-size:24px;font-style:italic;color:#fff;font-weight:bold;">Cinderella</p>
-  <p style="margin:4px 0 0;font-family:Arial,sans-serif;font-size:9px;color:rgba(255,255,255,.8);letter-spacing:2px;text-transform:uppercase;">STAFF LEAVE MANAGEMENT &middot; RISK 2 SOLUTION</p>
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #E8E6E1;">
+<tr><td bgcolor="#07706B" style="background-color:#07706B;padding:22px 28px;">
+  <table cellpadding="0" cellspacing="0" width="100%"><tr>
+    <td style="padding:0">
+      <table cellpadding="0" cellspacing="0"><tr>
+        <td style="width:36px;height:36px;background-color:#ffffff;border-radius:8px;text-align:center;vertical-align:middle;padding:0;margin:0">
+          <span style="font-family:Georgia,serif;font-size:22px;font-weight:bold;color:#07706B;line-height:36px;display:block">C</span>
+        </td>
+        <td style="padding-left:12px;vertical-align:middle">
+          <p style="margin:0;font-family:Georgia,serif;font-size:22px;font-style:italic;color:#ffffff;font-weight:bold;line-height:1.1">Cinderella</p>
+          <p style="margin:2px 0 0;font-family:Arial,sans-serif;font-size:9px;color:rgba(255,255,255,0.85);letter-spacing:2px;text-transform:uppercase">EXECUTIVE ASSISTANT &middot; RISK 2 SOLUTION</p>
+        </td>
+      </tr></table>
+    </td>
+    <td align="right" style="vertical-align:middle">
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:9px;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:1px">Staff Leave Management</p>
+    </td>
+  </tr></table>
 </td></tr>`;
 
-  const footer = `<tr><td style="padding:14px 28px;background:#F2F1EE;border-top:1px solid #E8E6E1;">
-  <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#9A9693;">Cinderella &middot; Executive Assistant to Kandia Du Bruyn, COO &middot; Risk 2 Solution</p>
+  const footer = `<tr><td bgcolor="#F2F1EE" style="background-color:#F2F1EE;padding:14px 28px;border-top:1px solid #E8E6E1;">
+  <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#777777;">Cinderella &middot; Executive Assistant to Kandia Du Bruyn, COO &middot; Risk 2 Solution</p>
 </td></tr></table></body></html>`;
 
   function row(label, value, bold) {
@@ -4517,10 +4531,10 @@ function buildLeaveEmail(type, entry) {
            `<td style="font-family:Arial,sans-serif;font-size:12px;color:#111;${bold?'font-weight:bold;':''}padding:4px 8px;vertical-align:top">${value}</td></tr>`;
   }
 
-  const detailsTable = `<table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+  const detailsTable = `<table cellpadding="0" cellspacing="0" bgcolor="#F8F8F6" style="background-color:#F8F8F6;border-radius:8px;margin-bottom:16px;width:100%;border:1px solid #E8E6E1"><tr><td style="padding:14px 16px"><table cellpadding="0" cellspacing="0">
     ${row('Staff member', staff, true)}${row('Leave start', start, false)}${row('Leave end', end, false)}
-    ${row('Covering colleague', cover, true)}${row('Handover trigger date', trigger, true)}
-  </table>`;
+    ${row('Covering colleague', cover, true)}${row('Handover due by', trigger, true)}
+  </table></td></tr></table>`;
 
   if (type === 'kandia_notification') {
     return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
@@ -5016,15 +5030,30 @@ async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance,
     // Attach updated Excel checklist if entry provided
     if (entry) {
       try {
-        const xlsxPath = await generateLeaveChecklistXlsx(entry);
-        const xlsxBuf = readFileSync(xlsxPath);
-        payload.attachments = [{
-          '@odata.type': '#microsoft.graph.fileAttachment',
-          name: 'Leave_Handover_Checklist_' + entry.staffName.replace(/\s+/g,'_') + '.xlsx',
-          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          contentBytes: xlsxBuf.toString('base64')
-        }];
-      } catch(xlErr) { console.warn('[Leave] Excel attach error:', xlErr.message); }
+        let attachBuf, attachName, attachType;
+        try {
+          const xlsxPath = await generateLeaveChecklistXlsx(entry);
+          attachBuf = readFileSync(xlsxPath);
+          attachName = 'Leave_Handover_Checklist_' + entry.staffName.replace(/\s+/g,'_') + '.xlsx';
+          attachType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+          console.log('[Leave] XLSX attached:', attachName, '(' + attachBuf.length + 'b)');
+        } catch(xlErr) {
+          console.warn('[Leave] XLSX failed, using CSV fallback:', xlErr.message);
+          const isPastTrigger = new Date() > new Date(entry.triggerDate);
+          let csv = 'RISK 2 SOLUTION - LEAVE HANDOVER CHECKLIST\r\nStaff,' + entry.staffName + '\r\nStart,' + entry.startDate + '\r\nEnd,' + entry.endDate + '\r\nCover,' + (entry.coveringColleague||'') + '\r\nDue,' + entry.triggerDate + '\r\n\r\nSection,Item,Status\r\n';
+          CHECKLIST_ITEMS.forEach(function(item) {
+            var done = entry.checklist && entry.checklist[item.id];
+            var status = done ? 'COMPLETE' : (new Date() > new Date(entry.triggerDate)) ? 'OVERDUE' : 'OUTSTANDING';
+            csv += '"Section ' + item.section + '","' + item.label.replace(/"/g, "'") + '",' + status + '\r\n';
+          });
+          attachBuf = Buffer.from(csv, 'utf8');
+          attachName = 'Leave_Handover_Checklist_' + entry.staffName.replace(/\s+/g,'_') + '.csv';
+          attachType = 'text/csv';
+          console.log('[Leave] CSV fallback attached:', attachName);
+        }
+        payload.attachments = [{'@odata.type':'#microsoft.graph.fileAttachment', name:attachName, contentType:attachType, contentBytes:attachBuf.toString('base64')}];
+        console.log('[Leave] ✅ Attachment ready:', attachName);
+      } catch(e) { console.error('[Leave] Attachment failed completely:', e.message); }
     }
     const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
       method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
