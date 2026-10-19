@@ -5022,6 +5022,31 @@ function buildLeaveEmail(type, entry) {
     </td></tr>` + footer;
   }
 
+  // Urgent reminder — short notice leave (< 7 days)
+  if (type === 'reminder_urgent') {
+    const daysLeft2 = Math.ceil((new Date(entry.startDate) - new Date()) / (24*60*60*1000));
+    const pct2 = Math.round(completedItems.length/CHECKLIST_ITEMS.length*100);
+    const doneRows2 = completedItems.map(i=>'<tr><td bgcolor="#F0FDF4" style="background:#F0FDF4;padding:6px 10px;border-radius:4px;font-family:Arial,sans-serif;font-size:12px;color:#0D8A62">&#9745;&nbsp;&nbsp;'+i.label+'</td></tr><tr><td style="height:3px"></td></tr>').join('');
+    const pendingRows2 = pendingItems.map(i=>'<tr><td bgcolor="#FEE2E2" style="background:#FEE2E2;padding:6px 10px;border-radius:4px;font-family:Arial,sans-serif;font-size:12px;color:#7F1D1D">&#9744;&nbsp;&nbsp;'+i.label+'</td></tr><tr><td style="height:3px"></td></tr>').join('');
+    return header + '<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #C8211E;">' +
+      '<p style="margin:0;font-size:16px;font-weight:bold;color:#C8211E;font-family:Arial,sans-serif;">&#128308; Urgent: leave in '+daysLeft2+' day'+(daysLeft2!==1?'s':'')+' — handover checklist required</p>' +
+    '</td></tr><tr><td style="padding:20px 28px;">' +
+      '<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">Hi '+cover.split(',')[0].trim().split(' ')[0]+',</p>' +
+      '<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6"><strong>'+staff+'</strong> is on leave in <strong>'+daysLeft2+' day'+(daysLeft2!==1?'s':'')+'</strong>. Because there are fewer than 7 days until leave starts, we are running an accelerated daily checklist process. Please complete all outstanding items as soon as possible.</p>' +
+      detailsTable +
+      '<table cellpadding="0" cellspacing="0" bgcolor="#F8F8F6" style="background:#F8F8F6;border-radius:8px;width:100%;margin-bottom:14px"><tr><td style="padding:14px 16px">' +
+        '<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">Progress: '+completedItems.length+'/'+CHECKLIST_ITEMS.length+' items complete ('+pct2+'%)</p>' +
+        (completedItems.length > 0 ? '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#0D8A62;text-transform:uppercase">Completed:</p><table cellpadding="0" cellspacing="0" width="100%">'+doneRows2+'</table>' : '') +
+        (pendingItems.length > 0 ? '<p style="margin:'+(completedItems.length>0?'10':'0')+'px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#C8211E;text-transform:uppercase">&#9888; Still outstanding — action urgently:</p><table cellpadding="0" cellspacing="0" width="100%">'+pendingRows2+'</table>' : '') +
+      '</td></tr></table>' +
+      '<table cellpadding="0" cellspacing="0" bgcolor="#EFF6FF" style="background-color:#EFF6FF;border-radius:8px;width:100%"><tr><td style="padding:14px 16px;border-left:3px solid #2563EB">' +
+        '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; Reply to confirm items complete</p>' +
+        '<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6">Reply to this email confirming which sections you have completed. Cinderella will update the checklist and send everyone a progress update within 8 hours.</p>' +
+        '<p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#333;font-style:italic">Example: <strong>&ldquo;Section 1 (Contacts &amp; Access) is complete and Section 2 (Current State of Work) is complete.&rdquo;</strong></p>' +
+      '</td></tr></table>' +
+    '</td></tr>' + footer;
+  }
+
   return header + `<tr><td style="padding:20px 28px;"><p style="font-family:Arial,sans-serif">Leave notification for ${staff}</p></td></tr>` + footer;
 }
 
