@@ -5410,7 +5410,7 @@ async function monitorLeaveEntries() {
       const lastReminder = entry.lastReminderAt ? new Date(entry.lastReminderAt) : new Date(entry.firstEmailSentAt||now);
       const hoursSinceReminder = (now - lastReminder) / (60*60*1000);
       const daysSinceReminder = Math.floor(hoursSinceReminder / 24);
-      const todayStr = now.toISOString().substring(0,10);
+      const todayStr = todayBrisStr; // Brisbane calendar date
 
       // Determine urgency based on days to leave start
       const urgency = daysToStart >= 14 ? 'normal'      // standard 3-day cycle
@@ -5419,9 +5419,19 @@ async function monitorLeaveEntries() {
 
       const reminderIntervalDays = urgency === 'normal' ? 3 : 1; // daily for urgent
 
-      // Send morning reminder (8am Brisbane) if interval has passed
-      if (pending.length > 0 && daysSinceReminder >= reminderIntervalDays &&
-          bHour >= 8 && !entry.reminderSentDate === todayStr) {
+      // Send morning reminder — once per calendar day, between 8-9am Brisbane
+      // Bug fixed: use calendar date comparison (not hours), and != not ! ===
+      const reminderNotSentToday = entry.reminderSentDate !== todayStr;
+      const lastReminderDateStr = entry.lastReminderAt
+        ? new Date(entry.lastReminderAt).toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane'})
+        : null;
+      const calendarDaysSinceReminder = lastReminderDateStr
+        ? Math.floor((now - new Date(entry.lastReminderAt)) / (24*60*60*1000))
+        : 999; // Never sent — always trigger
+
+      // Morning reminder: fires at 8am Brisbane sharp
+      if (pending.length > 0 && calendarDaysSinceReminder >= reminderIntervalDays &&
+          bHour === 8 && bMin < 30 && reminderNotSentToday) {
         entry.lastReminderAt = now.toISOString();
         entry.reminderSentDate = todayStr;
         entry.awaitingReply = true;
@@ -5451,28 +5461,37 @@ async function monitorLeaveEntries() {
         console.log('[Leave] Stage 2: Reminder sent (' + urgency + ' mode, ' + daysToStart + ' days to leave)');
       }
 
-      // Emergency: 8-hour check — send updated checklist without waiting for full day
-      if (urgency === 'emergency' && entry.awaitingReply && !entry.eightHourCheckSent) {
-        const hoursSince8 = (now - new Date(entry.awaitingReplySince||now)) / (60*60*1000);
-        if (hoursSince8 >= 8) {
-          entry.eightHourCheckSent = todayStr;
+      // 3pm AEST: only send updated checklist if replies were received and checklist changed since 8am
+      if (entry.reminderSentDate === todayStr && entry.awaitingReply &&
+          bHour === 15 && bMin < 30 && entry.eightHourCheckSent !== todayStr) {
+        entry.eightHourCheckSent = todayStr; // Mark 3pm check as done for today
+        const checklistChangedToday = entry.lastChecklistUpdateAt &&
+          new Date(entry.lastChecklistUpdateAt).toLocaleDateString('en-CA',{timeZone:'Australia/Brisbane'}) === todayStr;
+        if (checklistChangedToday) {
+          // Replies came in and items were ticked — send the update
           entry.awaitingReply = false;
           changed = true;
           saveLeaveState(state);
-          const done = CHECKLIST_ITEMS.filter(i=>entry.checklist&&entry.checklist[i.id]).length;
-          const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
-          const html = buildLeaveEmail('checklist_updated', entry);
-          const cc5 = staffEmail ? [staffEmail] : [];
-          await sendLeaveAlert(allCoverEmails, cc5,
-            '📋 8-hour update: checklist at ' + pct + '% — ' + entry.staffName + ' leave handover',
-            html, 'high', entry);
-          console.log('[Leave] Stage 2 emergency: 8-hour update sent at', pct + '%');
+          const done3pm = CHECKLIST_ITEMS.filter(i=>entry.checklist&&entry.checklist[i.id]).length;
+          const pct3pm = Math.round(done3pm/CHECKLIST_ITEMS.length*100);
+          const html3pm = buildLeaveEmail('checklist_updated', entry);
+          const cc3pm = staffEmail ? [staffEmail] : [];
+          await sendLeaveAlert(allCoverEmails, cc3pm,
+            '📋 Updated checklist: ' + pct3pm + '% complete — ' + entry.staffName + ' leave handover',
+            html3pm, 'normal', entry);
+          console.log('[Leave] Stage 2: 3pm update sent (checklist changed today) at', pct3pm + '%');
+        } else {
+          // No replies received today — do not send, just reset for tomorrow
+          entry.awaitingReply = false;
+          changed = true;
+          saveLeaveState(state);
+          console.log('[Leave] Stage 2: 3pm check — no checklist changes today, skipping update email');
         }
       }
 
-      // Reset 8-hour flag daily so it can fire again next morning
-      if (entry.eightHourCheckSent && entry.eightHourCheckSent !== todayStr) {
-        entry.eightHourCheckSent = null;
+      // Reset awaiting reply flag at midnight so new day's reminder can fire
+      if (entry.awaitingReply && entry.reminderSentDate && entry.reminderSentDate !== todayStr) {
+        entry.awaitingReply = false;
         changed = true;
       }
     }
@@ -5481,7 +5500,9 @@ async function monitorLeaveEntries() {
     if (['process_started','in_progress'].includes(entry.status)) {
       const phase1Items = CHECKLIST_ITEMS.filter(i => i.section <= 5 && i.id !== 'phase1_signed' && i.id !== 'phase2_signed' && i.id !== 'phase3_signed');
       const phase1Done = phase1Items.every(i => entry.checklist && entry.checklist[i.id]);
-      if (phase1Done && !entry.checklist?.phase1_signed && !entry.phase1SignoffSentAt) {
+      // Phase sign-off requests go at 3pm so they land at a consistent end-of-day time
+      if (phase1Done && !entry.checklist?.phase1_signed && !entry.phase1SignoffSentAt &&
+          bHour === 15 && bMin < 30) {
         entry.phase1SignoffSentAt = now.toISOString();
         changed = true;
         saveLeaveState(state);
@@ -5489,7 +5510,7 @@ async function monitorLeaveEntries() {
         await sendLeaveAlert([staffEmail], [kandiaEmail],
           '✅ All checklist items complete — please sign off Phase 1: ' + entry.staffName,
           html, 'high', entry);
-        console.log('[Leave] Stage 3: Phase 1 sign-off request sent to', staffEmail);
+        console.log('[Leave] Stage 3: Phase 1 sign-off request sent at 3pm to', staffEmail);
       }
     }
 
@@ -5721,6 +5742,43 @@ app.post('/leave/:id/reset-checklist', requireAuth, (req, res) => {
   saveLeaveState(state);
   console.log('[Leave] Checklist reset for', entry.staffName);
   res.json({success:true, message:'Checklist reset for '+entry.staffName});
+});
+
+// Force send today's reminder immediately (bypasses time/date checks)
+app.post('/leave/:id/send-reminder', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+    const now = new Date();
+    const daysToStart = Math.ceil((new Date(entry.startDate)-now)/(24*60*60*1000));
+    const todayStr = now.toLocaleDateString('en-CA',{timeZone:'Australia/Brisbane'});
+    const allCoverEmails = entry.coveringEmails&&entry.coveringEmails.length>0 ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
+    const staffEmail = entry.staffEmail||'';
+    const urgency = daysToStart < 7 ? 'emergency' : daysToStart < 14 ? 'accelerated' : 'normal';
+    const colleagues = (entry.coveringColleagues&&entry.coveringColleagues.length>0)
+      ? entry.coveringColleagues.map((name,i)=>({name,email:(entry.coveringEmails||[])[i]||''}))
+      : [{name:entry.coveringColleague||'',email:entry.coveringEmail||''}];
+    let sent = 0;
+    for (const c of colleagues) {
+      if (!c.email) continue;
+      const entryForC = {...entry, coveringColleague:c.name, coveringEmail:c.email, coveringColleagues:[c.name], coveringEmails:[c.email]};
+      const html = buildLeaveEmail('reminder_urgent', entryForC);
+      const subject = '🔴 URGENT: Daily handover update — '+entry.staffName+' on leave in '+daysToStart+' day'+(daysToStart!==1?'s':'')+' — '+c.name;
+      const cc = staffEmail && staffEmail !== c.email ? [staffEmail] : [];
+      const ok = await sendLeaveAlert([c.email], cc, subject, html, 'high', entryForC);
+      if (ok) sent++;
+    }
+    entry.lastReminderAt = now.toISOString();
+    entry.reminderSentDate = todayStr;
+    entry.awaitingReply = true;
+    entry.awaitingReplySince = now.toISOString();
+    entry.eightHourCheckSent = null; // Reset so 3pm check fires today
+    saveLeaveState(state);
+    res.json({success:true, sent, colleagues:colleagues.length, urgency, daysToStart});
+  } catch(e) { res.status(500).json({error:e.message}); }
 });
 
 // Manual trigger: force Stage 1 for a specific entry and return detailed logs
