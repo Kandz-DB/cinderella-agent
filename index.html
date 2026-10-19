@@ -666,20 +666,16 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 
           </div>
 
-          <div class="card">
+          <div class="card" id="emailTrackerBriefCard">
 
-            <div class="ct">Cinderella insights <span class="ct-action" onclick="refreshEmailInsights()">Refresh</span></div>
+            <div class="ct">Emails requiring attention
+              <span class="ct-action" id="etBriefRefresh" onclick="loadEmailTrackerBrief()">↻ Refresh</span>
+            </div>
 
-            <div id="emailInsights">
-
-              <div class="ins" onclick="qa('Analyse my current unread emails and tell me which ones are most urgent and why, and draft replies for the top 3')"><div class="il">📊 Batch analysis</div><div class="it">Click to analyse all emails and get Cinderella to prioritise and draft replies for the most urgent ones.</div></div>
-
-              <div class="ins" onclick="qa('Are there any patterns in my unanswered emails? Who do I consistently not reply to and why might that be a problem?')"><div class="il">🔍 Email patterns</div><div class="it">Click to see patterns in your email behaviour and who you might be neglecting.</div></div>
-
-              <div class="ins" onclick="qa('Which of my current emails have attachments that need my attention? Summarise what each attachment likely requires from me.')"><div class="il">📎 Attachment summary</div><div class="it">Click to get a summary of all emails with attachments and what action they require.</div></div>
-
-              <div class="ins" onclick="generateEmailInsights()"><div class="il">🤖 AI insight</div><div class="it">Click to get Cinderella\'s real-time analysis of your current inbox.</div></div>
-
+            <div id="emailTrackerBrief">
+              <div style="font-size:11px;color:var(--t3);padding:6px 0">
+                Click refresh to analyse your inbox — Cinderella checks what needs your attention and what you've missed.
+              </div>
             </div>
 
           </div>
@@ -7900,6 +7896,88 @@ async function saveLeaveEdit(id) {
       loadLeaveEntries();
     } else { showToast('Error: '+(d.error||'Failed')); }
   } catch(e) { showToast('Error: '+e.message); }
+}
+
+
+// ══ EMAIL TRACKER BRIEF ═══════════════════════════════════
+
+var _etBriefLoading = false;
+var _dismissedEmails = new Set();
+
+async function loadEmailTrackerBrief() {
+  var el = document.getElementById('emailTrackerBrief');
+  var btn = document.getElementById('etBriefRefresh');
+  if (!el || _etBriefLoading) return;
+  _etBriefLoading = true;
+  if (btn) { btn.textContent = 'Analysing...'; btn.style.pointerEvents = 'none'; }
+  el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;font-size:11px;color:var(--t3)"><div class="think"><span></span><span></span><span></span></div>Scanning inbox and sent items&hellip; this takes ~15 seconds</div>';
+  try {
+    var r = await fetch('/email-tracker/brief');
+    if (!r.ok) throw new Error('Server error ' + r.status);
+    var d = await r.json();
+    if (d.error) throw new Error(d.error);
+
+    var requires = (d.requiresAttention||[]).filter(function(e){ return !_dismissedEmails.has(e.conversationId); });
+    var missed    = (d.missed||[]).filter(function(e){ return !_dismissedEmails.has(e.conversationId); });
+    var out = '';
+
+    // Helper: format relative date
+    function relDate(iso) {
+      var d = new Date(iso); var now = new Date();
+      var days = Math.floor((now-d)/(24*60*60*1000));
+      return days === 0 ? 'Today' : days === 1 ? 'Yesterday' : days + ' days ago';
+    }
+
+    // Helper: email item card
+    function emailCard(e, colour, bg) {
+      var catIcon = {decision:'⚖️',task:'📋',reply:'📧',information:'ℹ️'}[e.category]||'📧';
+      return '<div style="border-left:3px solid '+colour+';background:'+bg+';border-radius:0 8px 8px 0;padding:10px 12px;margin-bottom:8px">' +
+        '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="font-size:11px;font-weight:700;color:'+colour+';margin-bottom:2px">'+catIcon+' '+e.from+'</div>' +
+            '<div style="font-size:12px;color:var(--t1);line-height:1.4;margin-bottom:4px">'+e.gist+'</div>' +
+            '<div style="font-size:10px;color:var(--t3)">'+relDate(e.received)+'</div>' +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">' +
+            (e.webLink ? '<a href="'+e.webLink+'" target="_blank" style="font-size:10px;padding:3px 8px;border-radius:5px;background:'+colour+';color:#fff;text-decoration:none;text-align:center;white-space:nowrap">Open →</a>' : '') +
+            '<button onclick="dismissEmailTracker(\''+e.conversationId+'\')" style="font-size:10px;padding:3px 8px;border-radius:5px;background:var(--bg2);border:1px solid var(--bm);cursor:pointer;font-family:var(--f);color:var(--t3);white-space:nowrap">Done ✓</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    if (!requires.length && !missed.length) {
+      out = '<div style="text-align:center;padding:16px 0;font-size:12px;color:var(--t3)">✅ Nothing requiring your attention right now — inbox is clear.</div>';
+    } else {
+      // Requires attention (replied but open)
+      if (requires.length) {
+        out += '<div style="font-size:9px;font-weight:700;color:var(--a);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">Requires your attention ('+requires.length+')</div>';
+        out += requires.map(function(e){ return emailCard(e,'#D97706','#FFFBEB'); }).join('');
+      }
+      // Missed (no reply at all)
+      if (missed.length) {
+        if (requires.length) out += '<div style="height:10px"></div>';
+        out += '<div style="font-size:9px;font-weight:700;color:var(--r);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">Missed — no reply sent ('+missed.length+')</div>';
+        out += missed.map(function(e){ return emailCard(e,'#C8211E','#FEF2F2'); }).join('');
+      }
+    }
+    // Footer
+    out += '<div style="font-size:10px;color:var(--t3);margin-top:10px;padding-top:8px;border-top:1px solid var(--bl)">Analysed last 10 days &middot; ' + new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'}) + '</div>';
+    el.innerHTML = out;
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--t3)">Could not load: '+e.message+' <button onclick="_etBriefLoading=false;loadEmailTrackerBrief()" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--bg2);border:1px solid var(--bm);cursor:pointer;font-family:var(--f);margin-left:6px">Retry</button></div>';
+  } finally {
+    _etBriefLoading = false;
+    if (btn) { btn.textContent = '↻ Refresh'; btn.style.pointerEvents = 'auto'; }
+  }
+}
+
+async function dismissEmailTracker(conversationId) {
+  _dismissedEmails.add(conversationId);
+  try { await fetch('/email-tracker/dismiss', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId})}); }
+  catch(e) {}
+  // Remove from display
+  loadEmailTrackerBrief();
 }
 
 </script>
