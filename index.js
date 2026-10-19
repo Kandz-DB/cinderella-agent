@@ -711,9 +711,12 @@ app.post('/checkins/submit', async (req, res) => {
       receivedAt: new Date().toISOString()  // server-side receipt stamp
     };
     if (!entry.weekEnding) {
-      const d = new Date(); const day = d.getDay();
-      d.setDate(d.getDate() + (day === 0 ? 0 : 7 - day));
-      entry.weekEnding = d.toISOString().split('T')[0];
+      // Week ends on FRIDAY in Brisbane time
+      const nowBris = new Date(new Date().toLocaleString('en-US', {timeZone:'Australia/Brisbane'}));
+      const jsDay = nowBris.getDay();
+      const daysToFri = jsDay <= 5 ? 5 - jsDay : 6;
+      const fri = new Date(nowBris); fri.setDate(fri.getDate() + daysToFri);
+      entry.weekEnding = fri.getFullYear()+'-'+String(fri.getMonth()+1).padStart(2,'0')+'-'+String(fri.getDate()).padStart(2,'0');
     }
     if (!entry.name) return res.status(400).json({ error: 'Name is required' });
 
@@ -755,9 +758,12 @@ app.post('/checkins/manual', requireAuth, async (req, res) => {
   try {
     const entry = { ...req.body, submitted: req.body.submitted || new Date().toISOString(), manualEntry: true, receivedAt: new Date().toISOString() };
     if (!entry.weekEnding) {
-      const d = new Date(); const day = d.getDay();
-      d.setDate(d.getDate() + (day === 0 ? 0 : 7 - day));
-      entry.weekEnding = d.toISOString().split('T')[0];
+      // Week ends on FRIDAY in Brisbane time
+      const nowBris = new Date(new Date().toLocaleString('en-US', {timeZone:'Australia/Brisbane'}));
+      const jsDay = nowBris.getDay();
+      const daysToFri = jsDay <= 5 ? 5 - jsDay : 6;
+      const fri = new Date(nowBris); fri.setDate(fri.getDate() + daysToFri);
+      entry.weekEnding = fri.getFullYear()+'-'+String(fri.getMonth()+1).padStart(2,'0')+'-'+String(fri.getDate()).padStart(2,'0');
     }
     const existing = loadCheckIns();
     const idx = existing.findIndex(e =>
