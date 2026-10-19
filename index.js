@@ -4821,7 +4821,13 @@ function buildLeaveEmail(type, entry) {
         <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Mid-leave:</strong> Check-in from Cinderella to make sure coverage is going well</td></tr>
         <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Return day:</strong> Handback prompt so nothing falls through the cracks</td></tr>
       </table>
-      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666;line-height:1.5;">The updated handover checklist is attached as an Excel file showing current progress. Please confirm with Kandia that you are able to cover during this period. Do not hesitate to contact Kandia if you have any concerns.</p>
+      <p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:12px;color:#666;line-height:1.5;">The updated handover checklist is attached as an Excel file showing current progress. Please confirm with Kandia that you are able to cover during this period. Do not hesitate to contact Kandia if you have any concerns.</p>
+      <table cellpadding="0" cellspacing="0" bgcolor="#EFF6FF" style="background-color:#EFF6FF;border-radius:8px;width:100%"><tr><td style="padding:14px 16px;border-left:3px solid #2563EB">
+        <p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; How to update your checklist</p>
+        <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6">As you complete each section, <strong>reply to this email</strong> confirming what has been done. Cinderella will automatically tick off the items and send everyone an updated checklist.</p>
+        <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:11px;color:#333;font-style:italic">Example reply: <strong>&ldquo;Confirming Section 1 (Contacts &amp; Access) is complete and Section 2 (Current State of Work) is complete.&rdquo;</strong></p>
+        <p style="margin:6px 0 0;font-family:Arial,sans-serif;font-size:11px;color:#666">When all items are done, reply: <strong>&ldquo;All checklist items are complete.&rdquo;</strong></p>
+      </td></tr></table>
     </td></tr>` + footer;
   }
 
@@ -5358,49 +5364,91 @@ async function monitorLeaveEntries() {
         if (!entry.colleagueChecklists[colleague3.email]) entry.colleagueChecklists[colleague3.email] = {name:colleague3.name, checklist:{}};
         const entryForColleague = {...entry, coveringColleague:colleague3.name, coveringEmail:colleague3.email,
           coveringColleagues:[colleague3.name], coveringEmails:[colleague3.email]};
-        const html3 = buildLeaveEmail('cover_nominated_briefing', entryForColleague);
+        const html3 = buildLeaveEmail(html3type, entryForColleague);
         const to3 = [colleague3.email];
         const cc3 = (staffEmail && staffEmail !== colleague3.email ? [staffEmail] : []);
-        const subj3 = '📋 Your handover checklist: covering '+entry.staffName+' — '+colleague3.name;
+        const daysLeft3 = Math.ceil((new Date(entry.startDate)-now)/(24*60*60*1000));
+        const isUrgent3 = daysLeft3 < 7;
+        const subj3 = isUrgent3
+          ? '🔴 URGENT: Your covering colleague checklist — '+entry.staffName+' on leave in '+daysLeft3+' day'+(daysLeft3!==1?'s':'')+' — '+colleague3.name
+          : '📋 Your handover checklist: covering '+entry.staffName+' — '+colleague3.name;
+        const html3type = isUrgent3 ? 'reminder_urgent' : 'cover_nominated_briefing';
         await sendLeaveAlert(to3, cc3, subj3, html3, 'high', entryForColleague);
         console.log('[Leave] Stage 1: Individual checklist sent to', colleague3.name);
       }
       continue;
     }
 
-    // ── STAGE 2: Every 3 days — automated reminder with due items ──
+    // ── STAGE 2: Urgency-aware reminder schedule ──
     if (['process_started','in_progress'].includes(entry.status)) {
-      const lastReminder = entry.lastReminderAt ? new Date(entry.lastReminderAt) : new Date(entry.firstEmailSentAt||now);
-      const daysSinceReminder = Math.floor((now - lastReminder) / (24*60*60*1000));
       const pending = CHECKLIST_ITEMS.filter(i => !entry.checklist || !entry.checklist[i.id]);
+      const lastReminder = entry.lastReminderAt ? new Date(entry.lastReminderAt) : new Date(entry.firstEmailSentAt||now);
+      const hoursSinceReminder = (now - lastReminder) / (60*60*1000);
+      const daysSinceReminder = Math.floor(hoursSinceReminder / 24);
+      const todayStr = now.toISOString().substring(0,10);
 
-      if (daysSinceReminder >= 3 && pending.length > 0 && !entry.awaitingReply) {
+      // Determine urgency based on days to leave start
+      const urgency = daysToStart >= 14 ? 'normal'      // standard 3-day cycle
+                    : daysToStart >= 7  ? 'accelerated' // daily reminders
+                    : 'emergency';                       // every morning + 8hr check
+
+      const reminderIntervalDays = urgency === 'normal' ? 3 : 1; // daily for urgent
+
+      // Send morning reminder (8am Brisbane) if interval has passed
+      if (pending.length > 0 && daysSinceReminder >= reminderIntervalDays &&
+          bHour >= 8 && !entry.reminderSentDate === todayStr) {
         entry.lastReminderAt = now.toISOString();
+        entry.reminderSentDate = todayStr;
         entry.awaitingReply = true;
         entry.awaitingReplySince = now.toISOString();
         changed = true;
         saveLeaveState(state);
-        const html = buildLeaveEmail('reminder_3day', entry);
-        await sendLeaveAlert(allCoverEmails, staffEmail ? [staffEmail] : [],
-          '⏰ Reminder: leave handover items due — ' + entry.staffName + ' (please reply to confirm completed)',
-          html, 'normal', entry);
-        console.log('[Leave] Stage 2: 3-day reminder sent, awaiting reply. Days since last:', daysSinceReminder);
+
+        let subject, html;
+        if (urgency === 'emergency') {
+          subject = '🔴 URGENT: Leave handover required — ' + entry.staffName + ' on leave in ' + daysToStart + ' day' + (daysToStart!==1?'s':'');
+          html = buildLeaveEmail('reminder_urgent', entry);
+        } else {
+          subject = '⏰ Reminder: leave handover items due — ' + entry.staffName + ' (please reply to confirm completed)';
+          html = buildLeaveEmail('reminder_3day', entry);
+        }
+
+        // Send individual reminders per colleague
+        const colleagues4 = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
+          ? entry.coveringColleagues.map((name,i)=>({name, email:(entry.coveringEmails||[])[i]||''}))
+          : [{name:entry.coveringColleague||'', email:entry.coveringEmail||''}];
+        for (const c4 of colleagues4) {
+          if (!c4.email) continue;
+          const entryForC4 = {...entry, coveringColleague:c4.name, coveringEmail:c4.email, coveringColleagues:[c4.name], coveringEmails:[c4.email]};
+          const cc4 = staffEmail && staffEmail !== c4.email ? [staffEmail] : [];
+          await sendLeaveAlert([c4.email], cc4, subject, html, urgency==='emergency'?'high':'normal', entryForC4);
+        }
+        console.log('[Leave] Stage 2: Reminder sent (' + urgency + ' mode, ' + daysToStart + ' days to leave)');
       }
 
-      // End-of-day reminder at 5pm AEST if no reply since morning reminder
-      if (entry.awaitingReply && bHour === 17 && bMin < 30 && !entry.eodReminderSentToday) {
-        const awaitingSince = new Date(entry.awaitingReplySince||now);
-        const hoursSince = (now - awaitingSince) / (60*60*1000);
-        if (hoursSince >= 4) { // Been waiting at least 4 hours
-          entry.eodReminderSentToday = now.toISOString().substring(0,10);
+      // Emergency: 8-hour check — send updated checklist without waiting for full day
+      if (urgency === 'emergency' && entry.awaitingReply && !entry.eightHourCheckSent) {
+        const hoursSince8 = (now - new Date(entry.awaitingReplySince||now)) / (60*60*1000);
+        if (hoursSince8 >= 8) {
+          entry.eightHourCheckSent = todayStr;
+          entry.awaitingReply = false;
           changed = true;
           saveLeaveState(state);
-          const html = buildLeaveEmail('eod_reminder', entry);
-          await sendLeaveAlert(allCoverEmails, staffEmail ? [staffEmail] : [],
-            '📌 End of day: awaiting your reply — leave handover for ' + entry.staffName,
-            html, 'high');
-          console.log('[Leave] Stage 2b: 5pm EOD reminder sent');
+          const done = CHECKLIST_ITEMS.filter(i=>entry.checklist&&entry.checklist[i.id]).length;
+          const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
+          const html = buildLeaveEmail('checklist_updated', entry);
+          const cc5 = staffEmail ? [staffEmail] : [];
+          await sendLeaveAlert(allCoverEmails, cc5,
+            '📋 8-hour update: checklist at ' + pct + '% — ' + entry.staffName + ' leave handover',
+            html, 'high', entry);
+          console.log('[Leave] Stage 2 emergency: 8-hour update sent at', pct + '%');
         }
+      }
+
+      // Reset 8-hour flag daily so it can fire again next morning
+      if (entry.eightHourCheckSent && entry.eightHourCheckSent !== todayStr) {
+        entry.eightHourCheckSent = null;
+        changed = true;
       }
     }
 
