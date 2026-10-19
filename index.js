@@ -5723,6 +5723,76 @@ app.post('/leave/:id/reset-checklist', requireAuth, (req, res) => {
   res.json({success:true, message:'Checklist reset for '+entry.staffName});
 });
 
+// Manual trigger: force Stage 1 for a specific entry and return detailed logs
+app.post('/leave/:id/trigger', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  const logs = [];
+  const log = (msg) => { console.log('[Trigger]', msg); logs.push(msg); };
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found', logs});
+    log('Entry found: '+entry.staffName+' status='+entry.status);
+    log('staffEmail: '+(entry.staffEmail||'EMPTY'));
+    log('coveringEmails: '+(entry.coveringEmails||[]).join(', ')||'EMPTY');
+    log('coveringColleagues: '+(entry.coveringColleagues||[]).join(', ')||'EMPTY');
+    log('firstEmailSentAt: '+(entry.firstEmailSentAt||'null'));
+
+    // Check token
+    if (!tokenStore.access_token) return res.json({error:'No M365 token', logs});
+    log('M365 token present');
+
+    // Get Kandia email
+    const kandiaEmail = await getKandiaEmail().catch(e=>{log('getKandiaEmail error: '+e.message); return 'kandia@risk2solution.com';});
+    log('kandiaEmail: '+kandiaEmail);
+
+    const now = new Date();
+    const daysToStart = Math.ceil((new Date(entry.startDate)-now)/(24*60*60*1000));
+    log('daysToStart: '+daysToStart);
+
+    const colleagues = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
+      ? entry.coveringColleagues.map((name,i)=>({name, email:(entry.coveringEmails||[])[i]||''}))
+      : [{name:entry.coveringColleague||'', email:entry.coveringEmail||''}];
+    log('Colleagues to email: '+JSON.stringify(colleagues));
+
+    for (const c of colleagues) {
+      if (!c.email) { log('SKIP: no email for '+c.name); continue; }
+      log('Sending to: '+c.name+' <'+c.email+'>');
+      const daysLeft = Math.ceil((new Date(entry.startDate)-now)/(24*60*60*1000));
+      const isUrgent = daysLeft < 7;
+      const emailType = isUrgent ? 'reminder_urgent' : 'cover_nominated_briefing';
+      log('Email type: '+emailType+' (isUrgent='+isUrgent+')');
+      const entryForC = {...entry, coveringColleague:c.name, coveringEmail:c.email, coveringColleagues:[c.name], coveringEmails:[c.email]};
+      let html;
+      try { html = buildLeaveEmail(emailType, entryForC); log('HTML built, length: '+html.length); }
+      catch(e2) { log('buildLeaveEmail ERROR: '+e2.message); continue; }
+      const subject = isUrgent
+        ? '🔴 URGENT: Your covering colleague checklist — '+entry.staffName+' on leave in '+daysLeft+' day'+(daysLeft!==1?'s':'')+' — '+c.name
+        : '📋 Your handover checklist: covering '+entry.staffName+' — '+c.name;
+      const cc = (entry.staffEmail && entry.staffEmail !== c.email) ? [entry.staffEmail] : [];
+      log('Sending: TO='+c.email+' CC='+cc.join(','));
+      try {
+        const sent = await sendLeaveAlert([c.email], cc, subject, html, 'high', entryForC);
+        log('sendLeaveAlert result: '+sent);
+      } catch(e3) { log('sendLeaveAlert ERROR: '+e3.message+' '+e3.stack?.substring(0,200)); }
+    }
+
+    // Mark as sent
+    if (!entry.firstEmailSentAt) {
+      entry.firstEmailSentAt = now.toISOString();
+      entry.status = 'process_started';
+      if (!entry.colleagueChecklists) entry.colleagueChecklists = {};
+      colleagues.forEach(c=>{ if(c.email && !entry.colleagueChecklists[c.email]) entry.colleagueChecklists[c.email]={name:c.name,checklist:{}}; });
+      saveLeaveState(state);
+      log('Status updated to process_started');
+    }
+    res.json({success:true, logs, entry:{id:entry.id,status:entry.status,firstEmailSentAt:entry.firstEmailSentAt}});
+  } catch(e) {
+    log('FATAL ERROR: '+e.message+' '+e.stack?.substring(0,300));
+    res.status(500).json({error:e.message, logs});
+  }
+});
+
 // Debug: show a leave entry's details
 app.get('/leave/:id/debug', requireAuth, (req, res) => {
   const state = loadLeaveState();
