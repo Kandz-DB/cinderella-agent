@@ -7736,6 +7736,7 @@ async function openLeaveChecklist(id, preselectedEmail) {
       '<div style="max-height:45vh;overflow-y:auto;padding-right:4px">' + rows + '</div>' +
       '<div style="display:flex;gap:8px;margin-top:14px;border-top:1px solid var(--bl);padding-top:12px">' +
         '<button onclick="sendLeaveChecklistNow(\''+id+'\')" class="m-btn sec" style="flex:1;font-size:11px">Send email</button>' +
+          '<button onclick="triggerLeaveStage1(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">▶ Force send</button>' +
         '<button onclick="closeModal()" class="m-btn sec" style="flex:1;font-size:11px">Close</button>' +
       '</div>'
     );
@@ -8032,6 +8033,29 @@ async function openLeaveChecklist(id, preselectedEmail) {
       : [{name:entry.coveringColleague||'',email:entry.coveringEmail||''}];
     // delegate back to original but with the right colleague selected
   }
+}
+
+
+async function triggerLeaveStage1(id) {
+  showToast('Triggering — check results in a moment...');
+  try {
+    var r = await fetch('/leave/'+id+'/trigger', {method:'POST'});
+    var d = await r.json();
+    var logText = (d.logs||[]).join('\n');
+    console.log('[Leave trigger]', logText);
+    if (d.success) {
+      showToast('Done — check Azure logs or Outlook for result');
+    } else {
+      showToast('Error: '+(d.error||'Failed'));
+    }
+    // Show logs in modal
+    openModal('Leave send diagnostics', id,
+      '<div style="background:#111;color:#0f0;border-radius:8px;padding:14px;font-family:monospace;font-size:11px;max-height:60vh;overflow-y:auto;white-space:pre-wrap">' +
+      logText.replace(/</g,'&lt;') + '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:14px"><button class="m-btn sec" onclick="closeModal()" style="flex:1">Close</button></div>'
+    );
+    loadLeaveEntries();
+  } catch(e) { showToast('Error: '+e.message); }
 }
 
 </script>
