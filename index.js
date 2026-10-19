@@ -5364,15 +5364,15 @@ async function monitorLeaveEntries() {
         if (!entry.colleagueChecklists[colleague3.email]) entry.colleagueChecklists[colleague3.email] = {name:colleague3.name, checklist:{}};
         const entryForColleague = {...entry, coveringColleague:colleague3.name, coveringEmail:colleague3.email,
           coveringColleagues:[colleague3.name], coveringEmails:[colleague3.email]};
-        const html3 = buildLeaveEmail(html3type, entryForColleague);
-        const to3 = [colleague3.email];
-        const cc3 = (staffEmail && staffEmail !== colleague3.email ? [staffEmail] : []);
         const daysLeft3 = Math.ceil((new Date(entry.startDate)-now)/(24*60*60*1000));
         const isUrgent3 = daysLeft3 < 7;
+        const html3type = isUrgent3 ? 'reminder_urgent' : 'cover_nominated_briefing';
         const subj3 = isUrgent3
           ? '🔴 URGENT: Your covering colleague checklist — '+entry.staffName+' on leave in '+daysLeft3+' day'+(daysLeft3!==1?'s':'')+' — '+colleague3.name
           : '📋 Your handover checklist: covering '+entry.staffName+' — '+colleague3.name;
-        const html3type = isUrgent3 ? 'reminder_urgent' : 'cover_nominated_briefing';
+        const html3 = buildLeaveEmail(html3type, entryForColleague);
+        const to3 = [colleague3.email];
+        const cc3 = (staffEmail && staffEmail !== colleague3.email ? [staffEmail] : []);
         await sendLeaveAlert(to3, cc3, subj3, html3, 'high', entryForColleague);
         console.log('[Leave] Stage 1: Individual checklist sent to', colleague3.name);
       }
