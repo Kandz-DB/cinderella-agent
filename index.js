@@ -4174,16 +4174,15 @@ async function scanLeaveReplies(state) {
           const total = CHECKLIST_ITEMS.length;
           const pct = Math.round(done/total*100);
           const allCoverEmails = entry.coveringEmails&&entry.coveringEmails.length>0 ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
-          const LEAVE_TESTING_MODE = true;
-          const toEmails = LEAVE_TESTING_MODE ? [kandiaEmail] : [...new Set([...allCoverEmails, entry.staffEmail].filter(Boolean))];
-          const ccEmails = LEAVE_TESTING_MODE ? [] : (toEmails.includes(kandiaEmail)?[]:[kandiaEmail]);
+            const toEmails = [...new Set([...allCoverEmails, entry.staffEmail].filter(Boolean))];
+          const ccEmails = toEmails.includes(kandiaEmail) ? [] : [kandiaEmail];
           // Send updated checklist — individual copy for the colleague whose items were updated
           const colleagueEntry2 = targetColleagueName
             ? {...entry, coveringColleague:targetColleagueName, coveringColleagues:[targetColleagueName]}
             : entry;
           const html = buildLeaveEmail('checklist_updated', colleagueEntry2);
           await sendLeaveAlert(toEmails, ccEmails,
-            (LEAVE_TESTING_MODE?'[TEST] ':'')+'📋 Checklist updated: '+pct+'% complete — '+entry.staffName+' / '+( targetColleagueName||'all covering colleagues'),
+'📋 Checklist updated: '+pct+'% complete — '+entry.staffName+' / '+( targetColleagueName||'all covering colleagues'),
             html, 'normal', colleagueEntry2);
           console.log('[Leave] ✅ Checklist update email sent ('+done+'/'+total+' items)');
           break;
@@ -4694,6 +4693,7 @@ const CHECKLIST_ITEMS = [
 function buildLeaveEmail(type, entry) {
   const TEAL = '#07706B';
   const staff = entry.staffName;
+  const REPLY_INST = '<table cellpadding="0" cellspacing="0" bgcolor="#EFF6FF" style="background:#EFF6FF;border-radius:8px;width:100%;margin-top:12px"><tr><td style="padding:14px 16px;border-left:3px solid #2563EB"><p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; How to update your checklist</p><p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6">As you complete each section, <strong>reply to this email</strong> confirming what has been done. Cinderella will automatically tick off the items and send everyone an updated checklist.</p><p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:11px;color:#333;font-style:italic">Example reply: <strong>&ldquo;Confirming Section 1 (Contacts &amp; Access) is complete and Section 2 (Current State of Work) is complete.&rdquo;</strong></p><p style="margin:6px 0 0;font-family:Arial,sans-serif;font-size:11px;color:#666">When everything is done, reply: <strong>&ldquo;All checklist items are complete.&rdquo;</strong></p></td></tr></table>';
   const cover = entry.coveringColleague || 'To be confirmed';
   const start = new Date(entry.startDate).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   const end   = new Date(entry.endDate).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
@@ -5012,7 +5012,7 @@ function buildLeaveEmail(type, entry) {
         ${done > 0 ? `<p style="margin:12px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#0D8A62;text-transform:uppercase;letter-spacing:1px">Completed:</p><table cellpadding="0" cellspacing="0" width="100%">${doneRows}</table>` : ''}
         ${pendingItems.length > 0 ? `<p style="margin:10px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1px">Still outstanding:</p><table cellpadding="0" cellspacing="0" width="100%">${pendingRows}</table>` : ''}
       </td></tr></table>
-      ${pct < 100 ? `<p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Cinderella will continue monitoring replies and updating the checklist automatically.</p>` : `<p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#0D8A62;font-weight:bold">&#10003; All checklist items complete &mdash; sign-off phase now begins.</p>`}
+      ${pct < 100 ? `<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:12px;color:#666">Cinderella will continue monitoring replies and updating the checklist automatically.</p>${REPLY_INST}` : `<p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#0D8A62;font-weight:bold">&#10003; All checklist items complete &mdash; sign-off phase now begins.</p>`}
     </td></tr>` + footer;
   }
 
@@ -5353,17 +5353,15 @@ async function monitorLeaveEntries() {
       const colleagues3 = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
         ? entry.coveringColleagues.map((name,i)=>({name, email:(entry.coveringEmails||[])[i]||''}))
         : [{name:entry.coveringColleague||'', email:entry.coveringEmail||''}];
-      const LEAVE_TESTING_MODE = true;
       for (const colleague3 of colleagues3) {
         if (!colleague3.email) continue;
         if (!entry.colleagueChecklists[colleague3.email]) entry.colleagueChecklists[colleague3.email] = {name:colleague3.name, checklist:{}};
         const entryForColleague = {...entry, coveringColleague:colleague3.name, coveringEmail:colleague3.email,
           coveringColleagues:[colleague3.name], coveringEmails:[colleague3.email]};
         const html3 = buildLeaveEmail('cover_nominated_briefing', entryForColleague);
-        const to3 = LEAVE_TESTING_MODE ? [kandiaEmail] : [colleague3.email];
-        const cc3 = LEAVE_TESTING_MODE ? [] : (staffEmail && staffEmail !== colleague3.email ? [staffEmail] : []);
-        const subj3 = (LEAVE_TESTING_MODE?'[TEST - to: '+colleague3.name+'] ':'') +
-          '📋 Your handover checklist: covering '+entry.staffName+' — '+colleague3.name;
+        const to3 = [colleague3.email];
+        const cc3 = (staffEmail && staffEmail !== colleague3.email ? [staffEmail] : []);
+        const subj3 = '📋 Your handover checklist: covering '+entry.staffName+' — '+colleague3.name;
         await sendLeaveAlert(to3, cc3, subj3, html3, 'high', entryForColleague);
         console.log('[Leave] Stage 1: Individual checklist sent to', colleague3.name);
       }
