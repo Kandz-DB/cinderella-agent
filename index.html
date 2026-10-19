@@ -7736,7 +7736,7 @@ async function openLeaveChecklist(id, preselectedEmail) {
       '<div style="max-height:45vh;overflow-y:auto;padding-right:4px">' + rows + '</div>' +
       '<div style="display:flex;gap:8px;margin-top:14px;border-top:1px solid var(--bl);padding-top:12px">' +
         '<button onclick="sendLeaveChecklistNow(\''+id+'\')" class="m-btn sec" style="flex:1;font-size:11px">Send email</button>' +
-          '<button onclick="triggerLeaveStage1(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">▶ Force send</button>' +
+          '<button onclick="forceLeaveReminder(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">▶ Send today\'s reminder</button>' +
         '<button onclick="closeModal()" class="m-btn sec" style="flex:1;font-size:11px">Close</button>' +
       '</div>'
     );
@@ -8055,6 +8055,19 @@ async function triggerLeaveStage1(id) {
       '<div style="display:flex;gap:8px;margin-top:14px"><button class="m-btn sec" onclick="closeModal()" style="flex:1">Close</button></div>'
     );
     loadLeaveEntries();
+  } catch(e) { showToast('Error: '+e.message); }
+}
+
+
+async function forceLeaveReminder(id) {
+  showToast('Sending today reminder now...');
+  try {
+    var r = await fetch('/leave/'+id+'/send-reminder', {method:'POST'});
+    var d = await r.json();
+    if (d.success) {
+      showToast('Reminder sent to '+d.sent+' of '+d.colleagues+' colleague(s) — '+d.daysToStart+' days to leave');
+      loadLeaveEntries();
+    } else { showToast('Error: '+(d.error||'Failed')); }
   } catch(e) { showToast('Error: '+e.message); }
 }
 
