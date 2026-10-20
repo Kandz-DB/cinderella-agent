@@ -5350,6 +5350,7 @@ async function monitorLeaveEntries() {
   const state = loadLeaveState();
   const now = new Date();
   const { bHour, bMin } = getBrisbaneNow();
+  const todayBrisStr = now.toLocaleDateString('en-CA', {timeZone:'Australia/Brisbane'}); // Brisbane YYYY-MM-DD
   let changed = false;
   const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
 
