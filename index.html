@@ -7584,7 +7584,8 @@ async function loadLeaveEntries() {
            ' &nbsp;&middot;&nbsp; <span style="color:var(--t3)">Currently on leave</span>') +
         '</div>' +
         '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
-          '<button onclick="openLeaveChecklist(\'' + e.id + '\')" class="m-btn" style="font-size:11px;padding:5px 12px">View checklist</button>' +
+          '<button data-lid="' + e.id + '" onclick="openLeaveChecklist(this.dataset.lid)" class="m-btn" style="font-size:11px;padding:5px 12px">View checklist</button>' +
+
           '<button onclick="editLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">✏ Edit</button>' +
           '<button onclick="sendLeaveChecklistNow(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">📧 Send checklist email</button>' +
           '<button onclick="deleteLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px;color:var(--r)">Delete</button>' +
@@ -8018,21 +8019,6 @@ async function dismissEmailTracker(conversationId) {
 function openLeaveChecklistTab(leaveId, colleagueEmail) {
   window._currentLeaveId = leaveId;
   openLeaveChecklist(leaveId, colleagueEmail);
-}
-
-var _origOpenLeaveChecklist = openLeaveChecklist;
-async function openLeaveChecklist(id, preselectedEmail) {
-  // If called with a preselected email, rebuild for that colleague
-  if (preselectedEmail) {
-    var r = await fetch('/leave');
-    var entries = await r.json();
-    var entry = entries.find(function(e){ return e.id === id; });
-    if (!entry) return;
-    var colleagues = entry.coveringColleagues && entry.coveringColleagues.length > 0
-      ? entry.coveringColleagues.map(function(name,i){ return {name:name,email:(entry.coveringEmails||[])[i]||''}; })
-      : [{name:entry.coveringColleague||'',email:entry.coveringEmail||''}];
-    // delegate back to original but with the right colleague selected
-  }
 }
 
 
