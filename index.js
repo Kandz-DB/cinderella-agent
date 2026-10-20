@@ -4025,179 +4025,171 @@ async function generatePopulatedChecklist(entry) {
 async function scanLeaveReplies(state) {
   if (!tokenStore.access_token) return;
   try {
+    const since = new Date(Date.now() - 7*24*60*60*1000).toISOString(); // 7 days
     const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
-    // Only scan last 3 days, genuine replies only
-    const since = new Date(Date.now() - 3*24*60*60*1000).toISOString();
-    const recentEmails = await graphGet(
-      `/me/messages?$filter=receivedDateTime ge ${since}&$top=100&$select=subject,from,bodyPreview,body,conversationId,receivedDateTime`
-    );
-    const msgs = recentEmails.value||[];
+
+    // Scan INBOX and SENT ITEMS — self-replies land in sent, colleague replies in inbox
+    let allMsgs = [];
+    try {
+      const [inboxData, sentData] = await Promise.all([
+        graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$orderby=receivedDateTime desc&$top=100&$select=id,subject,from,bodyPreview,conversationId,receivedDateTime`),
+        graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$orderby=createdDateTime desc&$top=100&$select=id,subject,from,bodyPreview,conversationId,createdDateTime`)
+      ]);
+      const seen = new Set();
+      allMsgs = [...(inboxData.value||[]), ...(sentData.value||[])].filter(m => {
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        if (!m.receivedDateTime) m.receivedDateTime = m.createdDateTime || new Date().toISOString();
+        return true;
+      });
+    } catch(fetchErr) {
+      console.error('[Leave] scanLeaveReplies: email fetch error:', fetchErr.message);
+      return;
+    }
+
     let changed = false;
 
     for (const entry of (state.leaveEntries||[])) {
       if (!['process_started','in_progress','confirmed'].includes(entry.status)) continue;
-      if (!entry.firstEmailSentAt) continue; // Haven't sent checklist yet
+      if (!entry.firstEmailSentAt) continue;
 
       const firstSentAt = new Date(entry.firstEmailSentAt);
-      const relevantAddrs = [...new Set([...(entry.coveringEmails||[]), entry.staffEmail].filter(Boolean))];
+      if (!entry.colleagueChecklists) entry.colleagueChecklists = {};
+      if (!entry.checklist) entry.checklist = {};
+      if (!entry.processedReplies) entry.processedReplies = [];
 
-      // STRICT filter: only genuine replies — Re: subject is mandatory
-      // This prevents Cinderella's own CC emails being treated as confirmations
-      const replies = msgs.filter(m => {
+      const relevantAddrs = [...new Set([
+        ...(entry.coveringEmails||[]),
+        entry.staffEmail
+      ].filter(Boolean))];
+
+      // Find valid replies
+      const replies = allMsgs.filter(m => {
         const addr = (m.from?.emailAddress?.address||'').toLowerCase();
         const subj = (m.subject||'').toLowerCase();
-        // Must be from a covering colleague or the staff member going on leave
         if (!relevantAddrs.some(e => addr === e.toLowerCase())) return false;
-        // Must arrive AFTER the checklist was sent
         if (new Date(m.receivedDateTime) <= firstSentAt) return false;
-        // MUST be a genuine reply — Re: prefix is the reliable indicator
-        // Also accept RE: (some clients use caps)
-        if (!subj.startsWith('re:') && !subj.startsWith('fw:') && !subj.startsWith('fwd:')) return false;
+        if (!subj.includes('re:') && !subj.includes('fw:') && !subj.includes('fwd:')) return false;
+        const replyId = m.id;
+        if (entry.processedReplies.includes(replyId)) return false;
         return true;
       });
 
       if (!replies.length) continue;
+      console.log('[Leave] Found', replies.length, 'unprocessed repl(ies) for', entry.staffName);
 
       for (const reply of replies) {
-        // Skip if we've already processed this exact email
-        const replyId = reply.conversationId + '_' + reply.receivedDateTime;
-        if ((entry.processedReplies||[]).includes(replyId)) continue;
-
-        // Fetch the full body for this specific email (bodyPreview is only 255 chars)
-        let fullBodyText = (reply.bodyPreview||'').toLowerCase();
+        // Fetch full body
+        let bodyText = (reply.bodyPreview||'').toLowerCase();
         try {
-          const fullMsg = await graphGet(`/me/messages/${reply.id}?$select=body`);
-          const rawBody = fullMsg.body?.content||'';
-          fullBodyText = rawBody.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').toLowerCase();
-        } catch(bodyErr) { console.warn('[Leave] Could not fetch full body:', bodyErr.message); }
-        const bodyText = fullBodyText;
-        
-        // Must contain affirmative language — not just any email
-        const isAffirmative = /(complet|done|finish|confirm|tick|checked|yes|agreed|sorted|all good)/.test(bodyText);
-        if (!isAffirmative) continue;
+          const full = await graphGet(`/me/messages/${reply.id}?$select=body,bodyPreview`);
+          const raw = (full.body?.content||full.bodyPreview||'');
+          bodyText = raw.replace(/<[^>]+>/g,' ').replace(/&[a-z]+;/gi,' ').replace(/\s+/g,' ').toLowerCase();
+        } catch(e) { console.warn('[Leave] Body fetch failed, using preview'); }
 
-        console.log('[Leave] Processing reply from', reply.from?.emailAddress?.name, ':', reply.subject);
+        // Check for affirmative language
+        const isAffirmative = /(complet|done|finish|confirm|tick|checked|yes|agreed|sorted|all good|signoff|sign off|signed)/i.test(bodyText);
+        if (!isAffirmative) {
+          console.log('[Leave] Reply not affirmative, skipping:', (reply.subject||'').substring(0,60));
+          entry.processedReplies.push(reply.id);
+          changed = true;
+          continue;
+        }
 
-        const KEYWORD_MAP = [
-          { keys:['contacts and access','contacts & access','contacts, access','key contacts'], items:['contacts','access','external'] },
-          { keys:['current state of work','current state','status update','project status'], items:['status','deadlines','stalling'] },
-          { keys:['sharepoint links','resources and links','resources & links'], items:['sharepoint'] },
-          { keys:['links tested','links confirmed','links working','confirmed accessible'], items:['sp_verified'] },
-          { keys:['decisions and judgement','decisions & judgement','decisions'], items:['decisions','risks'] },
-          { keys:['handover discussion','had our discussion','met with','discussion done'], items:['discussion','understood','emergency'] },
-          { keys:['phase 1 signed','phase 1 confirmed','section 1 signed'], items:['phase1_signed'] },
-          { keys:['phase 2 signed','phase 2 confirmed'], items:['phase2_signed'] },
+        console.log('[Leave] Processing affirmative reply:', (reply.subject||'').substring(0,60));
+
+        // Determine which items to tick
+        // If body contains "all" + affirmative OR the reply is short (just a confirmation), tick everything
+        const allDone = /all (items|sections|tasks|checklist)?.{0,20}(complete|done|confirmed|finished)/i.test(bodyText)
+          || /everything.{0,20}(complete|done|confirmed|finished)/i.test(bodyText);
+
+        const SECTION_MAP = [
+          { keys:['key contacts','contacts and access','contacts & access','contacts, access','contact list'], items:['contacts','access','external'] },
+          { keys:['current state','status update','project status','state of work'], items:['status','deadlines','stalling'] },
+          { keys:['sharepoint','resources and links','resources & links','links tested','folder'], items:['sharepoint','sp_verified'] },
+          { keys:['decisions','judgement','risks','sensitivities'], items:['decisions','risks'] },
+          { keys:['handover discussion','discussion','meeting','met with','spoke with'], items:['discussion','understood','emergency'] },
+          { keys:['section 1','section one','contacts section'], items:['contacts','access','external'] },
+          { keys:['section 2','section two','work section'], items:['status','deadlines','stalling'] },
+          { keys:['section 3','section three','links section'], items:['sharepoint','sp_verified'] },
+          { keys:['section 4','section four','decision'], items:['decisions','risks'] },
+          { keys:['section 5','section five','handover section','discussion section'], items:['discussion','understood','emergency'] },
         ];
 
-        const allDone = /all (items|sections|tasks|checklist|of it) (are )?(complete|done|finished|confirmed)/.test(bodyText) || /everything (is )?(complete|done|finished)/.test(bodyText);
-
-        // Route to the correct per-colleague checklist
-        if (!entry.colleagueChecklists) entry.colleagueChecklists = {};
-        const replyAddr = reply.from?.emailAddress?.address?.toLowerCase();
-        // Find which colleague sent this reply
-        let targetChecklist = null;
-        let targetColleagueName = null;
-        const colleagues2 = (entry.coveringColleagues||[]).map((name,i) => ({name, email:(entry.coveringEmails||[])[i]||''}));
-        const matchedColleague = colleagues2.find(c => c.email && replyAddr === c.email.toLowerCase());
-        // If from a covering colleague, use their checklist
-        if (matchedColleague) {
-          if (!entry.colleagueChecklists[matchedColleague.email]) entry.colleagueChecklists[matchedColleague.email] = {name:matchedColleague.name, checklist:{}};
-          targetChecklist = entry.colleagueChecklists[matchedColleague.email].checklist;
-          targetColleagueName = matchedColleague.name;
-        } else if (replyAddr === (entry.staffEmail||'').toLowerCase()) {
-          // Reply from staff member — could be about any colleague; check body for name mention
-          const mentionedColleague = colleagues2.find(c => bodyText.includes(c.name.split(' ')[0].toLowerCase()));
-          if (mentionedColleague) {
-            if (!entry.colleagueChecklists[mentionedColleague.email]) entry.colleagueChecklists[mentionedColleague.email] = {name:mentionedColleague.name, checklist:{}};
-            targetChecklist = entry.colleagueChecklists[mentionedColleague.email].checklist;
-            targetColleagueName = mentionedColleague.name;
-          } else {
-            // Update all colleague checklists if no specific name mentioned
-            targetChecklist = null;
-          }
+        const itemsToTick = new Set();
+        if (allDone) {
+          CHECKLIST_ITEMS.filter(i=>!i.id.includes('signed')).forEach(i=>itemsToTick.add(i.id));
         } else {
-          continue; // Unknown sender — skip
-        }
-
-        let itemsUpdated = false;
-        // Helper to update a checklist object
-        const updateChecklist = (cl) => {
-          if (allDone) {
-            CHECKLIST_ITEMS.filter(i => !i.id.includes('signed')).forEach(i => {
-              if (!cl[i.id]) { cl[i.id] = true; itemsUpdated = true; }
-            });
-          } else {
-            for (const mapping of KEYWORD_MAP) {
-              if (mapping.keys.some(k => bodyText.includes(k))) {
-                mapping.items.forEach(item => { if (!cl[item]) { cl[item] = true; itemsUpdated = true; } });
-              }
+          for (const mapping of SECTION_MAP) {
+            if (mapping.keys.some(k => bodyText.includes(k))) {
+              mapping.items.forEach(id => itemsToTick.add(id));
             }
           }
-        };
-
-        if (targetChecklist) {
-          updateChecklist(targetChecklist);
-        } else {
-          // Update all colleagues
-          colleagues2.forEach(c => {
-            if (!entry.colleagueChecklists[c.email]) entry.colleagueChecklists[c.email] = {name:c.name,checklist:{}};
-            updateChecklist(entry.colleagueChecklists[c.email].checklist);
-          });
         }
-
-        // Also maintain the overall checklist for backwards compat
-        if (!entry.checklist) entry.checklist = {};
-        if (allDone) {
-          CHECKLIST_ITEMS.filter(i=>!i.id.includes('signed')).forEach(i=>{if(!entry.checklist[i.id]){entry.checklist[i.id]=true;}});
-        } else {
-          for (const mapping of KEYWORD_MAP) {
-            if (mapping.keys.some(k=>bodyText.includes(k))) mapping.items.forEach(item=>{entry.checklist[item]=true;});
-          }
-        }
-        console.log('[Leave] Items updated for', targetColleagueName||'all colleagues');
 
         // Extract SharePoint links
-        const spLinks = ((reply.body?.content||'') + (reply.bodyPreview||'')).match(/https:\/\/[^\s<>"]+sharepoint[^\s<>"]+/gi)||[];
-        if (spLinks.length > 0) {
-          if (!entry.sharepointLinks) entry.sharepointLinks = {};
-          const SP_FIELDS = ['masterFolder','clientFolder','templates','correspondence','other'];
-          spLinks.map(u=>u.replace(/[>)"]+$/,'')).forEach((link,i) => {
-            const field = SP_FIELDS[i]||'other';
-            if (!entry.sharepointLinks[field]) { entry.sharepointLinks[field]=link; itemsUpdated=true; }
-          });
-          if (!entry.checklist.sharepoint) { entry.checklist.sharepoint=true; itemsUpdated=true; }
+        const spLinks = bodyText.match(/https?:\/\/[^\s<>"]+sharepoint[^\s<>"]+/gi)||[];
+
+        if (itemsToTick.size === 0 && spLinks.length === 0) {
+          console.log('[Leave] No items matched in reply — marking processed anyway');
+          entry.processedReplies.push(reply.id);
+          changed = true;
+          continue;
         }
 
-        // Mark this reply as processed
-        if (!entry.processedReplies) entry.processedReplies = [];
-        entry.processedReplies.push(replyId);
+        // Update overall checklist
+        let itemsUpdated = false;
+        itemsToTick.forEach(id => {
+          if (!entry.checklist[id]) { entry.checklist[id] = true; itemsUpdated = true; }
+        });
 
+        // Update per-colleague checklists
+        const replyAddr = (reply.from?.emailAddress?.address||'').toLowerCase();
+        const colleagues2 = (entry.coveringColleagues||[]).map((name,i)=>({name, email:(entry.coveringEmails||[])[i]||''}));
+        const fromColleague = colleagues2.find(c => c.email && replyAddr === c.email.toLowerCase());
+        const toUpdate = fromColleague ? [fromColleague] : colleagues2;
+        toUpdate.forEach(c => {
+          if (!c.email) return;
+          if (!entry.colleagueChecklists[c.email]) entry.colleagueChecklists[c.email] = {name:c.name, checklist:{}};
+          itemsToTick.forEach(id => {
+            if (!entry.colleagueChecklists[c.email].checklist[id]) {
+              entry.colleagueChecklists[c.email].checklist[id] = true; itemsUpdated = true;
+            }
+          });
+        });
+
+        // SharePoint links
+        if (spLinks.length && !entry.sharepointLinks) entry.sharepointLinks = {};
+        spLinks.forEach((link,i) => {
+          const fields = ['masterFolder','clientFolder','templates','correspondence','other'];
+          const field = fields[i]||'other';
+          if (!entry.sharepointLinks[field]) { entry.sharepointLinks[field] = link; itemsUpdated = true; }
+        });
+
+        entry.processedReplies.push(reply.id);
         if (itemsUpdated) {
           entry.status = 'in_progress';
+          entry.lastChecklistUpdateAt = new Date().toISOString();
           entry.awaitingReply = false;
           changed = true;
+          console.log('[Leave] ✅ Ticked', itemsToTick.size, 'items for', entry.staffName, 'from reply by', reply.from?.emailAddress?.name);
 
-          const done = CHECKLIST_ITEMS.filter(i => entry.checklist[i.id]).length;
-          const total = CHECKLIST_ITEMS.length;
-          const pct = Math.round(done/total*100);
-          const allCoverEmails = entry.coveringEmails&&entry.coveringEmails.length>0 ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
-            const toEmails = [...new Set([...allCoverEmails, entry.staffEmail].filter(Boolean))];
-          const ccEmails = toEmails.includes(kandiaEmail) ? [] : [kandiaEmail];
-          // Send updated checklist — individual copy for the colleague whose items were updated
-          const colleagueEntry2 = targetColleagueName
-            ? {...entry, coveringColleague:targetColleagueName, coveringColleagues:[targetColleagueName]}
-            : entry;
-          const html = buildLeaveEmail('checklist_updated', colleagueEntry2);
-          await sendLeaveAlert(toEmails, ccEmails,
-'📋 Checklist updated: '+pct+'% complete — '+entry.staffName+' / '+( targetColleagueName||'all covering colleagues'),
-            html, 'normal', colleagueEntry2);
-          console.log('[Leave] ✅ Checklist update email sent ('+done+'/'+total+' items)');
-          break;
+          // Send updated checklist immediately
+          try {
+            const done = CHECKLIST_ITEMS.filter(i=>entry.checklist[i.id]).length;
+            const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
+            const allCoverEmails = (entry.coveringEmails&&entry.coveringEmails.length>0) ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
+            const ccEmails = entry.staffEmail ? [entry.staffEmail] : [];
+            const htmlUpdate = buildLeaveEmail('checklist_updated', entry);
+            await sendLeaveAlert(allCoverEmails, ccEmails,
+              '📋 Checklist updated: '+pct+'% complete — '+entry.staffName+' leave handover', htmlUpdate, 'normal', entry);
+          } catch(emailErr) { console.error('[Leave] Update email error:', emailErr.message); }
         }
       }
     }
+
     if (changed) saveLeaveState(state);
-  } catch(e) { console.warn('[Leave] Reply scan error:', e.message); }
+  } catch(e) { console.error('[Leave] scanLeaveReplies error:', e.message, e.stack?.substring(0,200)); }
 }
 
 
@@ -5879,34 +5871,28 @@ app.post('/leave/:id/process-replies', requireAuth, async (req, res) => {
     const state = loadLeaveState();
     const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
     if (!entry) return res.status(404).json({error:'Not found'});
-    const beforeItems = Object.keys(entry.checklist||{}).length;
-    // Clear processed replies so any missed emails get re-scanned
+    const beforeChecklist = JSON.stringify(entry.checklist||{});
+    // Clear processed replies so any missed emails get a fresh scan
     entry.processedReplies = [];
     saveLeaveState(state);
     // Run reply scan
     await scanLeaveReplies(state);
     const freshState = loadLeaveState();
     const freshEntry = (freshState.leaveEntries||[]).find(e=>e.id===req.params.id);
-    const afterItems = Object.keys(freshEntry.checklist||{}).length;
-    const newItems = afterItems - beforeItems;
-    // If checklist changed, force send 3pm update now
-    if (newItems > 0 || req.body.force) {
-      const now = new Date();
-      const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
-      const allCoverEmails = freshEntry.coveringEmails&&freshEntry.coveringEmails.length>0 ? freshEntry.coveringEmails : freshEntry.coveringEmail?[freshEntry.coveringEmail]:[];
-      const staffEmail = freshEntry.staffEmail||'';
-      const done = CHECKLIST_ITEMS.filter(i=>freshEntry.checklist&&freshEntry.checklist[i.id]).length;
-      const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
-      const html = buildLeaveEmail('checklist_updated', freshEntry);
-      const cc = staffEmail ? [staffEmail] : [];
-      await sendLeaveAlert(allCoverEmails, cc,
-        '📋 Updated checklist: '+pct+'% complete — '+freshEntry.staffName+' leave handover', html, 'normal', freshEntry);
-      freshEntry.eightHourCheckSent = now.toLocaleDateString('en-CA',{timeZone:'Australia/Brisbane'});
-      saveLeaveState(freshState);
-      res.json({success:true, newItemsFound:newItems, pct, message:'Checklist updated and email sent to '+allCoverEmails.join(', ')});
-    } else {
-      res.json({success:true, newItemsFound:0, message:'No new replies found — checklist unchanged'});
-    }
+    const afterChecklist = JSON.stringify(freshEntry.checklist||{});
+    const changed = beforeChecklist !== afterChecklist;
+    const done = CHECKLIST_ITEMS.filter(i=>freshEntry.checklist&&freshEntry.checklist[i.id]).length;
+    const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
+    res.json({
+      success: true,
+      changed,
+      pct,
+      itemsDone: done,
+      itemsTotal: CHECKLIST_ITEMS.length,
+      message: changed
+        ? 'Checklist updated to '+pct+'% — email sent to covering colleagues'
+        : 'Scanned inbox and sent items from the last 7 days — no new confirmations found. Check Azure logs for [Leave] scan details.'
+    });
   } catch(e) { res.status(500).json({error:e.message}); }
 });
 
@@ -5989,6 +5975,24 @@ function getTickUrl(entryId, itemId) {
   return `https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/leave/tick?id=${entryId}&item=${itemId}&sig=${sig}`;
 }
 
+// Send updated checklist email with current progress + tick buttons
+app.post('/leave/:id/send-update', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    const allCoverEmails = (entry.coveringEmails&&entry.coveringEmails.length>0) ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
+    const ccEmails = entry.staffEmail ? [entry.staffEmail] : [];
+    const done = CHECKLIST_ITEMS.filter(i=>entry.checklist&&entry.checklist[i.id]).length;
+    const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
+    const html = buildLeaveEmail('checklist_updated', entry);
+    const subject = '📋 Updated checklist: '+pct+'% complete — '+entry.staffName+' leave handover';
+    const sent = await sendLeaveAlert(allCoverEmails, ccEmails, subject, html, 'normal', entry);
+    res.json({success:true, sent, pct, to:allCoverEmails.join(', '), message:'Updated checklist sent ('+pct+'% complete)'});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
 // Debug: show what emails the scanner sees for a leave entry
 app.get('/leave/:id/scan-debug', requireAuth, async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
@@ -6001,8 +6005,8 @@ app.get('/leave/:id/scan-debug', requireAuth, async (req, res) => {
     const relevantAddrs = [...new Set([...(entry.coveringEmails||[]), entry.staffEmail].filter(Boolean))];
     const firstSentAt = new Date(entry.firstEmailSentAt||0);
     const [inboxData, sentData] = await Promise.all([
-      graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$top=50&$select=id,subject,from,bodyPreview,conversationId,receivedDateTime`),
-      graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$top=50&$select=id,subject,from,bodyPreview,conversationId,createdDateTime`)
+      graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$orderby=receivedDateTime desc&$top=50&$select=id,subject,from,bodyPreview,conversationId,receivedDateTime`),
+      graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$orderby=createdDateTime desc&$top=50&$select=id,subject,from,bodyPreview,conversationId,createdDateTime`)
     ]);
     const seen = new Set();
     const allMsgs = [...(inboxData.value||[]), ...(sentData.value||[])].filter(m => {
