@@ -7586,6 +7586,8 @@ async function loadLeaveEntries() {
         '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
           '<button data-lid="' + e.id + '" onclick="openLeaveChecklist(this.dataset.lid)" class="m-btn" style="font-size:11px;padding:5px 12px">View checklist</button>' +
 
+
+
           '<button onclick="editLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">✏ Edit</button>' +
           '<button onclick="sendLeaveChecklistNow(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">📧 Send checklist email</button>' +
           '<button onclick="deleteLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px;color:var(--r)">Delete</button>' +
@@ -7667,398 +7669,107 @@ async function submitAddLeave() {
 
 
 async function openLeaveChecklist(id, preselectedEmail) {
-  var r = await fetch('/leave');
-  var entries = await r.json();
-  var entry = entries.find(function(e){ return e.id === id; });
-  if (!entry) return;
+  try {
+    var r = await fetch('/leave');
+    var entries = await r.json();
+    var entry = entries.find(function(e){ return e.id === id; });
+    if (!entry) { showToast('Leave entry not found'); return; }
 
-  var colleagues = entry.coveringColleagues && entry.coveringColleagues.length > 0
-    ? entry.coveringColleagues.map(function(name,i){ return {name:name, email:(entry.coveringEmails||[])[i]||''}; })
-    : [{name:entry.coveringColleague||'', email:entry.coveringEmail||''}];
+    var colleagues = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
+      ? entry.coveringColleagues.map(function(name,i){ return {name:name, email:(entry.coveringEmails||[])[i]||''}; })
+      : [{name:entry.coveringColleague||'', email:entry.coveringEmail||''}];
 
-  var selectedEmail = preselectedEmail || (colleagues[0] ? colleagues[0].email : '');
+    var selectedEmail = preselectedEmail || (colleagues[0] ? colleagues[0].email : '');
 
-  function getColleagueChecklist(email) {
-    return (entry.colleagueChecklists && entry.colleagueChecklists[email] && entry.colleagueChecklists[email].checklist)
-      ? entry.colleagueChecklists[email].checklist
-      : (entry.checklist || {});
-  }
+    function getChecklist(email) {
+      return (entry.colleagueChecklists && entry.colleagueChecklists[email] && entry.colleagueChecklists[email].checklist)
+        ? entry.colleagueChecklists[email].checklist : (entry.checklist || {});
+    }
 
-  function buildModal(colleagueEmail) {
-    var cl = getColleagueChecklist(colleagueEmail);
-    var colleagueName = (colleagues.find(function(c){ return c.email===colleagueEmail; })||{}).name || colleagueEmail;
-    var done = CHECKLIST_ITEMS_CLIENT.filter(function(i){ return cl[i.id]; }).length;
-    var pct = Math.round(done/CHECKLIST_ITEMS_CLIENT.length*100);
+    var cl = getChecklist(selectedEmail);
+    var matchedC = colleagues.find(function(c){ return c.email === selectedEmail; });
+    var colleagueName = matchedC ? matchedC.name : '';
+    var done  = CHECKLIST_ITEMS_CLIENT.filter(function(i){ return cl[i.id]; }).length;
+    var total = CHECKLIST_ITEMS_CLIENT.length;
+    var pct   = Math.round(done/total*100);
+    var pctCol = pct===100 ? 'var(--g)' : pct>50 ? 'var(--a)' : 'var(--r)';
 
-    // Colleague tab bar
     var tabBar = '';
     if (colleagues.length > 1) {
       tabBar = '<div style="display:flex;gap:4px;background:var(--bg2);border-radius:8px;padding:3px;margin-bottom:14px">';
       colleagues.forEach(function(c) {
-        var isActive = c.email === colleagueEmail;
-        var cDone = CHECKLIST_ITEMS_CLIENT.filter(function(i){ return getColleagueChecklist(c.email)[i.id]; }).length;
-        var cPct = Math.round(cDone/CHECKLIST_ITEMS_CLIENT.length*100);
-        tabBar += '<button data-lid="'+id+'" data-em="'+c.email+'" onclick="openLeaveChecklist(this.dataset.lid, this.dataset.em)" style="flex:1;padding:6px;border:none;border-radius:6px;font-size:11px;font-weight:'+(isActive?'700':'500')+';cursor:pointer;font-family:var(--f);background:'+(isActive?'var(--bg)':'transparent')+';color:'+(isActive?'var(--g)':'var(--t3)')+'">'+c.name.split(' ')[0]+' ('+cPct+'%)</button>';
+        var isActive = c.email === selectedEmail;
+        var cDone = CHECKLIST_ITEMS_CLIENT.filter(function(i){ return getChecklist(c.email)[i.id]; }).length;
+        tabBar += '<button data-lid="'+id+'" data-em="'+c.email+'" onclick="openLeaveChecklist(this.dataset.lid,this.dataset.em)" style="flex:1;padding:6px 4px;border:none;border-radius:6px;font-size:11px;font-weight:'+(isActive?'700':'500')+';cursor:pointer;font-family:var(--f);background:'+(isActive?'var(--bg)':'transparent')+';color:'+(isActive?'var(--g)':'var(--t3)')+'">'+c.name.split(' ')[0]+' ('+Math.round(cDone/total*100)+'%)</button>';
       });
       tabBar += '</div>';
     }
 
-    // Checklist items
-    var lastSection = '';
+    var lastSec = '';
     var rows = CHECKLIST_ITEMS_CLIENT.map(function(item) {
-      var done2 = cl[item.id];
-      var isSignOff = item.section === '6. Sign Off';
-      var sectionHdr = '';
-      if (item.section !== lastSection) {
-        sectionHdr = '<div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin:12px 0 5px;padding-top:8px;border-top:1px solid var(--bl)">'+item.section+'</div>';
-        lastSection = item.section;
+      var ticked = !!cl[item.id];
+      var secHdr = '';
+      if (item.section !== lastSec) {
+        secHdr = '<div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin:12px 0 5px;padding-top:8px;border-top:1px solid var(--bl)">'+item.section+'</div>';
+        lastSec = item.section;
       }
-      var bgCol = done2 ? (isSignOff?'var(--gl)':'var(--bg2)') : (isSignOff?'var(--rl)':'var(--bg)');
-      var borderCol = done2 ? 'var(--g)' : (isSignOff?'var(--r)':'var(--bm)');
-      return sectionHdr + '<div onclick="toggleLeaveItemForColleague(\''+id+'\',\''+colleagueEmail+'\',\''+item.id+'\')" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;background:'+bgCol+';margin-bottom:4px;border:1px solid '+borderCol+';transition:all .1s">' +
-        '<div style="width:18px;height:18px;border-radius:4px;border:2px solid '+(done2?'var(--g)':'var(--bm)')+';background:'+(done2?'var(--g)':'transparent')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">' +
-          (done2?'<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2.5 2.5L8 3" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>':'') +
-        '</div>' +
-        '<span style="font-size:11.5px;color:var(--t1);line-height:1.4">'+item.label+'</span>' +
-      '</div>';
+      return secHdr +
+        '<div data-lid="'+id+'" data-em="'+selectedEmail+'" data-item="'+item.id+'" onclick="toggleLeaveItemForColleague(this.dataset.lid,this.dataset.em,this.dataset.item)" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;background:'+(ticked?'var(--bg2)':'var(--bg)')+';margin-bottom:4px;border:1px solid '+(ticked?'var(--g)':'var(--bm)')+'">' +
+          '<div style="width:18px;height:18px;border-radius:4px;border:2px solid '+(ticked?'var(--g)':'var(--bm)')+';background:'+(ticked?'var(--g)':'transparent')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">' +
+            (ticked?'<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2.5 2.5L8 3" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>':'') +
+          '</div>' +
+          '<span style="font-size:11.5px;color:var(--t1);line-height:1.4">'+item.label+'</span>' +
+        '</div>';
     }).join('');
 
-    openModal(entry.staffName + ' \u2014 ' + colleagueName + ' Checklist',
-      new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ' \u2013 ' +
-      new Date(entry.endDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}),
+    var startStr = new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+    var endStr   = new Date(entry.endDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+
+    openModal(
+      entry.staffName + (colleagueName ? ' — ' + colleagueName : '') + ' Checklist',
+      startStr + ' – ' + endStr,
       tabBar +
       '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">' +
-        '<span style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">'+colleagueName+'</span>' +
-        '<span style="font-size:16px;font-weight:800;color:'+(pct===100?'var(--g)':pct>50?'var(--a)':'var(--r)')+'">'+pct+'%</span>' +
+        '<span style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">'+(colleagueName||'Checklist')+' progress</span>' +
+        '<span style="font-size:16px;font-weight:800;color:'+pctCol+'">'+done+'/'+total+' &mdash; '+pct+'%</span>' +
       '</div>' +
       '<div style="height:8px;background:var(--bg2);border-radius:999px;overflow:hidden;margin-bottom:14px">' +
-        '<div style="height:100%;width:'+pct+'%;background:'+(pct===100?'var(--g)':pct>50?'var(--a)':'var(--r)')+';border-radius:999px"></div>' +
+        '<div style="height:100%;width:'+pct+'%;background:'+pctCol+';border-radius:999px"></div>' +
       '</div>' +
       '<div style="max-height:45vh;overflow-y:auto;padding-right:4px">' + rows + '</div>' +
       '<div style="display:flex;gap:8px;margin-top:14px;border-top:1px solid var(--bl);padding-top:12px">' +
-        '<button onclick="sendLeaveChecklistNow(\''+id+'\')" class="m-btn sec" style="flex:1;font-size:11px">Send email</button>' +
-          '<button onclick="forceLeaveReminder(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">▶ Send today\'s reminder</button>' +
+        '<button data-lid="'+id+'" onclick="sendLeaveChecklistNow(this.dataset.lid)" class="m-btn sec" style="flex:1;font-size:11px">Send email</button>' +
+
         '<button onclick="closeModal()" class="m-btn sec" style="flex:1;font-size:11px">Close</button>' +
       '</div>'
     );
+  } catch(err) {
+    showToast('Error: ' + err.message);
+    console.error('[Leave] openLeaveChecklist error:', err);
   }
-
-  buildModal(selectedEmail);
 }
 
-
-async function toggleLeaveItem(leaveId, itemId) {
+// Per-colleague checklist item toggle
+async function toggleLeaveItemForColleague(leaveId, colleagueEmail, itemId) {
   try {
-    var r = await fetch('/leave');
-    var entries = await r.json();
-    var entry = entries.find(function(e){ return e.id === leaveId; });
-    if (!entry) return;
-    var update = {};
-    update[itemId] = !(entry.checklist && entry.checklist[itemId]);
-    await fetch('/leave/'+leaveId+'/checklist', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(update)});
-    openLeaveChecklist(leaveId);
+    var r2 = await fetch('/leave');
+    var entries2 = await r2.json();
+    var e2 = entries2.find(function(x){ return x.id === leaveId; });
+    if (!e2) return;
+    var cl2 = (e2.colleagueChecklists && e2.colleagueChecklists[colleagueEmail] && e2.colleagueChecklists[colleagueEmail].checklist)
+      ? e2.colleagueChecklists[colleagueEmail].checklist : {};
+    var upd = {}; upd[itemId] = !cl2[itemId]; upd.colleagueEmail = colleagueEmail;
+    await fetch('/leave/'+leaveId+'/checklist', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(upd)});
+    openLeaveChecklist(leaveId, colleagueEmail);
     loadLeaveEntries();
-  } catch(e) { showToast('Error: '+e.message); }
+  } catch(err) { showToast('Error: '+err.message); }
 }
-
-async function sendLeaveChecklistNow(id) {
-  showToast('Sending checklist email...');
-  try {
-    var r = await fetch('/leave/'+id+'/send-checklist', {method:'POST'});
-    var text = await r.text();
-    var d;
-    try { d = JSON.parse(text); }
-    catch(e) {
-      console.error('send-checklist response:', text.substring(0,200));
-      showToast('Server error sending checklist — check Azure logs');
-      return;
-    }
-    if (d.success) {
-      showToast(d.message || 'Checklist email sent — check Outlook Drafts');
-      loadLeaveEntries();
-    } else {
-      showToast('Error: '+(d.error||'Failed to send'));
-    }
-  } catch(e) { showToast('Error: '+e.message); }
-}
-
-async function deleteLeaveEntry(id) {
-  if (!confirm('Delete this leave entry?')) return;
-  await fetch('/leave/'+id, {method:'DELETE'});
-  loadLeaveEntries();
-  showToast('Leave entry deleted');
-}
-
-
-
-async function showConfirmLeave(id) {
-  var r = await fetch('/leave');
-  var entries = await r.json();
-  var e = entries.find(function(x){ return x.id === id; });
-  if (!e) return;
-  var staffOpts = LEAVE_STAFF_LIST.map(function(s){
-    return '<option value="'+s.name+'|'+s.email+'">'+s.name+'</option>';
-  }).join('') + '<option value="Kandia Du Bruyn|kandia@risk2solution.com">Kandia Du Bruyn</option>';
-  openModal('Confirm leave — ' + e.staffName, 'Review details and nominate covering colleagues',
-    '<div style="display:grid;gap:10px">' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
-        '<div><div class="mfl">Leave start date *</div><input id="cf_start" type="date" value="'+e.startDate+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
-        '<div><div class="mfl">Leave end date *</div><input id="cf_end" type="date" value="'+e.endDate+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
-      '</div>' +
-      '<div><div class="mfl">Covering colleague(s) * <span style="font-weight:400;color:var(--t3)">(hold Ctrl/Cmd for multiple)</span></div>' +
-        '<select id="cf_cover" multiple style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);height:100px">'+staffOpts+'</select></div>' +
-      '<div><div class="mfl">Notes</div><textarea id="cf_notes" rows="2" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);resize:vertical">'+( e.notes||'')+'</textarea></div>' +
-      '<div style="background:var(--gl);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--t1);line-height:1.5">' +
-        '<strong>What happens next:</strong> Cinderella will immediately send one email to the covering colleague(s) with the handover checklist attached. The staff member will be CC\'d. The automated 3-day reminder cycle then begins.' +
-      '</div>' +
-    '</div>' +
-    '<div style="display:flex;gap:8px;margin-top:14px">' +
-      '<button class="m-btn" onclick="submitConfirmLeave(\''+id+'\')" style="flex:1">✓ Confirm & start process</button>' +
-      '<button class="m-btn sec" onclick="closeModal()" style="flex:1">Cancel</button>' +
-    '</div>'
-  );
-}
-
-async function submitConfirmLeave(id) {
-  var start  = (document.getElementById('cf_start')||{}).value;
-  var end    = (document.getElementById('cf_end')||{}).value;
-  var notes  = (document.getElementById('cf_notes')||{}).value||'';
-  var coverSel = document.getElementById('cf_cover');
-  var coverNames = [], coverEmails = [];
-  if (coverSel) Array.from(coverSel.selectedOptions).forEach(function(opt) {
-    var parts = opt.value.split('|');
-    if (parts[0]) coverNames.push(parts[0]);
-    if (parts[1]) coverEmails.push(parts[1]);
-  });
-  if (!coverNames.length) { showToast('Please select at least one covering colleague'); return; }
-  try {
-    var r = await fetch('/leave/'+id+'/confirm', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({startDate:start, endDate:end, notes, coveringColleagues:coverNames, coveringEmails:coverEmails})
-    });
-    var d = await r.json();
-    if (d.success) {
-      closeModal();
-      showToast('Leave confirmed — handover email being sent to covering colleague(s)');
-      loadLeaveEntries();
-    } else { showToast('Error: '+(d.error||'Failed')); }
-  } catch(e) { showToast('Error: '+e.message); }
-}
-
 
 async function clearReplyFlag(id) {
-  await fetch('/leave/'+id, {method:'PUT',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({pendingReplyReview:null})});
+  await fetch('/leave/'+id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pendingReplyReview:null})});
   loadLeaveEntries();
 }
 
 
-async function editLeaveEntry(id) {
-  var r = await fetch('/leave');
-  var entries = await r.json();
-  var e = entries.find(function(x){ return x.id === id; });
-  if (!e) return;
-
-  var staffOpts = LEAVE_STAFF_LIST.map(function(s){
-    return '<option value="'+s.name+'|'+s.email+'"' + (e.staffName===s.name?' selected':'') + '>'+s.name+'</option>';
-  }).join('');
-
-  var coverOpts = LEAVE_STAFF_LIST.map(function(s){
-    var selected = e.coveringColleagues && e.coveringColleagues.includes(s.name) ? ' selected' : '';
-    return '<option value="'+s.name+'|'+s.email+'"'+selected+'>'+s.name+'</option>';
-  }).join('') + '<option value="Kandia Du Bruyn|kandia@risk2solution.com"' + (e.coveringColleagues&&e.coveringColleagues.includes('Kandia Du Bruyn')?' selected':'') + '>Kandia Du Bruyn</option>';
-
-  openModal('Edit leave — ' + e.staffName, 'Update any details and save',
-    '<div style="display:grid;gap:10px">' +
-      '<div><div class="mfl">Staff member</div>' +
-        '<select id="ed_staff" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)">'+staffOpts+'</select></div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
-        '<div><div class="mfl">Leave start date</div><input id="ed_start" type="date" value="'+e.startDate+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
-        '<div><div class="mfl">Leave end date</div><input id="ed_end" type="date" value="'+e.endDate+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
-      '</div>' +
-      '<div><div class="mfl">Covering colleague(s) <span style="font-weight:400;color:var(--t3)">(Ctrl/Cmd for multiple)</span></div>' +
-        '<select id="ed_cover" multiple style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);height:100px">'+coverOpts+'</select></div>' +
-      '<div><div class="mfl">Status</div>' +
-        '<select id="ed_status" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)">' +
-          ['pending_confirmation','confirmed','process_started','in_progress','approved','on_leave','returned','cancelled'].map(function(s){
-            return '<option value="'+s+'"'+(e.status===s?' selected':'')+'>'+s.charAt(0).toUpperCase()+s.slice(1).replace(/_/g,' ')+'</option>';
-          }).join('') +
-        '</select></div>' +
-      '<div><div class="mfl">Notes</div><textarea id="ed_notes" rows="2" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);resize:vertical">'+(e.notes||'')+'</textarea></div>' +
-    '</div>' +
-    '<div style="display:flex;gap:8px;margin-top:14px">' +
-      '<button class="m-btn" onclick="saveLeaveEdit(\''+id+'\')" style="flex:1">Save changes</button>' +
-      '<button class="m-btn sec" onclick="closeModal()" style="flex:1">Cancel</button>' +
-    '</div>'
-  );
-}
-
-async function saveLeaveEdit(id) {
-  var staffSel = (document.getElementById('ed_staff')||{}).value||'';
-  var start    = (document.getElementById('ed_start')||{}).value;
-  var end      = (document.getElementById('ed_end')||{}).value;
-  var status   = (document.getElementById('ed_status')||{}).value;
-  var notes    = (document.getElementById('ed_notes')||{}).value||'';
-  var coverSel = document.getElementById('ed_cover');
-  var coverNames = [], coverEmails = [];
-  if (coverSel) Array.from(coverSel.selectedOptions).forEach(function(opt) {
-    var parts = opt.value.split('|');
-    if (parts[0]) coverNames.push(parts[0]);
-    if (parts[1]) coverEmails.push(parts[1]);
-  });
-  var staffParts = staffSel.split('|');
-  try {
-    var r = await fetch('/leave/'+id, {
-      method:'PUT',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        staffName:         staffParts[0]||undefined,
-        staffEmail:        staffParts[1]||undefined,
-        startDate:         start,
-        endDate:           end,
-        status,
-        notes,
-        coveringColleague: coverNames.join(', '),
-        coveringEmail:     coverEmails[0]||'',
-        coveringColleagues: coverNames,
-        coveringEmails:    coverEmails
-      })
-    });
-    var d = await r.json();
-    if (d.success) {
-      closeModal();
-      showToast('Leave entry updated');
-      loadLeaveEntries();
-    } else { showToast('Error: '+(d.error||'Failed')); }
-  } catch(e) { showToast('Error: '+e.message); }
-}
 
 
-// ══ EMAIL TRACKER BRIEF ═══════════════════════════════════
-
-var _etBriefLoading = false;
-var _dismissedEmails = new Set();
-
-async function loadEmailTrackerBrief() {
-  var el = document.getElementById('emailTrackerBrief');
-  var btn = document.getElementById('etBriefRefresh');
-  if (!el || _etBriefLoading) return;
-  _etBriefLoading = true;
-  if (btn) { btn.textContent = 'Analysing...'; btn.style.pointerEvents = 'none'; }
-  el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;font-size:11px;color:var(--t3)"><div class="think"><span></span><span></span><span></span></div>Scanning inbox and sent items&hellip; this takes ~15 seconds</div>';
-  try {
-    var r = await fetch('/email-tracker/brief');
-    if (!r.ok) throw new Error('Server error ' + r.status);
-    var d = await r.json();
-    if (d.error) throw new Error(d.error);
-
-    var requires = (d.requiresAttention||[]).filter(function(e){ return !_dismissedEmails.has(e.conversationId); });
-    var missed    = (d.missed||[]).filter(function(e){ return !_dismissedEmails.has(e.conversationId); });
-    var out = '';
-
-    // Helper: format relative date
-    function relDate(iso) {
-      var d = new Date(iso); var now = new Date();
-      var days = Math.floor((now-d)/(24*60*60*1000));
-      return days === 0 ? 'Today' : days === 1 ? 'Yesterday' : days + ' days ago';
-    }
-
-    // Helper: email item card
-    function emailCard(e, colour, bg) {
-      var catIcon = {decision:'⚖️',task:'📋',reply:'📧',information:'ℹ️'}[e.category]||'📧';
-      return '<div style="border-left:3px solid '+colour+';background:'+bg+';border-radius:0 8px 8px 0;padding:10px 12px;margin-bottom:8px">' +
-        '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">' +
-          '<div style="flex:1;min-width:0">' +
-            '<div style="font-size:11px;font-weight:700;color:'+colour+';margin-bottom:2px">'+catIcon+' '+e.from+'</div>' +
-            '<div style="font-size:12px;color:var(--t1);line-height:1.4;margin-bottom:4px">'+e.gist+'</div>' +
-            '<div style="font-size:10px;color:var(--t3)">'+relDate(e.received)+'</div>' +
-          '</div>' +
-          '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">' +
-            (e.webLink ? '<a href="'+e.webLink+'" target="_blank" style="font-size:10px;padding:3px 8px;border-radius:5px;background:'+colour+';color:#fff;text-decoration:none;text-align:center;white-space:nowrap">Open →</a>' : '') +
-            '<button onclick="dismissEmailTracker(\''+e.conversationId+'\')" style="font-size:10px;padding:3px 8px;border-radius:5px;background:var(--bg2);border:1px solid var(--bm);cursor:pointer;font-family:var(--f);color:var(--t3);white-space:nowrap">Done ✓</button>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
-    }
-
-    if (!requires.length && !missed.length) {
-      out = '<div style="text-align:center;padding:16px 0;font-size:12px;color:var(--t3)">✅ Nothing requiring your attention right now — inbox is clear.</div>';
-    } else {
-      // Requires attention (replied but open)
-      if (requires.length) {
-        out += '<div style="font-size:9px;font-weight:700;color:var(--a);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">Requires your attention ('+requires.length+')</div>';
-        out += requires.map(function(e){ return emailCard(e,'#D97706','#FFFBEB'); }).join('');
-      }
-      // Missed (no reply at all)
-      if (missed.length) {
-        if (requires.length) out += '<div style="height:10px"></div>';
-        out += '<div style="font-size:9px;font-weight:700;color:var(--r);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">Missed — no reply sent ('+missed.length+')</div>';
-        out += missed.map(function(e){ return emailCard(e,'#C8211E','#FEF2F2'); }).join('');
-      }
-    }
-    // Footer
-    out += '<div style="font-size:10px;color:var(--t3);margin-top:10px;padding-top:8px;border-top:1px solid var(--bl)">Analysed last 10 days &middot; ' + new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'}) + '</div>';
-    el.innerHTML = out;
-  } catch(e) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--t3)">Could not load: '+e.message+' <button onclick="_etBriefLoading=false;loadEmailTrackerBrief()" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--bg2);border:1px solid var(--bm);cursor:pointer;font-family:var(--f);margin-left:6px">Retry</button></div>';
-  } finally {
-    _etBriefLoading = false;
-    if (btn) { btn.textContent = '↻ Refresh'; btn.style.pointerEvents = 'auto'; }
-  }
-}
-
-async function dismissEmailTracker(conversationId) {
-  _dismissedEmails.add(conversationId);
-  try { await fetch('/email-tracker/dismiss', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId})}); }
-  catch(e) {}
-  // Remove from display
-  loadEmailTrackerBrief();
-}
-
-
-function openLeaveChecklistTab(leaveId, colleagueEmail) {
-  window._currentLeaveId = leaveId;
-  openLeaveChecklist(leaveId, colleagueEmail);
-}
-
-
-async function triggerLeaveStage1(id) {
-  showToast('Triggering — check results in a moment...');
-  try {
-    var r = await fetch('/leave/'+id+'/trigger', {method:'POST'});
-    var d = await r.json();
-    var logText = (d.logs||[]).join('\n');
-    console.log('[Leave trigger]', logText);
-    if (d.success) {
-      showToast('Done — check Azure logs or Outlook for result');
-    } else {
-      showToast('Error: '+(d.error||'Failed'));
-    }
-    // Show logs in modal
-    openModal('Leave send diagnostics', id,
-      '<div style="background:#111;color:#0f0;border-radius:8px;padding:14px;font-family:monospace;font-size:11px;max-height:60vh;overflow-y:auto;white-space:pre-wrap">' +
-      logText.replace(/</g,'&lt;') + '</div>' +
-      '<div style="display:flex;gap:8px;margin-top:14px"><button class="m-btn sec" onclick="closeModal()" style="flex:1">Close</button></div>'
-    );
-    loadLeaveEntries();
-  } catch(e) { showToast('Error: '+e.message); }
-}
-
-
-async function forceLeaveReminder(id) {
-  showToast('Sending today reminder now...');
-  try {
-    var r = await fetch('/leave/'+id+'/send-reminder', {method:'POST'});
-    var d = await r.json();
-    if (d.success) {
-      showToast('Reminder sent to '+d.sent+' of '+d.colleagues+' colleague(s) — '+d.daysToStart+' days to leave');
-      loadLeaveEntries();
-    } else { showToast('Error: '+(d.error||'Failed')); }
-  } catch(e) { showToast('Error: '+e.message); }
-}
-
-</script>
-
-</body>
-
-</html>
