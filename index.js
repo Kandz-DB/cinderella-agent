@@ -4050,9 +4050,9 @@ async function scanLeaveReplies(state) {
         if (!relevantAddrs.some(e => addr === e.toLowerCase())) return false;
         // Must arrive AFTER the checklist was sent
         if (new Date(m.receivedDateTime) <= firstSentAt) return false;
-        // MUST be a genuine reply — Re: is the only reliable indicator
-        // Cinderella's own emails (even when CC'd to Kandia) never have Re:
-        if (!subj.startsWith('re:')) return false;
+        // MUST be a genuine reply — Re: prefix is the reliable indicator
+        // Also accept RE: (some clients use caps)
+        if (!subj.startsWith('re:') && !subj.startsWith('fw:') && !subj.startsWith('fwd:')) return false;
         return true;
       });
 
@@ -4063,7 +4063,14 @@ async function scanLeaveReplies(state) {
         const replyId = reply.conversationId + '_' + reply.receivedDateTime;
         if ((entry.processedReplies||[]).includes(replyId)) continue;
 
-        const bodyText = ((reply.body?.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ') + ' ' + (reply.bodyPreview||'')).toLowerCase();
+        // Fetch the full body for this specific email (bodyPreview is only 255 chars)
+        let fullBodyText = (reply.bodyPreview||'').toLowerCase();
+        try {
+          const fullMsg = await graphGet(`/me/messages/${reply.id}?$select=body`);
+          const rawBody = fullMsg.body?.content||'';
+          fullBodyText = rawBody.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').toLowerCase();
+        } catch(bodyErr) { console.warn('[Leave] Could not fetch full body:', bodyErr.message); }
+        const bodyText = fullBodyText;
         
         // Must contain affirmative language — not just any email
         const isAffirmative = /(complet|done|finish|confirm|tick|checked|yes|agreed|sorted|all good)/.test(bodyText);
@@ -5027,7 +5034,13 @@ function buildLeaveEmail(type, entry) {
     const daysLeft2 = Math.ceil((new Date(entry.startDate) - new Date()) / (24*60*60*1000));
     const pct2 = Math.round(completedItems.length/CHECKLIST_ITEMS.length*100);
     const doneRows2 = completedItems.map(i=>'<tr><td bgcolor="#F0FDF4" style="background:#F0FDF4;padding:6px 10px;border-radius:4px;font-family:Arial,sans-serif;font-size:12px;color:#0D8A62">&#9745;&nbsp;&nbsp;'+i.label+'</td></tr><tr><td style="height:3px"></td></tr>').join('');
-    const pendingRows2 = pendingItems.map(i=>'<tr><td bgcolor="#FEE2E2" style="background:#FEE2E2;padding:6px 10px;border-radius:4px;font-family:Arial,sans-serif;font-size:12px;color:#7F1D1D">&#9744;&nbsp;&nbsp;'+i.label+'</td></tr><tr><td style="height:3px"></td></tr>').join('');
+    const pendingRows2 = pendingItems.map(i=>{
+      const tickUrl = getTickUrl ? getTickUrl(entry.id, i.id) : '#';
+      return '<tr><td style="padding:3px 0"><table cellpadding="0" cellspacing="0" width="100%"><tr>' +
+        '<td bgcolor="#FEE2E2" style="background:#FEE2E2;padding:6px 10px;border-radius:4px 0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#7F1D1D">&#9744;&nbsp;&nbsp;'+i.label+'</td>' +
+        '<td bgcolor="#07706B" style="background:#07706B;padding:6px 14px;border-radius:0 4px 4px 0;white-space:nowrap;width:1%"><a href="'+tickUrl+'" style="font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;text-decoration:none">&#10003; Mark done</a></td>' +
+      '</tr></table></td></tr><tr><td style="height:3px"></td></tr>';
+    }).join('');
     return header + '<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #C8211E;">' +
       '<p style="margin:0;font-size:16px;font-weight:bold;color:#C8211E;font-family:Arial,sans-serif;">&#128308; Urgent: leave in '+daysLeft2+' day'+(daysLeft2!==1?'s':'')+' — handover checklist required</p>' +
     '</td></tr><tr><td style="padding:20px 28px;">' +
@@ -5290,7 +5303,13 @@ async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance,
     const token = await getValidToken();
     const toRecipients = toEmails.filter(Boolean).map(a=>({emailAddress:{address:a}}));
     const ccRecipients = (ccEmails||[]).filter(Boolean).map(a=>({emailAddress:{address:a}}));
-    const payload = {subject, importance:importance||'high', body:{contentType:'HTML',content:htmlBody}, toRecipients, ccRecipients};
+    const INFO_EMAIL = process.env.INFO_EMAIL || 'info@risk2solution.com';
+    const payload = {
+      subject, importance:importance||'high', body:{contentType:'HTML',content:htmlBody},
+      toRecipients, ccRecipients,
+      from: {emailAddress:{address:INFO_EMAIL, name:'Cinderella | Risk 2 Solution'}},
+      replyTo: [{emailAddress:{address:INFO_EMAIL, name:'Cinderella | Risk 2 Solution'}}]
+    };
     // Attach updated Excel checklist if entry provided
     if (entry) {
       try {
@@ -5461,13 +5480,15 @@ async function monitorLeaveEntries() {
         console.log('[Leave] Stage 2: Reminder sent (' + urgency + ' mode, ' + daysToStart + ' days to leave)');
       }
 
-      // 3pm AEST: only send updated checklist if replies were received and checklist changed since 8am
-      if (entry.reminderSentDate === todayStr && entry.awaitingReply &&
+      // 3pm AEST: send updated checklist if checklist changed today (via replies)
+      // Fires if morning reminder was sent OR if checklist was updated today by replies
+      const reminderWasSentToday = entry.reminderSentDate === todayStr;
+      const checklistUpdatedToday = entry.lastChecklistUpdateAt &&
+        new Date(entry.lastChecklistUpdateAt).toLocaleDateString('en-CA',{timeZone:'Australia/Brisbane'}) === todayStr;
+      if ((reminderWasSentToday || checklistUpdatedToday) &&
           bHour === 15 && bMin < 30 && entry.eightHourCheckSent !== todayStr) {
         entry.eightHourCheckSent = todayStr; // Mark 3pm check as done for today
-        const checklistChangedToday = entry.lastChecklistUpdateAt &&
-          new Date(entry.lastChecklistUpdateAt).toLocaleDateString('en-CA',{timeZone:'Australia/Brisbane'}) === todayStr;
-        if (checklistChangedToday) {
+        if (checklistUpdatedToday) {
           // Replies came in and items were ticked — send the update
           entry.awaitingReply = false;
           changed = true;
@@ -5850,6 +5871,123 @@ app.post('/leave/:id/trigger', requireAuth, async (req, res) => {
     res.status(500).json({error:e.message, logs});
   }
 });
+
+// Manually trigger reply scan and 3pm update for a specific leave entry
+app.post('/leave/:id/process-replies', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    const beforeItems = Object.keys(entry.checklist||{}).length;
+    // Clear processed replies so any missed emails get re-scanned
+    entry.processedReplies = [];
+    saveLeaveState(state);
+    // Run reply scan
+    await scanLeaveReplies(state);
+    const freshState = loadLeaveState();
+    const freshEntry = (freshState.leaveEntries||[]).find(e=>e.id===req.params.id);
+    const afterItems = Object.keys(freshEntry.checklist||{}).length;
+    const newItems = afterItems - beforeItems;
+    // If checklist changed, force send 3pm update now
+    if (newItems > 0 || req.body.force) {
+      const now = new Date();
+      const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+      const allCoverEmails = freshEntry.coveringEmails&&freshEntry.coveringEmails.length>0 ? freshEntry.coveringEmails : freshEntry.coveringEmail?[freshEntry.coveringEmail]:[];
+      const staffEmail = freshEntry.staffEmail||'';
+      const done = CHECKLIST_ITEMS.filter(i=>freshEntry.checklist&&freshEntry.checklist[i.id]).length;
+      const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
+      const html = buildLeaveEmail('checklist_updated', freshEntry);
+      const cc = staffEmail ? [staffEmail] : [];
+      await sendLeaveAlert(allCoverEmails, cc,
+        '📋 Updated checklist: '+pct+'% complete — '+freshEntry.staffName+' leave handover', html, 'normal', freshEntry);
+      freshEntry.eightHourCheckSent = now.toLocaleDateString('en-CA',{timeZone:'Australia/Brisbane'});
+      saveLeaveState(freshState);
+      res.json({success:true, newItemsFound:newItems, pct, message:'Checklist updated and email sent to '+allCoverEmails.join(', ')});
+    } else {
+      res.json({success:true, newItemsFound:0, message:'No new replies found — checklist unchanged'});
+    }
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+// Public tick endpoint — used from email links, secured by HMAC signature
+// URL: /leave/tick?id=ENTRY_ID&item=ITEM_ID&sig=HMAC
+app.get('/leave/tick', async (req, res) => {
+  try {
+    const { id, item, sig } = req.query;
+    if (!id || !item || !sig) return res.status(400).send(tickPage('Invalid link', 'This link is missing required parameters.', false));
+    // Verify HMAC signature
+    const expected = require('crypto').createHmac('sha256', process.env.DASHBOARD_PASSWORD||'cinderella')
+      .update(id + ':' + item).digest('hex').substring(0, 16);
+    if (sig !== expected) return res.status(403).send(tickPage('Invalid link', 'This link has expired or is invalid.', false));
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===id);
+    if (!entry) return res.status(404).send(tickPage('Not found', 'This leave entry no longer exists.', false));
+    // Find item label
+    const itemDef = CHECKLIST_ITEMS.find(i=>i.id===item);
+    if (!itemDef) return res.status(400).send(tickPage('Unknown item', 'This checklist item was not recognised.', false));
+    if (entry.checklist && entry.checklist[item]) {
+      return res.send(tickPage('Already confirmed', itemDef.label + ' was already marked as complete.', true));
+    }
+    // Tick the item
+    if (!entry.checklist) entry.checklist = {};
+    entry.checklist[item] = true;
+    entry.lastChecklistUpdateAt = new Date().toISOString();
+    entry.status = 'in_progress';
+    // Also update per-colleague checklists
+    if (entry.colleagueChecklists) {
+      Object.keys(entry.colleagueChecklists).forEach(em => {
+        if (!entry.colleagueChecklists[em].checklist) entry.colleagueChecklists[em].checklist = {};
+        entry.colleagueChecklists[em].checklist[item] = true;
+      });
+    }
+    saveLeaveState(state);
+    console.log('[Leave] Tick via link:', entry.staffName, item, 'by', req.headers['x-forwarded-for']||req.ip);
+    // Trigger update email (async — don't wait)
+    setTimeout(async () => {
+      try {
+        const freshState = loadLeaveState();
+        const freshEntry = (freshState.leaveEntries||[]).find(e=>e.id===id);
+        if (!freshEntry) return;
+        const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+        const allCoverEmails = freshEntry.coveringEmails&&freshEntry.coveringEmails.length>0 ? freshEntry.coveringEmails : freshEntry.coveringEmail?[freshEntry.coveringEmail]:[];
+        const done = CHECKLIST_ITEMS.filter(i=>freshEntry.checklist&&freshEntry.checklist[i.id]).length;
+        const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
+        const html = buildLeaveEmail('checklist_updated', freshEntry);
+        const cc = freshEntry.staffEmail ? [freshEntry.staffEmail] : [];
+        const toEmails = allCoverEmails.length ? allCoverEmails : [kandiaEmail];
+        await sendLeaveAlert(toEmails, cc,
+          '📋 Checklist updated: '+pct+'% complete — '+freshEntry.staffName+' leave handover', html, 'normal', freshEntry);
+        console.log('[Leave] Update email sent after tick:', item, pct+'%');
+      } catch(e) { console.error('[Leave] Post-tick email error:', e.message); }
+    }, 1000);
+    res.send(tickPage('Confirmed ✓', itemDef.label, true));
+  } catch(e) {
+    console.error('[Leave] Tick error:', e.message);
+    res.status(500).send(tickPage('Error', e.message, false));
+  }
+});
+
+function tickPage(title, message, success) {
+  const col = success ? '#07706B' : '#C8211E';
+  const icon = success ? '&#10003;' : '&#10007;';
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title><style>body{margin:0;font-family:Arial,sans-serif;background:#F2F1EE;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.box{background:#fff;border-radius:16px;padding:40px;max-width:480px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,0.08)}
+.icon{width:64px;height:64px;border-radius:50%;background:${col};color:#fff;font-size:32px;display:flex;align-items:center;justify-content:center;margin:0 auto 20px}
+h2{color:#111;margin:0 0 12px;font-size:22px}p{color:#666;margin:0 0 24px;line-height:1.5}
+a{color:#07706B;font-weight:600;text-decoration:none}</style></head>
+<body><div class="box"><div class="icon">${icon}</div><h2>${title}</h2>
+<p>${message}</p><p>You can close this tab.<br><a href="https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net">Open Cinderella →</a></p>
+</div></body></html>`;
+}
+
+// Generate tick URL for a leave item
+function getTickUrl(entryId, itemId) {
+  const sig = require('crypto').createHmac('sha256', process.env.DASHBOARD_PASSWORD||'cinderella')
+    .update(entryId + ':' + itemId).digest('hex').substring(0, 16);
+  return `https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/leave/tick?id=${entryId}&item=${itemId}&sig=${sig}`;
+}
 
 // Debug: show a leave entry's details
 app.get('/leave/:id/debug', requireAuth, (req, res) => {
