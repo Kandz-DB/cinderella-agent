@@ -5989,6 +5989,53 @@ function getTickUrl(entryId, itemId) {
   return `https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/leave/tick?id=${entryId}&item=${itemId}&sig=${sig}`;
 }
 
+// Debug: show what emails the scanner sees for a leave entry
+app.get('/leave/:id/scan-debug', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    const since = new Date(Date.now() - 7*24*60*60*1000).toISOString(); // Last 7 days
+    const kandiaEmail = await getKandiaEmail().catch(()=>'unknown');
+    const relevantAddrs = [...new Set([...(entry.coveringEmails||[]), entry.staffEmail].filter(Boolean))];
+    const firstSentAt = new Date(entry.firstEmailSentAt||0);
+    const [inboxData, sentData] = await Promise.all([
+      graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$top=50&$select=id,subject,from,bodyPreview,conversationId,receivedDateTime`),
+      graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$top=50&$select=id,subject,from,bodyPreview,conversationId,createdDateTime`)
+    ]);
+    const seen = new Set();
+    const allMsgs = [...(inboxData.value||[]), ...(sentData.value||[])].filter(m => {
+      if (seen.has(m.id)) return false; seen.add(m.id);
+      if (!m.receivedDateTime && m.createdDateTime) m.receivedDateTime = m.createdDateTime;
+      return true;
+    });
+    const analysis = allMsgs.map(m => {
+      const addr = (m.from?.emailAddress?.address||'').toLowerCase();
+      const subj = (m.subject||'').toLowerCase();
+      const fromRelevant = relevantAddrs.some(e => addr === e.toLowerCase());
+      const afterFirst = new Date(m.receivedDateTime) > firstSentAt;
+      const hasRe = subj.startsWith('re:') || subj.startsWith('fw:') || subj.startsWith('fwd:');
+      const body = (m.bodyPreview||'').toLowerCase();
+      const isAffirmative = /(complet|done|finish|confirm|tick|checked|yes|agreed|sorted)/.test(body);
+      return {
+        from: m.from?.emailAddress?.address,
+        subject: m.subject?.substring(0,80),
+        received: m.receivedDateTime,
+        fromRelevant, afterFirst, hasRe, isAffirmative,
+        wouldProcess: fromRelevant && afterFirst && hasRe,
+        bodyPreview: m.bodyPreview?.substring(0,100)
+      };
+    }).filter(m => m.fromRelevant || m.hasRe);
+    res.json({
+      entryId: entry.id, staffName: entry.staffName,
+      relevantAddrs, firstEmailSentAt: entry.firstEmailSentAt,
+      processedReplies: entry.processedReplies||[],
+      emailsFound: analysis.length, emails: analysis
+    });
+  } catch(e) { res.status(500).json({error: e.message}); }
+});
+
 // Debug: show a leave entry's details
 app.get('/leave/:id/debug', requireAuth, (req, res) => {
   const state = loadLeaveState();
