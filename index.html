@@ -7589,7 +7589,7 @@ async function loadLeaveEntries() {
 
 
           '<button onclick="editLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">✏ Edit</button>' +
-          '<button onclick="sendLeaveChecklistNow(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">📧 Send checklist email</button>' +
+          '<button data-lid="' + e.id + '" onclick="sendLeaveChecklistNow(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">Send checklist email</button>' +
           '<button data-lid="' + e.id + '" onclick="processLeaveReplies(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">&#128257; Process replies</button>' +
           '<button onclick="deleteLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px;color:var(--r)">Delete</button>' +
         '</div>' +
@@ -7785,6 +7785,28 @@ async function processLeaveReplies(id) {
       loadLeaveEntries();
     } else { showToast('Error: '+(d.error||'Failed')); }
   } catch(e) { showToast('Error: '+e.message); }
+}
+
+
+async function sendLeaveChecklistNow(id) {
+  showToast('Sending checklist email...');
+  try {
+    var r = await fetch('/leave/'+id+'/send-checklist', {method:'POST'});
+    var text = await r.text();
+    var d;
+    try { d = JSON.parse(text); }
+    catch(e) {
+      console.error('send-checklist non-JSON response:', text.substring(0,200));
+      showToast('Server error — check Azure logs');
+      return;
+    }
+    if (d.success) {
+      showToast(d.message || 'Checklist email sent');
+      loadLeaveEntries();
+    } else {
+      showToast('Error: ' + (d.error || 'Failed to send'));
+    }
+  } catch(e) { showToast('Error: ' + e.message); }
 }
 
 </script>
