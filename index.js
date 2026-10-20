@@ -1,7835 +1,6542 @@
-<!DOCTYPE html>
+import express from "express";
+import crypto from "crypto";
+import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs';
+import { join as pathJoin } from 'path';
 
-<html lang="en">
+// In-memory log of AI calls
+const aiCallLog = [];
+const LOG_PATH = '/home/ai-calls.log';
+const app = express();
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "*");
+  next();
+});
+app.use(express.json());
 
+const PORT = process.env.PORT || 3000;
+let latestOutput = {};
+let isRunning = false;
+
+// ── SIMPLE PASSWORD PROTECTION ──
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'changeme';
+const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
+// Sessions persisted to disk so restarts don't log everyone out
+const SESSIONS_PATH = '/home/sessions.json';
+const SESSION_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function loadActiveSessions() {
+  try {
+    const data = JSON.parse(readFileSync(SESSIONS_PATH, 'utf8') || '{}');
+    const now = Date.now();
+    const valid = new Set();
+    for (const [token, expiry] of Object.entries(data)) {
+      if (expiry > now) valid.add(token);
+    }
+    console.log('[Sessions] Loaded', valid.size, 'valid sessions from disk');
+    return valid;
+  } catch(e) { return new Set(); }
+}
+
+function saveActiveSessions(set) {
+  try {
+    const obj = {};
+    const expiry = Date.now() + SESSION_TTL;
+    for (const token of set) obj[token] = expiry;
+    writeFileSync(SESSIONS_PATH, JSON.stringify(obj));
+  } catch(e) { console.warn('[Sessions] Save failed:', e.message); }
+}
+
+const activeSessions = loadActiveSessions();
+
+// Login page
+app.get('/login', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
 <head>
-
-  <meta charset="UTF-8">
-
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <title>Cinderella</title>
-
+  <title>Cinderella — Login</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#0A7A7A,#5DCFC9 50%,#F4C0D1);min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .box{background:#fff;border-radius:20px;padding:40px;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,0.15)}
+    .logo{font-family:Georgia,serif;font-size:28px;color:#0A7A7A;font-style:italic;text-align:center;margin-bottom:6px}
+    .sub{font-size:12px;color:#9a9994;text-align:center;margin-bottom:28px;letter-spacing:.06em;text-transform:uppercase}
+    input{width:100%;border:1px solid #e0e0e0;border-radius:10px;padding:12px 14px;font-size:14px;margin-bottom:14px;outline:none;transition:border-color .2s}
+    input:focus{border-color:#0A7A7A}
+    button{width:100%;background:linear-gradient(90deg,#0A7A7A,#0E9E9E);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:500;cursor:pointer}
+    button:hover{opacity:.9}
+    .err{color:#E24B4A;font-size:12px;text-align:center;margin-bottom:10px;display:none}
+  </style>
 </head>
-
 <body>
+  <div class="box">
+    <div class="logo">Cinderella</div>
+    <div class="sub">Executive Assistant · Risk 2 Solution</div>
+    <div class="err" id="err">Incorrect password. Please try again.</div>
+    <form method="POST" action="/login">
+      <input type="password" name="password" placeholder="Enter password" autofocus />
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+  <script>
+    if (window.location.search.includes('error')) {
+      document.getElementById('err').style.display = 'block';
+    }
+  </script>
+</body>
+</html>`);
+});
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+// Handle login form submission
+app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
+  if (req.body.password === DASHBOARD_PASSWORD) {
+    const token = crypto.randomBytes(16).toString('hex');
+    activeSessions.add(token);
+    saveActiveSessions(activeSessions);
+    console.log('[Sessions] New session saved for', token.substring(0,8)+'...');
+    res.setHeader('Set-Cookie', `cin_session=${token}; Path=/; HttpOnly; Max-Age=86400`);
+    res.redirect('/');
+  } else {
+    res.redirect('/login?error=1');
+  }
+});
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+// Logout
+app.get('/logout', (req, res) => {
+  const cookie = req.headers.cookie || '';
+  const match = cookie.match(/cin_session=([^;]+)/);
+  if (match) { activeSessions.delete(match[1]); saveActiveSessions(activeSessions); }
+  res.setHeader('Set-Cookie', 'cin_session=; Path=/; Max-Age=0');
+  res.redirect('/login');
+});
 
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900&display=swap&family=Playfair+Display:ital,wght@0,700;1,400;1,500;1,700&display=swap');
-
-*{box-sizing:border-box;margin:0;padding:0}
-
-:root{
-  /* Surfaces */
-  --bg:#FFFFFF;
-  --bg2:#F2F1EE;
-  --bg3:#E8E6E1;
-  /* Text */
-  --t1:#0D0D0C;
-  --t2:#4A4844;
-  --t3:#9A9693;
-  /* Borders */
-  --bl:rgba(0,0,0,0.07);
-  --bm:rgba(0,0,0,0.13);
-  /* Brand colours */
-  --g:#0D8A62;--gl:#DCEEE6;
-  --b:#2358D4;--bl2:#E8EFFE;
-  --a:#C4720A;--al:#FDEFD8;
-  --r:#C8211E;--rl:#FDEAEA;
-  /* Sidebar dark */
-  --sb-bg:#111918;
-  --sb-text:rgba(255,255,255,0.72);
-  --sb-text-active:#FFFFFF;
-  --sb-active-bg:rgba(255,255,255,0.09);
-  /* Radii */
-  --rm:8px;--rl2:12px;
-  /* Shadows */
-  --sh1:0 1px 3px rgba(0,0,0,0.07),0 1px 2px rgba(0,0,0,0.04);
-  --sh2:0 4px 16px rgba(0,0,0,0.09),0 2px 4px rgba(0,0,0,0.05);
-  /* Font */
-  --f:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
-  --fs:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+// Auth middleware — protect everything except /login
+function requireAuth(req, res, next) {
+  if (req.path === '/login' || req.path === '/logout' || req.path === '/checkin' || req.path === '/checkins/submit') return next();
+  const cookie = req.headers.cookie || '';
+  const match = cookie.match(/cin_session=([^;]+)/);
+  if (match && activeSessions.has(match[1])) return next();
+  // API routes get JSON 401 (not HTML redirect) so the dashboard handles it gracefully
+  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status') || req.path.startsWith('/openactions') || req.path.startsWith('/generate') || req.path.startsWith('/docs') || req.path.startsWith('/checkins') || req.path.startsWith('/aurora') || req.path.startsWith('/board-report')) {
+    return res.status(401).json({ error: { message: 'Session expired — please refresh the page and log in again.' } });
+  }
+  res.redirect('/login');
 }
 
-/* Dark mode */
-@media(prefers-color-scheme:dark){:root{
-  --bg:#161614;--bg2:#1E1E1B;--bg3:#282825;
-  --t1:#F0EDE6;--t2:#A8A49C;--t3:#6A6660;
-  --bl:rgba(255,255,255,0.07);--bm:rgba(255,255,255,0.13);
-  --sb-bg:#0A0F0E;
-}}
-
-body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);line-height:1.5;-webkit-font-smoothing:antialiased}
-
-/* ── LAYOUT ── */
-#appRoot{display:flex;flex-direction:column;height:100vh;overflow:hidden}
-
-/* ── TOP BAR ── */
-.tb{
-  background:linear-gradient(105deg,#07706B 0%,#0AA49E 35%,#56D4CE 60%,#F0B8CC 82%,#F8D2DE 100%);
-  padding:0 24px;height:58px;display:flex;align-items:center;gap:0;flex-shrink:0;
-  position:relative;z-index:20;
-}
-.logo{font-family:'Playfair Display',Georgia,serif;font-size:28px;font-weight:700;font-style:italic;color:#fff;letter-spacing:-0.5px;display:flex;align-items:center;gap:0;text-shadow:0 1px 8px rgba(0,0,0,0.15)}
-.logo-wordmark{display:flex;flex-direction:column;line-height:1}
-.logo-sub{font-family:var(--f);font-size:9px;font-weight:600;font-style:normal;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,0.72);margin-top:1px}
-.logo-sep{width:1px;height:28px;background:rgba(255,255,255,0.25);margin:0 18px}
-.tag{font-size:10px;font-weight:500;color:rgba(255,255,255,0.72);letter-spacing:.09em;text-transform:uppercase}
-.tb-right{margin-left:auto;display:flex;align-items:center;gap:10px}
-.tb-status{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:500;color:rgba(255,255,255,0.85);padding:0 2px}
-.status-dot{width:7px;height:7px;border-radius:50%;background:#4ADE80;box-shadow:0 0 8px rgba(74,222,128,0.7)}
-.tb-btn{background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.22);color:#fff;font-family:var(--f);font-size:11px;font-weight:500;padding:5px 11px;border-radius:6px;cursor:pointer;transition:all .15s;white-space:nowrap}
-.tb-btn:hover{background:rgba(255,255,255,0.22)}
-.tb-divider{width:1px;height:16px;background:rgba(255,255,255,0.2)}
-.tb-clock{font-size:11px;font-weight:600;color:rgba(255,255,255,0.9);letter-spacing:.02em;white-space:nowrap}
-.tb-sync{font-size:10.5px;color:rgba(255,255,255,0.7);white-space:nowrap}
-
-/* Sync bar */
-.sbar{background:var(--bg2);border-bottom:1px solid var(--bl);padding:5px 16px;font-size:11px;color:var(--t3);display:flex;align-items:center;gap:6px;flex-shrink:0;min-height:28px}
-
-/* ── APP LAYOUT ── */
-.app{display:flex;flex:1;overflow:hidden;min-height:0}
-
-/* ── SIDEBAR (dark) ── */
-.sb{
-  width:216px;min-width:216px;height:100%;
-  background:var(--sb-bg);
-  overflow-y:auto;position:relative;z-index:10;
-  display:flex;flex-direction:column;
-}
-.sb::-webkit-scrollbar{width:0}
-
-.cn-group{font-size:9.5px;font-weight:700;color:rgba(255,255,255,0.28);letter-spacing:.1em;text-transform:uppercase;padding:18px 16px 6px;margin-top:4px}
-.cn-group:first-child{padding-top:14px}
-
-/* Nav items */
-.ni{
-  display:flex;align-items:center;gap:9px;
-  padding:8px 14px;font-size:12.5px;font-weight:500;
-  color:var(--sb-text);cursor:pointer;border:none;
-  background:transparent;width:100%;text-align:left;
-  transition:all .12s;border-radius:0;
-  border-left:2.5px solid transparent;
-  position:relative;
-}
-.ni:hover{color:var(--sb-text-active);background:rgba(255,255,255,0.06)}
-.ni.active{color:var(--sb-text-active);background:var(--sb-active-bg);border-left-color:#4AE09A;font-weight:600}
-.ni-ic{width:14px;height:14px;opacity:0.7;flex-shrink:0}
-.ni.active .ni-ic{opacity:1}
-
-/* Badges */
-.nb{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:9px;font-size:9.5px;font-weight:700;padding:0 5px;margin-left:auto}
-.nb-r{background:#0A9E98;color:#fff}
-.nb-a{background:#C4720A;color:#fff}
-.nb-g{background:#23B8B2;color:#fff}
-
-/* Settings section at bottom */
-.sb-bottom{margin-top:auto;padding:12px 0;border-top:1px solid rgba(255,255,255,0.07)}
-
-/* ── MAIN CONTENT ── */
-.main{flex:1;position:relative;overflow:hidden;height:100%;z-index:1;background:var(--bg2)}
-
-/* ── PANELS ── */
-.pnl{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding:22px 24px;visibility:hidden;pointer-events:none;box-sizing:border-box}
-.pnl.active{visibility:visible;pointer-events:auto}
-
-/* Section header inside panel */
-.sec{font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.09em;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--bl);display:flex;align-items:center;justify-content:space-between}
-
-/* Cards */
-.card{background:var(--bg);border-radius:var(--rl2);padding:16px 18px;margin-bottom:12px;box-shadow:var(--sh1)}
-
-/* Card title */
-.ct{font-size:10.5px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.09em;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:8px}
-.ct-action{font-size:11px;font-weight:500;color:var(--g);cursor:pointer;text-transform:none;letter-spacing:0}
-.ct-action:hover{opacity:.75}
-
-/* Two / Three column grids */
-.two{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-width:0}
-.two>*{min-width:0}
-.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;min-width:0}
-
-/* ── METRIC TILES ── */
-.mrow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
-.met{background:var(--bg);border-radius:var(--rl2);padding:14px 15px;cursor:pointer;transition:all .15s;box-shadow:var(--sh1)}
-.met:hover{box-shadow:var(--sh2);transform:translateY(-1px)}
-.ml{font-size:10.5px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:5px}
-.mv{font-size:24px;font-weight:800;color:var(--t1);line-height:1;margin:2px 0;letter-spacing:-0.8px}
-.ms{font-size:10.5px;color:var(--t3);margin-top:3px}
-
-/* ── PRIORITY LIST ITEMS ── */
-.pri{display:flex;align-items:flex-start;gap:10px;padding:10px 4px;border-bottom:0.5px solid var(--bl);cursor:pointer;transition:background .1s;border-radius:4px}
-.pri:hover{background:var(--bg2)}
-.pp{display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;border-radius:4px;font-size:9.5px;font-weight:700;flex-shrink:0;margin-top:1px;text-transform:uppercase;letter-spacing:.04em}
-.ph{background:#FDEAEA;color:#9B1515}
-.pm{background:#FDEFD8;color:#8A4E04}
-.pl{background:#DCEEE6;color:#0A6447}
-.pt{font-size:12px;color:var(--t1);flex:1;line-height:1.45}
-.pd{font-size:10.5px;color:var(--t3);margin-top:2px}
-
-/* ── SMART CARD (sc) ── */
-.sc{background:var(--bg);border-radius:var(--rl2);padding:13px 15px;cursor:pointer;transition:all .15s;box-shadow:var(--sh1);margin-bottom:8px}
-.sc:hover{box-shadow:var(--sh2);transform:translateY(-1px)}
-
-/* ── EMAIL/ITEM ROW ── */
-.er{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:0.5px solid var(--bl)}
-.sndr{font-size:11.5px;font-weight:600;color:var(--t1);min-width:130px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.subj{font-size:12px;color:var(--t1);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.er-meta{font-size:10px;color:var(--t3);flex-shrink:0;text-align:right}
-
-/* Tags */
-.stag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:9.5px;font-weight:600}
-
-/* ── BUTTONS ── */
-.m-btn{background:var(--g);color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--f);transition:all .12s;letter-spacing:.01em}
-.m-btn:hover{opacity:.88;transform:translateY(-1px)}
-.m-btn.sec{background:var(--bg2);color:var(--t2);border:1px solid var(--bm)}
-.m-btn.sec:hover{background:var(--bg3)}
-
-/* ── MODALS ── */
-.mo{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;backdrop-filter:blur(3px);padding:16px}
-.mo.open{display:flex}
-.mb{background:var(--bg);border-radius:18px;width:100%;max-width:560px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.25),0 0 0 1px rgba(0,0,0,0.07);overflow:hidden}
-.mh{display:flex;flex-direction:column;flex-shrink:0;border-bottom:1px solid var(--bl)}
-.mh-bar{height:5px;background:linear-gradient(90deg,#07706B 0%,#56D4CE 50%,#F0B8CC 100%);border-radius:18px 18px 0 0;flex-shrink:0}
-.mh-row{padding:18px 22px 16px;display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
-.mh-title{font-size:17px;font-weight:700;color:var(--t1);letter-spacing:-0.4px;line-height:1.3;flex:1;min-width:0}
-.mh-sub{font-size:11.5px;color:var(--t3);margin-top:4px;line-height:1.5;font-weight:400}
-.mb-title{font-size:16px;font-weight:700;color:var(--t1)}
-.mb-sub{font-size:12px;color:var(--t3);margin-top:3px}
-.mclose{background:rgba(0,0,0,0.06);border:1.5px solid var(--bl);border-radius:50%;width:30px;height:30px;cursor:pointer;color:var(--t3);font-size:15px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--f);transition:all .12s;line-height:1}
-.mclose:hover{background:var(--rl);border-color:var(--r);color:var(--r)}
-.m-btn{background:linear-gradient(160deg,#0DAF9A,#07706B);color:#fff;border:none;border-radius:9px;padding:10px 22px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--f);transition:all .14s;letter-spacing:.01em;text-align:center;box-shadow:0 4px 10px rgba(7,112,107,0.35),inset 0 1px 0 rgba(255,255,255,0.18)}
-.m-btn:hover{transform:translateY(-2px);box-shadow:0 7px 18px rgba(7,112,107,0.4),inset 0 1px 0 rgba(255,255,255,0.18)}
-.m-btn:active{transform:translateY(0px);box-shadow:0 2px 5px rgba(7,112,107,0.3)}
-.m-btn.sec{background:var(--bg);color:var(--t1);border:1.5px solid var(--bm);box-shadow:0 2px 6px rgba(0,0,0,0.07),inset 0 1px 0 rgba(255,255,255,0.9)}
-.m-btn.sec:hover{border-color:var(--g);color:var(--g);background:var(--gl);transform:translateY(-1px);box-shadow:0 4px 10px rgba(0,0,0,0.1)}
-.m-btn.sec:active{transform:translateY(0)}
-.m-divider{height:1px;background:var(--bl);margin:16px 0}
-.mfield{margin-bottom:16px}
-.mfl{font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}
-.alert-box{border-radius:10px;padding:13px 16px;margin-bottom:12px;border:1px solid rgba(0,0,0,0.06)}
-.ab-title{font-size:12.5px;font-weight:700;color:var(--t1);margin-bottom:3px}
-.ab-text{font-size:12px;color:var(--t2);line-height:1.5}
-#m-body{padding:22px 24px;overflow-y:auto;flex:1}
-.m-divider{height:1px;background:var(--bl);margin:16px 0}
-.mfield{margin-bottom:16px}
-.mfl{font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}
-.mrow-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-
-/* Alert boxes */
-.alert-box{border-radius:10px;padding:13px 16px;margin-bottom:12px;border:1px solid rgba(0,0,0,0.07)}
-.alert-box.ok{background:var(--gl);border-left:3px solid var(--g)}
-.alert-box.warn{background:var(--al);border-left:3px solid var(--a)}
-.ab-title{font-size:12.5px;font-weight:700;color:var(--t1);margin-bottom:3px}
-.ab-text{font-size:12px;color:var(--t2);line-height:1.5}
-
-/* ── DRAFT MODAL ── */
-.dm{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1001;align-items:flex-end;justify-content:center;backdrop-filter:blur(1px)}
-.dm.open{display:flex}
-.dmh{background:var(--bg);border-radius:16px 16px 0 0;width:100%;max-width:700px;padding:16px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--bl)}
-.dmh-title{font-size:13px;font-weight:700;color:var(--t1);flex:1}
-.dm-tabs{display:flex;gap:2px;background:var(--bg2);border-radius:7px;padding:2px}
-.dm-tab{padding:4px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;color:var(--t3);border:none;background:transparent;font-family:var(--f)}
-.dm-tab.active{background:var(--bg);color:var(--t1);box-shadow:0 1px 3px rgba(0,0,0,0.08)}
-
-/* Chat */
-.pnl-chat{position:absolute;inset:0;background:var(--bg2);overflow-y:auto;padding:22px 24px;visibility:hidden;pointer-events:none;box-sizing:border-box}
-.pnl-chat.active{visibility:visible;pointer-events:auto}
-.ch{height:420px;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
-.qas{background:var(--bg2);border-radius:12px 12px 4px 12px;padding:10px 13px;max-width:82%;align-self:flex-end;font-size:12.5px;line-height:1.5;color:var(--t1)}
-.ans{background:var(--g);color:#fff;border-radius:4px 12px 12px 12px;padding:10px 13px;max-width:88%;align-self:flex-start;font-size:12.5px;line-height:1.6}
-.ans.error{background:var(--r)}
-.ci{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--bl)}
-.ci input{flex:1;border:1px solid var(--bl);border-radius:8px;padding:7px 11px;font-size:12.5px;font-family:var(--f);background:var(--bg2);color:var(--t1);outline:none;transition:border-color .15s}
-.ci input:focus{border-color:var(--g)}
-.csend{background:var(--g);color:#fff;border:none;border-radius:8px;padding:7px 13px;cursor:pointer;font-size:12.5px;font-family:var(--f);font-weight:600}
-.sskip{background:none;border:none;color:var(--t3);font-size:11px;cursor:pointer;padding:0;font-family:var(--f)}
-.think{display:flex;gap:4px;align-items:center;padding:6px 0}
-.think span{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,0.6);animation:blink 1.2s infinite}
-.think span:nth-child(2){animation-delay:.2s}
-.think span:nth-child(3){animation-delay:.4s}
-@keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
-
-/* Staff grid */
-.staff-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-.smatch-head{font-size:10.5px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;margin:14px 0 6px}
-
-/* HR / insight tags */
-.hr-tag{display:inline-block;padding:2px 7px;border-radius:4px;font-size:9.5px;font-weight:600;margin:1px 2px}
-.at-g{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0}
-.at-b{padding:3px 9px;border-radius:6px;font-size:11px;cursor:pointer;border:1px solid var(--bm);background:var(--bg2);color:var(--t2);font-family:var(--f)}
-.at-b:hover{background:var(--bg3)}
-
-/* Insight box */
-.ins{background:var(--bg);border-radius:var(--rm);padding:10px 13px;margin-bottom:7px;border-left:3px solid var(--b);box-shadow:var(--sh1)}
-.it{font-size:12px;color:var(--t1);line-height:1.55}
-
-/* Charts */
-.chart-sm{display:flex;gap:3px;align-items:flex-end;height:32px}
-.chart-sm>div{flex:1;border-radius:2px 2px 0 0;background:var(--b);opacity:.7}
-
-/* Form elements */
-.sinput{width:100%;border:1px solid var(--bl);border-radius:6px;padding:7px 10px;font-size:12.5px;background:var(--bg);color:var(--t1);font-family:var(--f);outline:none;transition:border-color .15s}
-.sinput:focus{border-color:var(--g)}
-
-/* Calendar rows */
-.row{display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer}
-.row:hover{background:var(--bg2);margin:0 -4px;padding:10px 4px;border-radius:6px}
-.row:last-child{border-bottom:none}
-.mtime{font-size:12px;font-weight:700;color:var(--b);min-width:68px;flex-shrink:0;padding-top:1px}
-.mt{font-size:12.5px;font-weight:500;color:var(--t1);line-height:1.3}
-.mm{font-size:10.5px;color:var(--t3);margin-top:2px}
-
-/* Duty items in COO panel */
-.duty-item{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:7px;cursor:pointer;transition:background .12s;margin-bottom:4px;border:1px solid var(--bl)}
-.duty-item:hover{background:var(--bg2);border-color:var(--bm)}
-.duty-item-label{font-size:12.5px;font-weight:500;color:var(--t1)}
-.duty-item-icon{width:20px;height:20px;border-radius:5px;background:var(--g);opacity:.15;flex-shrink:0}
-
-/* Misc */
-.sw{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:0.5px solid var(--bl)}
-.mm{position:fixed;bottom:20px;right:20px;background:var(--t1);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:12px;font-weight:500;z-index:9999;pointer-events:none;opacity:0;transition:opacity .3s;box-shadow:var(--sh2)}
-.lv{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:0.5px solid var(--bl)}
-.il{font-size:11px;color:var(--t3)}
-.sh{font-size:12px;color:var(--t2)}
-.sdiv{margin:10px 0}
-.mc{display:flex;gap:6px;flex-wrap:wrap}
-.ms{font-size:10.5px;color:var(--t3);margin-top:3px}
-.warn{background:var(--al);color:var(--a);border-radius:6px;padding:8px 12px;font-size:11.5px;margin-bottom:10px}
-.tr{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:8px 0;border-bottom:0.5px solid var(--bl)}
-.tb-sub{font-size:12px;color:var(--t2)}
-.ics-preview{background:var(--bg2);border-radius:var(--rm);padding:8px 10px;font-size:11px;color:var(--t2);margin-top:6px;line-height:1.6}
-.ei{font-size:11px;color:var(--t3);padding:5px 0}
-.auto-head{font-size:13px;font-weight:700;color:var(--t1);margin-bottom:4px}
-.attach-bar{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0}
-.nb-a{background:#D4699A;color:#fff}
-.qach{position:relative;cursor:pointer}
-.qa{width:100%;border:1px solid var(--bl);border-radius:8px;padding:8px 11px;font-size:12.5px;font-family:var(--f);background:var(--bg2);color:var(--t1);resize:none;outline:none;min-height:38px;transition:border-color .15s}
-.qa:focus{border-color:var(--g);background:var(--bg)}
-.dm-tab-body{padding:14px 20px 20px}
-.sdiv.big{margin:16px 0}
-.at-g.wrap{flex-wrap:wrap}
-</style>
-
-<div id="appRoot">
-
-<!-- SETUP MODAL -->
-
-<div class="setup-mo" id="setupMo" style="display:none">
-
-  <div class="setup-mb">
-
-    <div class="setup-title">Set up Cinderella</div>
-
-    <div class="setup-sub">Configure your API connections.</div>
-
-    <label class="sl">Anthropic API key (for live chat)</label>
-
-    <input class="si" type="password" id="s-api" placeholder="sk-ant-..." />
-
-    <div class="sdiv"></div>
-
-    <div style="font-size:11px;font-weight:500;color:var(--t2);margin-bottom:10px">JSONBin (for staff check-ins)</div>
-
-    <div class="sstep"><div class="snum">1</div><div class="stxt2">Go to <a href="https://jsonbin.io" target="_blank">jsonbin.io</a> → create free account</div></div>
-
-    <div class="sstep"><div class="snum">2</div><div class="stxt2">Click <strong>Create Bin</strong> → type <code>[{"init":true}]</code> → Save</div></div>
-
-    <div class="sstep"><div class="snum">3</div><div class="stxt2">Copy the <strong>Bin ID</strong> from the URL after <code>/b/</code></div></div>
-
-    <div class="sstep"><div class="snum">4</div><div class="stxt2">Go to <strong>Account → API Keys</strong> → copy your <strong>Master Key</strong></div></div>
-
-    <label class="sl">JSONBin Bin ID</label>
-
-    <input class="si" type="text" id="s-bin" placeholder="e.g. 6460fc9e8ea92912e35d3d6a" />
-
-    <label class="sl">JSONBin Master Key</label>
-
-    <input class="si" type="password" id="s-key" placeholder="$2a$10$..." />
-
-    <button class="sbtn" onclick="saveSetup()">Save and launch Cinderella</button>
-
-    <button class="sskip" onclick="skipSetup()">Skip — use dashboard without live sync</button>
-
-  </div>
-
-</div>
-
-<!-- CLICK-THROUGH MODAL -->
-
-<div class="mo" id="modal" onclick="if(event.target===this)closeModal()">
-  <div class="mb">
-    <div class="mh">
-      <div class="mh-bar"></div>
-      <div class="mh-row">
-        <div style="flex:1;min-width:0"><div class="mh-title" id="m-title"></div><div class="mh-sub" id="m-sub"></div></div>
-        <button class="mclose" onclick="closeModal()">&#215;</button>
-      </div>
-    </div>
-    <div id="m-body"></div>
-
-  </div>
-
-</div>
-
-<!-- DRAFT EMAIL / SCHEDULE MODAL -->
-
-<div class="dm" id="draftModal" onclick="if(event.target===this)closeDraft()">
-
-  <div class="dmb">
-
-    <div class="dmh">
-
-      <div class="dmh-left">
-
-        <div class="dmh-icon" id="dm-icon">✉️</div>
-
-        <div><div class="dmh-title" id="dm-title">Drafting...</div><div class="dmh-sub" id="dm-sub"></div></div>
-
-      </div>
-
-      <button style="background:none;border:none;color:var(--t3);font-size:20px;cursor:pointer;padding:0" onclick="closeDraft()">×</button>
-
-    </div>
-
-    <div class="dm-tabs" id="dm-tabs">
-
-      <button class="dm-tab active" onclick="switchTab('email')">✉ Email draft</button>
-
-      <button class="dm-tab" onclick="switchTab('meeting')">📅 Schedule call</button>
-
-    </div>
-
-    <div id="dm-email-pane">
-
-      <div class="dmc">
-
-        <div class="dm-loading" id="dm-loading">
-
-          <div class="think"><span></span><span></span><span></span></div>
-
-          <div style="font-size:12px;color:var(--t2);margin-top:8px">Cinderella is drafting your email...</div>
-
-        </div>
-
-        <div id="dm-draft-content" style="display:none">
-
-          <div class="dm-field"><div class="dm-label">To</div><textarea class="dm-value" id="dm-to" rows="1" style="min-height:auto"></textarea></div>
-
-          <div class="dm-field"><div class="dm-label">Subject</div><textarea class="dm-value" id="dm-subject" rows="1" style="min-height:auto"></textarea></div>
-
-          <div class="dm-field"><div class="dm-label">Message — edit before sending</div><textarea class="dm-value" id="dm-body" rows="10"></textarea></div>
-
-        </div>
-
-      </div>
-
-      <div class="dm-note" id="dm-email-note" style="display:none">✏️ Edit the draft above, then open in Outlook or copy.</div>
-
-      <div class="dm-actions" id="dm-email-actions" style="display:none">
-
-        <button class="dm-btn outlook" onclick="openInOutlook()">📧 Open in Outlook</button>
-
-        <button class="dm-btn copy" id="copyEmailBtn" onclick="copyEmail()">Copy email</button>
-
-        <button class="dm-btn refine" onclick="refineEmail()">✨ Refine</button>
-
-        <button class="dm-btn close-dm" onclick="closeDraft()">Close</button>
-
-      </div>
-
-    </div>
-
-    <div id="dm-meeting-pane" style="display:none">
-
-      <div class="dmc">
-
-        <div class="ics-preview" id="ics-preview">
-
-          <div class="ics-row"><div class="ics-key">Meeting with</div><div class="ics-val" id="ics-with">—</div></div>
-
-          <div class="ics-row"><div class="ics-key">Subject</div><div class="ics-val" id="ics-subject">—</div></div>
-
-          <div class="ics-row"><div class="ics-key">Duration</div><div class="ics-val"><select id="ics-duration" style="background:var(--bg);border:0.5px solid var(--bm);border-radius:5px;padding:2px 6px;font-size:11px;color:var(--t1);font-family:var(--f)"><option value="15">15 minutes</option><option value="30" selected>30 minutes</option><option value="45">45 minutes</option><option value="60">1 hour</option><option value="90">90 minutes</option></select></div></div>
-
-          <div class="ics-row"><div class="ics-key">When</div><div class="ics-val"><input type="datetime-local" id="ics-when" style="background:var(--bg);border:0.5px solid var(--bm);border-radius:5px;padding:2px 6px;font-size:11px;color:var(--t1);font-family:var(--f)"></div></div>
-
-          <div class="ics-row"><div class="ics-key">Notes</div><div class="ics-val"><textarea id="ics-notes" rows="3" style="width:100%;background:var(--bg);border:0.5px solid var(--bm);border-radius:5px;padding:5px 8px;font-size:11px;color:var(--t1);font-family:var(--f);resize:vertical;line-height:1.5"></textarea></div></div>
-
-        </div>
-
-        <div style="font-size:11px;color:var(--t2);margin-top:8px;line-height:1.5">Downloading the .ics file will open it in Outlook as a new meeting invite.</div>
-
-      </div>
-
-      <div class="dm-actions">
-
-        <button class="dm-btn cal" onclick="downloadICS()">📅 Download calendar invite</button>
-
-        <button class="dm-btn copy" onclick="switchTab('email')">Also draft an email →</button>
-
-        <button class="dm-btn close-dm" onclick="closeDraft()">Close</button>
-
-      </div>
-
-    </div>
-
-  </div>
-
-</div>
-
-<!-- TOP BAR -->
-
-<header class="tb">
-  <div class="logo">
-    <div class="logo-wordmark">
-      <span>Cinderella</span>
-      <span class="logo-sub">Executive Assistant · COO</span>
-    </div>
-  </div>
-  <div class="logo-sep"></div>
-  <span class="tag">Risk 2 Solution</span>
-  <div class="tb-right">
-    <div class="tb-status"><div class="status-dot"></div><span id="statusTxt">Online</span></div>
-    <div class="tb-divider"></div>
-    <span class="tb-sync" id="syncBtn" onclick="syncNow()" style="cursor:pointer" title="Click to sync">Synced <span id="lastSync">—</span></span>
-    <div class="tb-divider"></div>
-    <span class="tb-clock" id="clk"></span>
-    <div class="tb-divider"></div>
-    <a href="/logout" class="tb-btn">Sign out</a>
-  </div>
-</header>
-
-<div class="sbar" id="syncBar">
-
-  <div class="sdot2 off" id="syncDot"></div>
-
-  <span id="syncTxt">Sync inactive</span>
-
-</div>
-
-<div class="app">
-
-  <nav class="sb">
-
-    <div class="ng">Overview</div>
-
-    <button class="ni active" onclick="show('today',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M2 6h12M6 2v2M10 2v2"/></svg>Today</button>
-
-    <button class="ni" onclick="show('email',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1" y="3" width="14" height="10" rx="2"/><path d="M1 5l7 5 7-5"/></svg>Email tracker<span class="nb nb-r">4</span></button>
-
-    <div class="ng">Operations</div>
-
-    <button class="ni" onclick="show('staff',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="5" cy="5" r="2.5"/><circle cx="11" cy="5" r="2.5"/><path d="M1 14c0-3 1.8-4 4-4s4 1 4 4M9 10c1.2 0 4 .8 4 4"/></svg>Staff dashboard<span class="nb nb-g" id="staffBadge" style="display:none">0</span></button>
-
-    <button class="ni" onclick="show('skills',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l2 4h4l-3 3 1 4-4-2-4 2 1-4-3-3h4z"/></svg>Skill matching<span class="nb nb-a" id="matchBadge" style="display:none">0</span></button>
-
-    <button class="ni" onclick="show('coo',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2L2 6v8h4v-4h4v4h4V6z"/></svg>COO duties<span class="nb nb-a">2</span></button>
-    <button class="ni" id="actionTrackerBtn" onclick="show('tracker',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>Open actions<span class="nb nb-r" id="trackerBadge" style="display:none">0</span></button>
-    <button class="ni" id="auroraNavBtn" onclick="show('aurora',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l1.5 4.5H14l-3.5 2.5 1.5 4.5L8 11l-4 2.5 1.5-4.5L2 6.5h4.5z"/></svg>Aurora projects<span class="nb nb-a" id="auroraBadge" style="display:none">0</span></button>
-    <button class="ni" id="clockifyNavBtn" onclick="show('clockify',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l3 2"/></svg>Clockify<span class="nb nb-r" id="clockifyBadge" style="display:none">0</span></button>
-    <button class="ni" id="leaveNavBtn" onclick="show('leave',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M5 2v12M11 8H8M11 10H8"/></svg>Leave<span class="nb nb-a" id="leaveBadge" style="display:none">0</span></button>
-    <button class="ni" id="complianceNavBtn" onclick="show('compliance',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1l5 2v5c0 3-5 6-5 6S3 11 3 8V3l5-2z"/></svg>Compliance<span class="nb nb-r" id="complianceBadge" style="display:none">0</span></button>
-
-    <button class="ni" onclick="show('auto',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 8A5 5 0 113 8"/><path d="M8 3V1M8 3l-2 2M8 3l2 2"/></svg>Automation</button>
-
-    <button class="ni" onclick="show('hr',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5" r="3"/><path d="M2 14c0-3 2.7-5 6-5s6 2 6 5"/></svg>HR insights<span class="nb nb-r" id="hrBadge" style="display:none">!</span></button>
-
-    <div class="ng">Assistant</div>
-
-    <button class="ni" onclick="show('chat',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M14 10a2 2 0 01-2 2H5l-3 3V4a2 2 0 012-2h8a2 2 0 012 2z"/></svg>Ask Cinderella</button>
-
-    <button class="ni" onclick="show('sched',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 4v4l2.5 2.5"/></svg>Scheduler</button>
-
-    <div class="ng">Documents</div>
-
-    <button class="ni" onclick="show('docs',this)"><div class="nic">📁</div><div class="nn">Document library</div></button>
-
-    <div class="ng">Settings</div>
-
-    <div style="padding:5px 14px 6px;font-size:10px;color:var(--t3)">M365: <span id="m365Status">Checking...</span></div>
-
-    <button class="ni" id="m365LoginBtn" onclick="window.open('/auth/login','_blank')" style="display:none;color:var(--a)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5"/><rect x="9" y="2" width="5" height="5"/><rect x="2" y="9" width="5" height="5"/><rect x="9" y="9" width="5" height="5"/></svg>Connect M365</button>
-
-    <button class="ni" onclick="document.getElementById('setupMo').style.display='flex'"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.5 3.5l1.5 1.5M11 11l1.5 1.5M3.5 12.5L5 11M11 5l1.5-1.5"/></svg>Setup &amp; settings</button>
-
-  </nav>
-
-  <div class="main">
-
-    <!-- TODAY -->
-
-    <div class="pnl active" id="pnl-today">
-
-      <div class="mrow">
-
-        <div class="met" onclick="omKey('mtg')"><div class="ml">Meetings today</div><div class="mv" id="todayMtgCount">—</div><div class="ms" id="todayMtgSub">Loading...</div></div>
-
-        <div class="met" onclick="show('email',document.querySelector('[onclick*=email]'))"><div class="ml">Unanswered emails</div><div class="mv" id="todayEmailCount" style="color:var(--r)">—</div><div class="ms" id="todayEmailSub">Loading...</div></div>
-
-        <div class="met" onclick="showMissingStaffModal()" style="cursor:pointer"><div class="ml">Check-ins received</div><div class="mv" id="todayCount" style="color:var(--a)">0</div><div class="ms" id="checkinSub">of 7 this week</div></div>
-
-        <div class="met" onclick="refreshTodayPriorities()"><div class="ml">Open priorities</div><div class="mv" id="todayPriCount">—</div><div class="ms">from your inbox</div></div>
-
-      </div>
-
-      <div class="two">
-
-        <div class="card">
-
-          <div id="liveCalendar"></div><div class="ct">Today's schedule <span class="ct-action" onclick="qa('Create a prep plan for all of my meetings today')">Generate prep plan</span></div>
-
-          <div id="staticCalendar"><div style="font-size:12px;color:var(--t3);padding:8px 0">Loading your calendar...</div></div>
-
-        </div>
-
-        <div>
-
-          <div class="card">
-
-            <div class="ct">Cinderella's briefing <span class="ct-action" onclick="show('chat',document.querySelector('[onclick*=chat]'))">Open chat →</span></div>
-
-            <div id="todayBriefingContent">
-
-              <div class="ins"><div class="il">Loading</div><div class="it" id="briefingCheckin">Cinderella is loading your live briefing...</div></div>
-
-            </div>
-
-          </div>
-
-          <div class="card">
-
-            <div class="ct">Today's priorities <span class="ct-action" onclick="refreshTodayPriorities()">Generate</span></div>
-
-            <div id="todayPriorities">
-
-              <div style="font-size:12px;color:var(--t3);padding:8px 0">Click <strong>Generate</strong> above to get AI-powered priorities from your emails and calendar.</div>
-
-            </div>
-
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-    <!-- EMAIL -->
-
-    <div class="pnl" id="pnl-email">
-
-      <div class="sec">Email tracker — unanswered &amp; overdue</div>
-
-      <div class="two">
-
-        <div>
-
-          <div class="card">
-
-            <div id="liveEmailList"></div><div class="ct">Needs your reply <span class="ct-action" onclick="qa('Draft replies to all my overdue emails')">Draft all replies</span></div>
-
-            
-
-            
-
-            
-
-            
-
-          </div>
-
-          <div id="infoEmailList"></div>
-
-          <div class="card">
-
-            <div class="ct">Watching — awaiting replies</div>
-
-            <div style="font-size:12px;color:var(--t3);padding:8px 0">Live email data loading from Outlook...</div>
-
-          </div>
-
-        </div>
-
-        <div>
-
-          <div class="card">
-
-            <div class="ct">Email workload this week</div>
-
-            <div class="chart-sm"><canvas id="emailChart"></canvas></div>
-
-          </div>
-
-          <div class="card" id="emailTrackerBriefCard">
-
-            <div class="ct">Emails requiring attention
-              <span class="ct-action" id="etBriefRefresh" onclick="loadEmailTrackerBrief()">↻ Refresh</span>
-            </div>
-
-            <div id="emailTrackerBrief">
-              <div style="font-size:11px;color:var(--t3);padding:6px 0">
-                Click refresh to analyse your inbox — Cinderella checks what needs your attention and what you've missed.
-              </div>
-            </div>
-
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-    <!-- STAFF DASHBOARD -->
-
-    <div class="pnl" id="pnl-staff">
-
-      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
-
-        <span>Staff dashboard — check-in tracker</span>
-
-        <div style="display:flex;gap:6px">
-
-          <button onclick="openManualCheckin()" style="font-size:11px;padding:4px 10px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">+ Add manually</button>
-
-          <button class="week-btn active" id="viewWeekBtn" onclick="setStaffView('week')">This week</button>
-
-          <button class="week-btn" id="viewMonthBtn" onclick="setStaffView('month')">Monthly summary</button>
-
-          <button class="week-btn" id="viewHistoryBtn" onclick="setStaffView('history')">History</button>
-
-        </div>
-
-      </div>
-
-      <!-- WEEK VIEW -->
-
-      <div id="staffWeekView">
-
-      <div class="mrow">
-
-        <div class="met" onclick="filterStaff('over')"><div class="ml">Avg capacity</div><div class="mv" id="sm-avg">—</div><div class="ms">team average</div></div>
-
-        <div class="met" onclick="showMissingStaffModal()" style="cursor:pointer"><div class="ml">Check-ins received</div><div class="mv" id="sm-n">0</div><div class="ms" id="sm-n-sub">of 8 this week</div></div>
-
-        <div class="met" onclick="filterStaff('over')"><div class="ml">Overloaded &gt;85%</div><div class="mv" id="sm-ov" style="color:var(--r)">0</div><div class="ms">need action</div></div>
-
-        <div class="met" onclick="filterStaff('free')"><div class="ml">Available &lt;65%</div><div class="mv" id="sm-fr" style="color:var(--g)">0</div><div class="ms">can absorb work</div></div>
-
-      </div>
-
-      <div class="two">
-
-        <div>
-
-          <div class="card">
-
-            <div class="ct">Team capacity <span class="ct-action" onclick="qa('Analyse my team capacity data and recommend workload redistribution')">Cinderella analysis</span></div>
-
-            <div class="staff-grid" id="staffGrid">
-
-              <div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center;grid-column:1/-1">No check-ins yet. Send cinderella-checkin.html to staff — submissions appear here automatically.</div>
-
-            </div>
-
-          </div>
-
-        </div>
-
-        <div>
-
-          <div class="card">
-
-            <div class="ct">Capacity distribution</div>
-
-            <div class="chart-wrap"><canvas id="capChart"></canvas></div>
-
-          </div>
-
-          <div class="card">
-
-            <div class="ct">Cinderella insights</div>
-
-            <div id="staffInsights"><div style="font-size:11px;color:var(--t3);padding:4px 0">Sync check-ins to see team insights.</div></div>
-
-          </div>
-
-        </div>
-
-      </div>
-
-      </div><!-- end staffWeekView -->
-
-      <!-- MONTH VIEW -->
-
-      <div id="staffMonthView" style="display:none">
-
-        <div id="monthNavBar" class="week-nav" style="margin-bottom:16px"></div>
-
-        <div id="monthContent"></div>
-
-      </div>
-
-      <!-- HISTORY VIEW -->
-
-      <div id="staffHistoryView" style="display:none">
-
-        <div id="historyContent"></div>
-
-      </div>
-
-    </div>
-
-    <!-- DOCUMENT LIBRARY -->
-
-    <div class="pnl" id="pnl-docs">
-
-      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
-
-        <span>Document library</span>
-
-        <label style="background:var(--g);color:#fff;border-radius:8px;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:500">
-
-          + Upload <input type="file" id="docUpload" multiple accept=".pdf,.doc,.docx,.txt,.md,.csv" style="display:none" onchange="handleDocUpload(event)">
-
-        </label>
-
-      </div>
-
-      <div style="font-size:11px;color:var(--t3);margin-bottom:12px">Upload documents for Cinderella to reference when drafting reports, processes and analysis. Stored for this session.</div>
-
-      <div id="docList" style="margin-bottom:12px"></div>
-
-      <div id="docEmpty" style="font-size:12px;color:var(--t3);padding:20px;text-align:center;border:1px dashed var(--bm);border-radius:var(--rm)">
-
-        No documents uploaded yet.<br>Upload PDFs, Word docs, or text files for Cinderella to reference.
-
-      </div>
-
-      <div style="margin-top:12px">
-
-        <button class="m-btn sec" style="width:100%;margin-bottom:6px" onclick="qa('Based on the documents in my library, give me a summary of the key information Cinderella should know about.')">🤖 Summarise all documents</button>
-
-        <button class="m-btn sec" style="width:100%" onclick="qa('Review the documents in my library and identify any gaps, inconsistencies or areas that need updating.')">🔍 Identify gaps in documents</button>
-
-      </div>
-
-    </div>
-
-    <!-- SKILL MATCHING -->
-
-    <div class="pnl" id="pnl-skills">
-
-      <div class="sec">Skill matching — intelligent reallocation suggestions</div>
-
-      <div class="mrow">
-
-        <div class="met"><div class="ml">Matches found</div><div class="mv" id="sk-n" style="color:var(--g)">0</div><div class="ms">reallocation opportunities</div></div>
-
-        <div class="met" onclick="filterStaff('over')"><div class="ml">Overloaded staff</div><div class="mv" id="sk-ov" style="color:var(--r)">0</div><div class="ms">above 85%</div></div>
-
-        <div class="met" onclick="filterStaff('free')"><div class="ml">Available staff</div><div class="mv" id="sk-fr" style="color:var(--g)">0</div><div class="ms">below 65%</div></div>
-
-        <div class="met" onclick="generateHRProcess('skills')" style="cursor:pointer"><div class="ml">Skills audit</div><div class="mv" style="font-size:14px;color:var(--g)">Generate</div><div class="ms">skills plan</div></div>
-
-      </div>
-
-      <div class="two">
-
-        <div>
-
-          <div class="card">
-
-            <div class="ct">Reallocation matches <span class="ct-action" onclick="qa('Suggest a full workload redistribution plan based on current team capacity and skills')">Full plan</span></div>
-
-            <div id="matchList"><div style="font-size:12px;color:var(--t2);padding:8px 0;line-height:1.5">Sync check-ins to see skill matches. Cinderella auto-detects when an overloaded staff member has a skill-matched colleague with spare capacity.</div></div>
-
-          </div>
-
-        </div>
-
-        <div>
-
-          <div class="card">
-
-            <div class="ct">Skills matrix — team coverage</div>
-
-            <div id="skillMatrix"><div style="font-size:11px;color:var(--t3);padding:4px 0">Sync check-ins to see skills data.</div></div>
-
-          </div>
-
-          <div class="card">
-
-            <div class="ct">Distribution</div>
-
-            <div class="chart-sm"><canvas id="distChart"></canvas></div>
-
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-    <!-- COO DUTIES -->
-
-    <div class="pnl" id="pnl-coo">
-
-      <div class="sec">COO command centre — Risk 2 Solution</div>
-
-      <div class="two">
-
-        <div class="card">
-
-          <div class="ct">Core responsibilities <span class="ct-action" onclick="qa('What are my most important COO responsibilities to focus on this week at Risk 2 Solution?')">This week's focus</span></div>
-
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
-
-            <div class="duty-item" onclick="qa('What should I be focusing on for Operations oversight this week at R2S?')">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
-              <span class="duty-item-label">Operations oversight</span>
-            </div>
-
-            <div class="duty-item" onclick="qa('What people and culture matters need my attention this week?')">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><circle cx="6" cy="5" r="2.5"/><path d="M1 13c0-2.8 2.2-5 5-5s5 2.2 5 5"/><circle cx="12" cy="5" r="2"/><path d="M12 10c1.7 0 3 1.3 3 3"/></svg>
-              <span class="duty-item-label">People &amp; culture</span>
-            </div>
-
-            <div class="duty-item" onclick="qa('What risk management matters need attention this week at R2S?')">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><path d="M8 2l5 2.5v4.5c0 3-5 5.5-5 5.5S3 12 3 9V4.5z"/></svg>
-              <span class="duty-item-label">Risk management</span>
-            </div>
-
-            <div class="duty-item" onclick="qa('What is the current financial position and what needs my attention?')">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><rect x="2" y="4" width="12" height="8" rx="1"/><path d="M5 8h6M8 6v4"/></svg>
-              <span class="duty-item-label">Financial oversight</span>
-            </div>
-
-            <div class="duty-item" onclick="qa('What strategic priorities should I be advancing this week?')">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><path d="M3 13L8 3l5 10"/><path d="M5.5 9h5"/></svg>
-              <span class="duty-item-label">Strategy execution</span>
-            </div>
-
-            <div class="duty-item" onclick="qa('What technology and platform matters need COO attention this week?')">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><rect x="1" y="3" width="14" height="9" rx="1"/><path d="M5 14h6M8 12v2"/></svg>
-              <span class="duty-item-label">Technology &amp; platform</span>
-            </div>
-
-            <div class="duty-item" onclick="qa('What client delivery issues need my attention this week?')">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>
-              <span class="duty-item-label">Client delivery</span>
-            </div>
-
-            <div class="duty-item" onclick="qa('What do I need to prepare or be aware of for the next board meeting?')">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--g)" stroke-width="1.6"><rect x="2" y="2" width="12" height="12" rx="1"/><path d="M5 7h6M5 10h4"/></svg>
-              <span class="duty-item-label">Board reporting</span>
-            </div>
-
-          </div>
-
-        </div>
-
-        <div>
-
-          <div class="card">
-
-            <div class="ct">Open actions <span class="ct-action" onclick="loadOpenActions(true)">↻ Refresh</span></div>
-
-            <div id="openActionsList"><div style="font-size:11px;color:var(--t2);padding:8px 0">Scanning emails and documents...</div></div>
-
-          </div>
-
-          <div class="card">
-
-            <div class="ct">Board report
-            <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <span class="ct-action" onclick="loadBoardReportStatus()">↻ Refresh</span>
-              <span class="ct-action" onclick="generateBoardReportManual()">Generate</span>
-              <span class="ct-action" onclick="forceSendBoardReport()" style="color:var(--r);font-weight:600">Generate &amp; email me</span>
-            </span></div>
-            <div id="boardReportStatus">
-              <div style="font-size:11px;color:var(--t2);padding:4px 0">Loading...</div>
-            </div>
-
-            <div class="ct" style="margin-top:16px">R2S metrics <span class="ct-action" onclick="loadR2SMetrics()">↻ Refresh</span></div>
-            <div id="r2sMetricsList"><div style="font-size:11px;color:var(--t2);padding:8px 0">Loading live data...</div></div>
-
-          </div>
-
-          <div class="card" id="financialIntelCard">
-            <div class="ct">Financial intelligence <span class="ct-action" onclick="triggerProactive('finance')">↻ Update</span> <span class="ct-action" onclick="triggerProactive('morning')">📧 Morning brief</span></div>
-            <div id="financialSnapshotContent"><div style="font-size:11px;color:var(--t3);padding:4px 0">Loading...</div></div>
-          </div>
-
-          <div class="card" id="emailBriefCard">
-            <div class="ct">Email brief — last 24 hours
-              <span class="ct-action" onclick="loadEmailBrief()" id="emailBriefRefresh">↻ Refresh</span>
-            </div>
-            <div id="emailBriefContent"><div style="font-size:11px;color:var(--t3);padding:4px 0">Click refresh to generate your inbox brief.</div></div>
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-    <!-- AURORA TAB -->
-    <div class="pnl" id="pnl-aurora">
-
-      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
-        <span>Aurora — Project Management Intelligence</span>
-        <div style="display:flex;gap:6px;align-items:center">
-          <button onclick="loadAuroraFull(true)" style="font-size:11px;padding:4px 10px;background:var(--bg2);border:0.5px solid var(--bm);border-radius:8px;cursor:pointer;color:var(--t2);font-family:var(--f)">↻ Refresh</button>
-          <button onclick="openAuroraApp()" style="font-size:11px;padding:4px 10px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Open Aurora ↗</button>
-        </div>
-      </div>
-
-      <!-- Summary metrics — compact bar -->
-      <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;align-items:center;background:var(--bg2);border-radius:var(--rm);padding:10px 14px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:22px;font-weight:500;color:var(--b)" id="aur-active">—</span>
-          <span style="font-size:11px;color:var(--t2)">active projects</span>
-        </div>
-        <div style="width:1px;height:24px;background:var(--bl);flex-shrink:0"></div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:22px;font-weight:500;color:var(--a)" id="aur-outstanding">—</span>
-          <span style="font-size:11px;color:var(--t2)">outstanding</span>
-        </div>
-        <div style="width:1px;height:24px;background:var(--bl);flex-shrink:0"></div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:22px;font-weight:500;color:var(--r)" id="aur-overdue">—</span>
-          <span style="font-size:11px;color:var(--t2)">overdue deliverables</span>
-        </div>
-        <button onclick="qa(&quot;Aurora portfolio summary: active projects, overdue deliverables, outstanding invoices — what should Kandia action this week?&quot;)" style="margin-left:auto;font-size:11px;padding:5px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Ask Cinderella</button>
-      </div>
-
-      <div class="two">
-        <!-- Left: Project list -->
-        <div>
-          <div class="card">
-            <div class="ct">Projects <span class="ct-action" onclick="filterAuroraProjects('all')">All</span> <span class="ct-action" onclick="filterAuroraProjects('active')">Active</span> <span class="ct-action" onclick="filterAuroraProjects('overdue')">Has issues</span></div>
-            <div id="auroraFullProjectList"><div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Loading projects from Aurora...</div></div>
-          </div>
-        </div>
-
-        <!-- Right: Unpaid invoices + overdue deliverables -->
-        <div>
-          <div class="card">
-            <div class="ct">Unpaid invoices <span class="ct-action" onclick="qa(&quot;Draft payment follow-up emails for all outstanding Aurora invoices&quot;)">Draft all follow-ups</span></div>
-            <div id="auroraInvoiceList"><div style="font-size:11px;color:var(--t3);padding:8px 0">Loading...</div></div>
-          </div>
-          <div class="card">
-            <div class="ct">Overdue &amp; at-risk deliverables</div>
-            <div id="auroraDeliverableList"><div style="font-size:11px;color:var(--t3);padding:8px 0">Loading...</div></div>
-          </div>
-          <div class="card">
-            <div class="ct">Cinderella insights <span class="ct-action" onclick="generateAuroraInsights()">Generate</span></div>
-            <div id="auroraInsightsList"><div style="font-size:11px;color:var(--t3);padding:8px 0">Click Generate for AI analysis of your Aurora portfolio.</div></div>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- CLOCKIFY TAB -->
-    <div class="pnl" id="pnl-clockify">
-
-      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
-        <span>Clockify — time tracking vs capacity check-in</span>
-        <div style="display:flex;gap:6px">
-          <button onclick="loadClockify()" style="font-size:11px;padding:4px 10px;background:var(--bg2);border:0.5px solid var(--bm);border-radius:8px;cursor:pointer;color:var(--t2);font-family:var(--f)">↻ Refresh</button>
-          <button onclick="analyseClockify()" style="font-size:11px;padding:4px 10px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Ask Cinderella</button>
-          <a href="https://app.clockify.me" target="_blank" style="font-size:11px;padding:4px 10px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;text-decoration:none">Open Clockify ↗</a>
-        </div>
-      </div>
-
-      <div id="clockifyAlert" style="display:none;margin-bottom:12px"></div>
-
-      <!-- Summary bar -->
-      <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;align-items:center;background:var(--bg2);border-radius:var(--rm);padding:10px 14px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:22px;font-weight:500;color:var(--b)" id="cf-total-hours">—</span>
-          <span style="font-size:11px;color:var(--t2)">hours logged this week</span>
-        </div>
-        <div style="width:1px;height:24px;background:var(--bl);flex-shrink:0"></div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:22px;font-weight:500;color:var(--r)" id="cf-flags">—</span>
-          <span style="font-size:11px;color:var(--t2)">mismatches flagged</span>
-        </div>
-        <div style="width:1px;height:24px;background:var(--bl);flex-shrink:0"></div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:22px;font-weight:500;color:var(--g)" id="cf-staff-count">—</span>
-          <span style="font-size:11px;color:var(--t2)">staff tracked</span>
-        </div>
-        <span id="clockifyConnStatus" style="margin-left:auto;font-size:11px;color:var(--t3)">Checking...</span>
-      </div>
-
-      <div class="two">
-        <div>
-          <div class="card">
-            <div class="ct">Hours logged vs capacity this week</div>
-            <div id="clockifyStaffList"><div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Loading Clockify data...</div></div>
-          </div>
-        </div>
-        <div>
-          <div class="card">
-            <div class="ct">Flags &amp; mismatches <span class="ct-action" onclick="analyseClockify()">Ask Cinderella</span></div>
-            <div id="clockifyFlagsList"><div style="font-size:11px;color:var(--t3);padding:8px 0">Loading...</div></div>
-          </div>
-          <div class="card">
-            <div class="ct">How to read this</div>
-            <div style="font-size:11px;color:var(--t2);line-height:1.6">
-              <div style="margin-bottom:6px"><strong>Implied hours</strong> = capacity slider % × 37.5hr week</div>
-              <div style="margin-bottom:6px"><span style="color:var(--b)">Blue bar</span> = Clockify hours actually logged</div>
-              <div style="margin-bottom:6px"><span style="color:var(--g)">Green bar</span> = implied from check-in slider</div>
-              <div style="margin-bottom:6px"><span style="color:var(--r)">Red flag</span> = logging far more than capacity implies (burnout risk)</div>
-              <div><span style="color:var(--a)">Amber flag</span> = logging far fewer hours than capacity implies (not tracking time or overstating capacity)</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- COMPLIANCE CALENDAR -->
-    <div class="pnl" id="pnl-compliance">
-
-      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
-        <span>Compliance and Regulatory Calendar</span>
-        <div style="display:flex;gap:6px">
-          <button onclick="loadCompliance()" style="font-size:11px;padding:4px 10px;background:var(--bg2);border:0.5px solid var(--bm);border-radius:8px;cursor:pointer;color:var(--t2);font-family:var(--f)">↻ Refresh</button>
-          <button onclick="triggerProactive('compliance')" style="font-size:11px;padding:4px 10px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Run check now</button>
-          <button onclick="showAddCompliance()" style="font-size:11px;padding:4px 10px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">+ Add item</button>
-        </div>
-      </div>
-
-      <div id="complianceAddForm" style="display:none;background:var(--bg2);border-radius:var(--rm);padding:12px;margin-bottom:12px">
-        <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;align-items:end">
-          <div><div style="font-size:10px;color:var(--t3);margin-bottom:4px">Item</div><input id="compTitle" placeholder="e.g. ASQA RTO renewal" style="width:100%;padding:7px 10px;border:0.5px solid var(--bm);border-radius:8px;font-size:11px;font-family:var(--f);background:var(--bg)"></div>
-          <div><div style="font-size:10px;color:var(--t3);margin-bottom:4px">Due date</div><input id="compDate" type="date" style="width:100%;padding:7px 10px;border:0.5px solid var(--bm);border-radius:8px;font-size:11px;font-family:var(--f);background:var(--bg)"></div>
-          <div><div style="font-size:10px;color:var(--t3);margin-bottom:4px">Category</div><select id="compCat" style="padding:7px 10px;border:0.5px solid var(--bm);border-radius:8px;font-size:11px;font-family:var(--f);background:var(--bg)"><option>Accreditation</option><option>Certification</option><option>Compliance</option><option>Government</option><option>Insurance</option><option>Legal</option><option>Tender</option><option>Other</option></select></div>
-          <button onclick="addComplianceItem()" style="padding:7px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:11px;font-family:var(--f)">Save</button>
-        </div>
-      </div>
-
-      <div id="complianceList"><div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Click "Run check now" to scan your emails and calendar for compliance items.</div></div>
-
-      <div class="card" style="margin-top:12px">
-        <div class="ct">Proactive intelligence — trigger manually</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;padding:4px 0">
-          <button onclick="triggerProactive('morning')" class="m-btn sec">📧 Send morning brief</button>
-          <button onclick="triggerProactive('aurora')" class="m-btn sec">⚠ Aurora project alert</button>
-          <button onclick="triggerProactive('ceo')" class="m-btn sec">📝 Draft CEO weekly brief</button>
-          <button onclick="triggerProactive('capacity')" class="m-btn sec">👥 Capacity check</button>
-          <button onclick="triggerProactive('receivables')" class="m-btn sec">💰 Receivables chasers</button>
-          <button onclick="triggerProactive('finance')" class="m-btn sec">📊 Financial snapshot</button>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- LEAVE MANAGEMENT -->
-    <div class="pnl" id="pnl-leave">
-
-      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
-        <span>Leave Management — Key Person Risk</span>
-        <div style="display:flex;gap:6px">
-          <button onclick="loadLeaveEntries()" style="font-size:11px;padding:4px 10px;background:var(--bg2);border:0.5px solid var(--bm);border-radius:8px;cursor:pointer;color:var(--t2);font-family:var(--f)">↻ Refresh</button>
-          <button onclick="showAddLeave()" style="font-size:11px;padding:4px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f);font-weight:600">+ Add leave</button>
-        </div>
-      </div>
-
-      <div class="card" style="background:var(--bl2);border-left:3px solid var(--b);margin-bottom:14px">
-        <div style="font-size:12px;color:var(--t1);line-height:1.6"><strong>Policy reminder:</strong> All staff taking 3+ consecutive days leave must complete the handover checklist. Trigger date is 2 weeks before leave starts. Leave is only approved once all 3 sign-off phases are complete.</div>
-      </div>
-
-      <div id="leaveList"><div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Loading leave entries...</div></div>
-
-    </div>
-
-    <!-- AUTOMATION -->
-
-    <div class="pnl" id="pnl-auto">
-
-      <div class="sec">Automation &amp; process centre</div>
-
-      <div class="mrow">
-
-        <div class="met" onclick="qa('List everything Cinderella can automate or generate for me as COO of Risk 2 Solution')"><div class="ml">Total time savings</div><div class="mv">11h+</div><div class="ms">per week identified</div></div>
-
-        <div class="met"><div class="ml">Processes to generate</div><div class="mv">12</div><div class="ms">ready now</div></div>
-
-        <div class="met"><div class="ml">Automation opportunities</div><div class="mv">4</div><div class="ms">technical integrations</div></div>
-
-        <div class="met" onclick="qa('What should I automate first as COO of Risk 2 Solution to get the biggest immediate impact?')"><div class="ml">Where to start</div><div class="mv" style="font-size:14px;color:var(--b)">Ask</div><div class="ms">Cinderella</div></div>
-
-      </div>
-
-      <div class="two">
-
-        <div>
-
-          <div style="font-size:11px;font-weight:500;color:var(--t2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">Documents &amp; processes Cinderella can generate now</div>
-
-          <div class="auto-card" onclick="generateReport('training-delivery','Training Delivery Process')"><div class="auto-head"><div class="auto-icon" style="background:var(--bl2)">📋</div><div><div class="auto-title">Training delivery process</div><div class="auto-sub">Onboarding, compliance, product, ongoing development</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">HR</span></div><div class="auto-savings">Saves ~2h/week</div></div>
-
-          <div class="auto-card" onclick="generateReport('weekly-reporting','Weekly Reporting Process')"><div class="auto-head"><div class="auto-icon" style="background:var(--gl)">📊</div><div><div class="auto-title">Weekly reporting process</div><div class="auto-sub">Ops, capacity, clients, platform, financials</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">Reporting</span></div><div class="auto-savings">Saves ~3h/week</div></div>
-
-          <div class="auto-card" onclick="generateReport('qa-process','Quality Assurance Process')"><div class="auto-head"><div class="auto-icon" style="background:#FBEAF0">✅</div><div><div class="auto-title">Quality assurance process</div><div class="auto-sub">Client deliverables, platform releases, internal processes</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-r">Risk</span></div></div>
-
-          <div class="auto-card" onclick="generateReport('client-onboarding','Client Onboarding Process')"><div class="auto-head"><div class="auto-icon" style="background:var(--al)">🤝</div><div><div class="auto-title">Client onboarding process</div><div class="auto-sub">All phases, checklists, stakeholders, timelines</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-a">Client</span></div><div class="auto-savings">Saves ~2h per client</div></div>
-
-          <div class="auto-card" onclick="generateReport('iso-27001-prep','ISO 27001 Audit Prep')"><div class="auto-head"><div class="auto-icon" style="background:var(--rl)">🔒</div><div><div class="auto-title">ISO 27001 audit prep process</div><div class="auto-sub">Complete pre-audit checklist for May 12</div></div></div><div class="auto-tags"><span class="auto-tag at-r">Urgent</span><span class="auto-tag at-r">Compliance</span></div><div class="auto-savings">Critical — audit soon</div></div>
-
-          <div class="auto-card" onclick="generateReport('incident-escalation','Incident Escalation Pathway')"><div class="auto-head"><div class="auto-icon" style="background:var(--rl)">⚠️</div><div><div class="auto-title">Incident escalation pathway</div><div class="auto-sub">Resolves critical ISO 27001 audit gap</div></div></div><div class="auto-tags"><span class="auto-tag at-r">Urgent</span><span class="auto-tag at-r">ISO gap</span></div></div>
-
-        </div>
-
-        <div>
-
-          <div style="font-size:11px;font-weight:500;color:var(--t2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">More Cinderella can generate</div>
-
-          <div class="auto-card" onclick="generateReport('performance-review','Performance Review Process')"><div class="auto-head"><div class="auto-icon" style="background:var(--bl2)">👤</div><div><div class="auto-title">Performance review process</div><div class="auto-sub">Self-assessment, manager review, development plan</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">HR</span></div></div>
-
-          <div class="auto-card" onclick="generateReport('vendor-management','Vendor Management Process')"><div class="auto-head"><div class="auto-icon" style="background:var(--al)">🔄</div><div><div class="auto-title">Vendor management process</div><div class="auto-sub">Quarterly review cadence and approval workflow</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-a">Overdue 7 months</span></div></div>
-
-          <div class="auto-card" onclick="generateReport('risk-register','Risk Register')"><div class="auto-head"><div class="auto-icon" style="background:var(--gl)">📁</div><div><div class="auto-title">Risk register &amp; scoring matrix</div><div class="auto-sub">Risk categories, scoring, owners, review cadence</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-r">Risk</span></div></div>
-
-          <div class="auto-card" onclick="generateReport('staff-onboarding','Staff Onboarding Process')"><div class="auto-head"><div class="auto-icon" style="background:var(--gl)">🆕</div><div><div class="auto-title">Staff onboarding process</div><div class="auto-sub">Day 1, week 1, 30-day plan</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">HR</span></div></div>
-
-          <div class="auto-card" onclick="generateReport('board','Board Report')"><div class="auto-head"><div class="auto-icon" style="background:#EEEDFE">📄</div><div><div class="auto-title">Board reporting template</div><div class="auto-sub">COO section — reusable monthly</div></div></div><div class="auto-tags"><span class="auto-tag at-g">Generate now</span><span class="auto-tag at-b">Reporting</span></div></div>
-
-          <div class="auto-card" onclick="qa('What should Risk 2 Solution automate using Clockify and other integrations?')"><div class="auto-head"><div class="auto-icon" style="background:var(--bl2)">⚡</div><div><div class="auto-title">Clockify integration plan</div><div class="auto-sub">Replace manual check-ins with automatic data</div></div></div><div class="auto-tags"><span class="auto-tag at-b">Future</span><span class="auto-tag at-b">Clockify</span></div><div class="auto-savings">Fully automates capacity tracking</div></div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-    <!-- HR INSIGHTS -->
-
-    <div class="pnl" id="pnl-hr">
-
-      <div class="sec">HR insights — generated from staff check-in data</div>
-
-      <div class="mrow">
-
-        <div class="met" onclick="generateHRProcess('actions')" style="cursor:pointer" title="Click to generate action plan"><div class="ml">HR actions identified</div><div class="mv" id="hr-n" style="color:var(--a)">0</div><div class="ms">from check-ins — click to action</div></div>
-
-        <div class="met" onclick="generateHRProcess('blockers')" style="cursor:pointer" title="Click to resolve blockers"><div class="ml">Blockers reported</div><div class="mv" id="hr-bl" style="color:var(--r)">0</div><div class="ms">need intervention — click to resolve</div></div>
-
-        <div class="met" onclick="generateHRProcess('availability')" style="cursor:pointer" title="Click for coverage planning"><div class="ml">Availability issues</div><div class="mv" id="hr-av" style="color:var(--a)">0</div><div class="ms">this week — click to plan</div></div>
-
-        <div class="met" onclick="generateHRProcess('plan')" style="cursor:pointer"><div class="ml">HR action plan</div><div class="mv" style="font-size:14px;color:var(--b)">Generate</div><div class="ms">this week's plan</div></div>
-
-      </div>
-
-      <div class="two">
-
-        <div>
-
-          <div class="card">
-
-            <div class="ct">Identified HR requirements <span class="ct-action" onclick="qa('Generate a full HR requirements report based on current staff check-in data')">Generate full report</span></div>
-
-            <div id="hrList"><div style="font-size:12px;color:var(--t3);padding:8px 0">Sync check-ins to see HR insights.</div></div>
-
-          </div>
-
-        </div>
-
-        <div>
-
-          <div class="card">
-
-            <div class="ct">Standing HR processes Cinderella can generate</div>
-
-            <div class="hr-card" onclick="generateHRProcess('pip')"><div class="hr-title">Performance improvement plan (PIP)</div><div class="hr-sub">Template for consistently underperforming staff.</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Generate template</span></div>
-
-            <div class="hr-card" onclick="generateHRProcess('burnout')"><div class="hr-title">Burnout prevention protocol</div><div class="hr-sub">Triggered when capacity stays above 90% for 2+ weeks.</div><span class="hr-tag" style="background:var(--rl);color:#A32D2D">Generate protocol</span></div>
-
-            <div class="hr-card" onclick="generateHRProcess('skills')"><div class="hr-title">Skills development plan</div><div class="hr-sub">Individual learning plans based on skill gaps.</div><span class="hr-tag" style="background:var(--gl);color:#0F6E56">Generate template</span></div>
-
-            <div class="hr-card" onclick="generateHRProcess('leave')"><div class="hr-title">Leave management process</div><div class="hr-sub">Coverage planning, approval workflow, handover checklist.</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Generate process</span></div>
-
-          </div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-    <!-- CHAT -->
-
-
-    <!-- OPEN ACTIONS TRACKER -->
-    <div class="pnl" id="pnl-tracker">
-      <div class="sec" style="display:flex;align-items:center;justify-content:space-between">
-        <span>Open actions tracker</span>
-        <div style="display:flex;gap:6px;align-items:center">
-          <select id="tracker-filter" onchange="renderTracker()" style="font-size:11px;padding:3px 8px;border:1px solid var(--bl);border-radius:8px;background:var(--bg2);color:var(--t2);font-family:var(--f)">
-            <option value="open">Open</option>
-            <option value="all">All</option>
-            <option value="resolved">Resolved</option>
-          </select>
-          <button onclick="openAddActionModal()" style="font-size:11px;padding:4px 10px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">+ Add action</button>
-        </div>
-      </div>
-      <div id="trackerList"><div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Loading...</div></div>
-    </div>
-
-    <div class="pnl-chat" id="pnl-chat">
-
-      <div class="ch"><div class="sdot"></div><div><div class="ch-title">Cinderella <span class="m365">M365</span></div><div class="ch-sub">Your personal COO assistant · Risk 2 Solution</div></div></div>
-
-      <div class="msgs" id="msgs"></div>
-
-      <div class="qas">
-
-        <button class="qa" onclick="qa('Draft a professional reply to Marcus Webb about the vendor contract')">Draft reply to Marcus Webb</button>
-
-        <button class="qa" onclick="qa('Prepare a full briefing for today\'s risk framework review at 09:30')">Prep for risk review</button>
-
-        <button class="qa" onclick="qa('Analyse my team\'s check-in data and recommend workload redistribution')">Analyse team capacity</button>
-
-        <button class="qa" onclick="qa('Generate the incident escalation pathway process document for ISO 27001 compliance')">Generate incident process</button>
-
-        <button class="qa" onclick="qa('Write the COO board pack narrative section for April')">Write board pack section</button>
-
-        <button class="qa" onclick="qa('What HR actions should I take based on this week\'s staff data?')">HR action plan</button>
-
-      </div>
-
-      <div id="chatQuickActions" style="display:flex;gap:6px;flex-wrap:wrap;padding:6px 12px 0;border-top:0.5px solid var(--bl)">
-
-        <button onclick="qa('Load the full staff check-in history for all weeks and give me a complete skills and capacity analysis for each staff member.')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">📊 Load full check-in history</button>
-
-        <button onclick="window._briefingRequested=true;autoBriefing();" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">☀ Morning briefing</button>
-
-        <button onclick="qa('What are my top priorities for today and this week based on my emails and calendar?')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">🎯 Today\'s priorities</button>
-
-        <button onclick="qa('Which emails in my inbox are most urgently needing a reply? Draft replies for the top 3.')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">✉ Draft urgent replies</button>
-
-        <button onclick="qa('Give me a staff health check based on all available check-in data. Who is overloaded, who has blockers, and what are the skill gaps?')" style="font-size:10px;padding:3px 9px;border-radius:12px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;font-family:var(--f)">👥 Staff health check</button>
-
-      </div>
-
-      <div class="attach-bar" id="attachBar"></div>
-      <div class="cin-wrap"><button class="catt" id="cattBtn" onclick="document.getElementById('chatFileInput').click()" title="Attach file for analysis">📎</button><input type="file" id="chatFileInput" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.txt,.md,.csv" style="display:none" onchange="handleChatUpload(event)"><button class="cmic" id="micBtn" onclick="toggleVoice()" title="Voice input">🎤</button><textarea class="cin" id="cinput" rows="1" placeholder="Ask Cinderella anything..." onkeydown="handleKey(event)" oninput="resize(this)"></textarea><button class="csend" id="csend" onclick="send()">Send</button></div>
-
-    </div>
-
-    <!-- SCHEDULER -->
-
-    <div class="pnl" id="pnl-sched">
-
-      <div class="sec">Proactive scheduler</div>
-
-      <div class="two">
-
-        <div class="card">
-
-          <div class="ct">Available slots — next 5 days</div>
-
-          <div class="row" onclick="qa('Book a 30-minute prep block at 10:15 today for the Titan Corp onboarding meeting')"><div class="mtime" style="min-width:80px">Today 10:15</div><div><div class="mt">30 min — book prep block</div><div class="mm">Cinderella suggests: Titan Corp onboarding prep</div></div></div>
-
-          <div class="row" onclick="qa('Block 12:30-13:00 today as a protected lunch break in my calendar')"><div class="mtime" style="min-width:80px">Today 12:30</div><div><div class="mt">Lunch — unblocked</div><div class="mm">Cinderella recommends protecting this time</div></div></div>
-
-          <div class="row" onclick="qa('Schedule a 2-hour deep work block on Friday morning for board pack section 3')"><div class="mtime" style="min-width:80px">Fri 09:00</div><div><div class="mt">2 hr gap — deep work</div><div class="mm">Board pack section 3 narrative</div></div></div>
-
-          <div class="row" onclick="qa('Schedule a 90-minute ISO audit prep session on Monday at 11am with Sofia Ng')"><div class="mtime" style="min-width:80px">Mon 11:00</div><div><div class="mt">90 min — ISO audit prep</div><div class="mm">With Sofia Ng — 32% checklist still to complete</div></div></div>
-
-          <div class="row" onclick="qa('Schedule the first quarterly vendor review for Tuesday 10am')"><div class="mtime" style="min-width:80px">Tue 10:00</div><div><div class="mt">90 min — vendor review</div><div class="mm">7 months overdue — first of quarterly cadence</div></div></div>
-
-        </div>
-
-        <div class="card">
-
-          <div class="ct">Scheduling suggestions <span class="ct-action" onclick="qa('Optimise my calendar for the next 2 weeks based on my priorities and commitments')">Optimise my calendar</span></div>
-
-          <div class="ins" onclick="qa('Book a 30-minute prep block at 10:15 today for Titan Corp onboarding')"><div class="il">Book now</div><div class="it">30 min prep at 10:15 for Titan Corp — no prep time blocked before 11:00 meeting.</div></div>
-
-          <div class="ins" onclick="qa('Schedule the ISO 27001 pre-audit session for Monday with Sofia Ng')"><div class="il">This week</div><div class="it">ISO pre-check session Monday 11:00 — 90 min deep work with Sofia Ng.</div></div>
-
-          <div class="ins" onclick="qa('Set up a quarterly vendor review cadence starting Tuesday')"><div class="il">Create recurring</div><div class="it">No quarterly vendor review exists. Cinderella recommends setting Tue 10:00 as recurring quarterly.</div></div>
-
-          <div class="ins" onclick="qa('Block lunch and end-of-day buffer in my calendar for the rest of this week')"><div class="il">Protect your time</div><div class="it">No lunch or end-of-day buffer blocked this week.</div></div>
-
-        </div>
-
-      </div>
-
-    </div>
-
-  </div><!-- end main -->
-
-</div><!-- end app -->
-
-</div>
-
-
-<script>
-// ── BOARD REPORT ──
-async function loadBoardReportStatus() {
-  var el = document.getElementById('boardReportStatus');
-  var card = el ? el.closest('.card') : null;
-  if (!el) return;
-  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">Loading...</div>';
+// ── STAFF CHECK-IN (public — no password) ──
+app.get('/checkin', (req, res) => {
+  res.sendFile('checkin.html', { root: '.' });
+});
+
+app.use(requireAuth);
+
+// ── MICROSOFT GRAPH CONFIG ──
+const TENANT_ID     = process.env.AZURE_TENANT_ID;
+const CLIENT_ID     = process.env.AZURE_CLIENT_ID;
+const CLIENT_SECRET = process.env.AZURE_CLIENT_SECRET;
+const REDIRECT_URI  = process.env.REDIRECT_URI || 'https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/auth/callback';
+const SCOPES        = 'offline_access Mail.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite Chat.Read ChannelMessage.Read.All';
+
+// ── TOKEN STORE: Persistent file-based storage for Azure ──
+const TOKEN_PATH = process.env.TOKEN_STORE_PATH || '/home/tokens.json';
+
+function loadSavedToken() {
   try {
-    var r = await fetch('/board-report/latest');
-    var d = (!r.ok) ? {} : await r.json().catch(function(){return {};});
-    // Hide board report card if meeting has passed OR report is older than 8 days
-    var shouldHide = false;
-    if (d.meetingDate) {
-      var mDate = new Date(d.meetingDate);
-      if ((Date.now() - mDate) / (24*60*60*1000) >= 1) shouldHide = true;
-    } else if (d.generatedAt) {
-      var genAge = (Date.now() - new Date(d.generatedAt)) / (24*60*60*1000);
-      if (genAge >= 8) shouldHide = true;
-    }
-    if (shouldHide) {
-      // Show a minimal archived state rather than hiding entirely
-      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">No active report — next report will be auto-generated the Thursday before your next board meeting. <span class="ct-action" onclick="forceSendBoardReport()" style="margin-left:8px">Generate now</span></div>';
-      return;
-    }
-    if (!d.filename) {
-      var isThur = new Date().toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'}) === 'Thursday';
-      if (isThur) {
-        el.innerHTML = '<div style="background:var(--rl);border-radius:10px;padding:10px 12px;margin-top:4px"><div style="font-size:12px;font-weight:600;color:#A32D2D;margin-bottom:4px">Board report due today</div><div style="font-size:11px;color:#A32D2D;margin-bottom:8px">Today is Thursday — Cinderella will auto-generate when she finds a board meeting next week. Click to generate now.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="forceSendBoardReport()" style="font-size:11px;padding:5px 14px;background:#A32D2D;color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Generate and email me</button><button onclick="generateBoardReportManual()" style="font-size:11px;padding:5px 14px;background:var(--bg2);border:0.5px solid var(--bm);color:var(--t2);border-radius:8px;cursor:pointer;font-family:var(--f)">Generate only</button></div></div>';
-      } else {
-        el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">No report generated yet.<br><button onclick="forceSendBoardReport()" style="margin-top:6px;font-size:11px;padding:5px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Generate and email me</button></div>';
+    if (existsSync(TOKEN_PATH)) {
+      const data = JSON.parse(readFileSync(TOKEN_PATH, 'utf8'));
+      if (data.expires_at && new Date(data.expires_at) > new Date()) {
+        console.log('✅ Loaded M365 token from disk (expires', new Date(data.expires_at).toLocaleString(), ')');
+        return data;
       }
-      return;
+      console.log('⚠ Saved token expired');
     }
-    var genDate = d.generatedAt ? new Date(d.generatedAt).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : 'Unknown';
-    el.innerHTML = '<div style="background:var(--gl);border-radius:10px;padding:10px 12px;margin-top:4px">' +
-      '<div style="font-size:12px;font-weight:600;color:#0F6E56;margin-bottom:3px">📋 ' + d.monthName + ' ' + d.yr + ' Report Ready</div>' +
-      '<div style="font-size:11px;color:var(--t2);margin-bottom:8px">For: ' + (d.meetingSubject||'Board Meeting') + '<br>Generated: ' + genDate + '</div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-      '<button onclick="downloadBoardReport()" style="font-size:11px;padding:5px 14px;background:#0F6E56;color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">⬇ Download</button>' +
-      '<button onclick="forceSendBoardReport()" style="font-size:11px;padding:5px 14px;background:var(--r);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">Generate new and email me</button>' +
-      '</div>' +
-    '</div>';
-  } catch(e) { el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">Could not load report status.</div>'; }
+  } catch(e) { console.warn('Token load error:', e.message); }
+  return { access_token: null, refresh_token: null, expires_at: null };
 }
 
-function downloadBoardReport() {
-  window.open('/board-report/download', '_blank');
-}
-
-async function generateBoardReportManual() {
-  var el = document.getElementById('boardReportStatus');
-  if (el) el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:4px 0">⏳ Generating report — this takes 60-90 seconds with email analysis, please wait...</div>';
+function persistToken(store) {
   try {
-    var r = await fetch('/board-report/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
-    var text = await r.text();
-    var d;
-    try { d = JSON.parse(text); }
-    catch(parseErr) {
-      console.error('Board report response parse error:', parseErr.message, 'Response:', text.substring(0,200));
-      if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Server error — check Azure logs and try again. The report generation may have timed out.</div>';
-      return;
-    }
-    if (d.success) {
-      await loadBoardReportStatus();
-    } else {
-      if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + (d.error||'Failed') + '</div>';
-    }
-  } catch(e) {
-    if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + e.message + '</div>';
-  }
+    writeFileSync(TOKEN_PATH, JSON.stringify(store, null, 2));
+    console.log('✅ M365 token saved to disk');
+  } catch(e) { console.warn('Token save error:', e.message); }
 }
 
-async function resetBoardReportState() {
-  if (!confirm('This will clear the board report state so Cinderella can generate a fresh report. Continue?')) return;
+let tokenStore = loadSavedToken();
+
+// ── AUTH: Redirect Kandia to Microsoft login ──
+app.get('/auth/login', (req, res) => {
+  const url = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/authorize`
+    + `?client_id=${CLIENT_ID}`
+    + `&response_type=code`
+    + `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`
+    + `&scope=${encodeURIComponent(SCOPES)}`
+    + `&response_mode=query`;
+  res.redirect(url);
+});
+
+// ── AUTH: Handle callback and store tokens ──
+app.get('/auth/callback', async (req, res) => {
+  const { code, error } = req.query;
+  if (error) return res.send(`Auth error: ${error}`);
+  if (!code) return res.send('No code received');
   try {
-    var r = await fetch('/board-report/reset-state', {method:'POST', headers:{'Content-Type':'application/json'}});
-    var d = await r.json();
-    if (d.success) {
-      await loadBoardReportStatus();
-      showToast('Board report state cleared — Cinderella will generate a fresh report on Thursday, or click Generate now.');
-    }
-  } catch(e) { showToast('Error: ' + e.message); }
-}
-
-async function forceSendBoardReport() {
-  var el = document.getElementById('boardReportStatus');
-  if (!confirm('This will generate a fresh board report for this month and email it to you. Any previous report will be replaced. Continue?')) return;
-  if (el) el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Step 1/2: Resetting state...</div>';
-  // Reset state first so force-send always generates fresh
-  try { await fetch('/board-report/reset-state', {method:'POST'}); } catch(e) {}
-  if (el) el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Step 2/2: Generating report — this takes 30-60 seconds...</div>';
-  try {
-    var r = await fetch('/board-report/force-send', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
-    var d = await r.json();
-    if (d.success) {
-      await loadBoardReportStatus();
-      openModal('✅ Board report ready', 'Meeting: ' + d.meeting + ' (' + d.daysUntil + ' days away)',
-        '<div class="alert-box ok"><div class="ab-title">Report generated successfully</div>' +
-        '<div class="ab-text">The report has been saved to your <strong>Outlook Drafts</strong>. Open Outlook Drafts, review it, and send it to yourself or the board.</div></div>' +
-        '<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap">' +
-        '<button class="m-btn" style="background:#0078D4" onclick="openOutlookDrafts()">📧 Open Outlook Drafts</button>' +
-        '<button class="m-btn" onclick="downloadBoardReport()">⬇ Download report</button>' +
-        '<button class="m-btn sec" onclick="closeModal()">Close</button>' +
-        '</div>' +
-        '<div style="font-size:11px;color:var(--t3);margin-top:8px">To enable auto-sending in future: Azure AD → App registrations → API permissions → add <strong>Mail.Send</strong> → Grant admin consent → then re-login at /auth/login</div>'
-      );
-    } else {
-      if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + (d.error||'Failed') + ' — try again or check Azure logs</div>';
-    }
-  } catch(e) {
-    if (el) el.innerHTML = '<div style="font-size:11px;color:var(--r);padding:4px 0">Error: ' + e.message + '</div>';
-  }
-}
-
-function complianceClick(el) {
-  var items = el.getAttribute('data-items') || '';
-  var prompt = 'Give me a focused action list ONLY for these compliance and insurance items: ' + items.replace(/\|/g, ', ') + '. For each item state: (1) exact action needed, (2) owner, (3) deadline or urgency. Be direct. No tangents, no questions back.';
-  qa(prompt);
-}
-
-// Auto-detect session expiry on any fetch response
-async function safeFetch(url, opts) {
-  var r = await fetch(url, opts);
-  if (r.status === 401) {
-    var d = await r.json().catch(function(){ return {}; });
-    var msg = (d.error && d.error.message) || '';
-    if (msg.includes('Session') || msg.includes('expired')) {
-      // Show global session banner
-      var banner = document.getElementById('session-banner');
-      if (!banner) {
-        banner = document.createElement('div');
-        banner.id = 'session-banner';
-        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#A32D2D;color:#fff;text-align:center;padding:10px;font-size:13px;z-index:99999;font-family:var(--f)';
-        banner.innerHTML = '⚠️ Your session has expired. <a href="/auth/login" style="color:#fff;font-weight:600;text-decoration:underline">Click here to log back in</a>';
-        document.body.appendChild(banner);
+    const response = await fetch(
+      `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: CLIENT_ID,
+          client_secret: CLIENT_SECRET,
+          code,
+          redirect_uri: REDIRECT_URI,
+          grant_type: 'authorization_code'
+        })
       }
+    );
+    const data = await response.json();
+    if (data.error) return res.send(`Token error: ${data.error_description}`);
+    tokenStore.access_token  = data.access_token;
+    tokenStore.refresh_token = data.refresh_token;
+    tokenStore.expires_at    = Date.now() + (data.expires_in * 1000);
+    persistToken(tokenStore);
+    console.log('✅ Microsoft 365 connected and token saved to disk');
+    res.send(`
+      <html><body style="font-family:sans-serif;padding:40px;text-align:center;background:#f0efe9">
+        <h2 style="color:#0A7A7A">✅ Cinderella is now connected to Microsoft 365</h2>
+        <p style="color:#5a5a56">Outlook, Calendar and Teams are authorised.</p>
+        <p style="color:#5a5a56">You can close this window and return to the dashboard.</p>
+      </body></html>
+    `);
+  } catch (err) {
+    res.send(`Error: ${err.message}`);
+  }
+});
+
+// ── AUTH: Check connection status ──
+app.get('/auth/status', (req, res) => {
+  res.json({ connected: !!tokenStore.access_token });
+});
+
+// ── AUTH: Refresh token if expired ──
+async function getValidToken() {
+  if (!tokenStore.access_token) throw new Error('Not connected — visit /auth/login to connect Microsoft 365');
+  if (Date.now() < tokenStore.expires_at - 60000) return tokenStore.access_token;
+  const response = await fetch(
+    `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        refresh_token: tokenStore.refresh_token,
+        grant_type: 'refresh_token'
+      })
     }
-  }
-  return r;
-}
-
-
-let C={api:'proxy',bin:'69eac07b36566621a8e6511a',key:'$2a$10$6AnrWdAfkw1SbaKZOuSTz.XXjK/mQVzlPX4rhyOOT6378sp855ouO'};
-
-let SD=[];
-
-let msgs=[];
-
-let busy=false;
-
-let charts={};
-
-const AV_STYLES=['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
-
-const ALL_STAFF=[
-
-  {name:'Janita Zhang',email:'janita.z@risk2solution.com'},
-
-  {name:'Reinette Kruger',email:'reinette.k@risk2solution.com'},
-
-  {name:'Diane Kruger',email:'diane.k@risk2solution.com'},
-
-  {name:'Garima Arora',email:'garima.a@risk2solution.com'},
-
-  {name:'Paul Johnston',email:'paul.j@risk2solution.com'},
-
-  {name:'Dani Stevenson',email:'dani.s@risk2solution.com'},
-
-  {name:'Ross Mackenzie',email:'ross.m@risk2solution.com'},
-
-  {name:'Cherry Abadeza',email:'cherry.a@risk2solution.com'},
-  {name:'Rionoch Goodwin',email:'rionoch.g@risk2solution.com'},
-
-];
-
-/* ── MICROSOFT GRAPH LIVE DATA ── */
-
-let M365 = { connected: false, emails: [], events: [], teams: [] };
-
-async function checkM365Connection() {
-
-  const statusEl = document.getElementById('m365Status');
-
-  const loginBtn = document.getElementById('m365LoginBtn');
-
-  try {
-
-    const r = await fetch('/auth/status');
-
-    if (!r.ok) throw new Error('Server error');
-
-    const text = await r.text();
-
-    if (text.trim().startsWith('<')) throw new Error('Got HTML - server may be restarting');
-
-    const d = JSON.parse(text);
-
-    M365.connected = d.connected;
-
-    if (M365.connected) {
-
-      if (statusEl) { statusEl.textContent = '✓ Connected'; statusEl.style.color = 'var(--g)'; }
-
-      if (loginBtn) loginBtn.style.display = 'none';
-
-      loadM365Data();
-
-    } else {
-
-      if (statusEl) { statusEl.textContent = 'Click to connect'; statusEl.style.color = 'var(--a)'; }
-
-      if (loginBtn) loginBtn.style.display = 'flex';
-
-    }
-
-  } catch(e) {
-
-    if (statusEl) { statusEl.textContent = 'Not connected'; statusEl.style.color = 'var(--t3)'; }
-
-    if (loginBtn) loginBtn.style.display = 'flex';
-
-  }
-
-}
-
-async function loadM365Data() {
-
-  try {
-
-    const er = await fetch('/graph/emails');
-
-    if (er.ok) {
-
-      const ed = await er.json();
-
-      M365.emails = ed.emails || [];
-
-      renderLiveEmails();
-
-    }
-
-  } catch(e) { console.warn('Email load failed:', e.message); }
-
-  try {
-
-    const cr = await fetch('/graph/calendar');
-
-    if (cr.ok) {
-
-      const cd = await cr.json();
-
-      M365.events = cd.events || [];
-
-      M365.brisbaneNow = cd.brisbaneNow || null; // server-provided Brisbane time
-
-    } else {
-
-      var sc = document.getElementById('staticCalendar');
-
-      if (sc) sc.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">Calendar unavailable — <a href="/auth/login" style="color:var(--b)">reconnect M365</a></div>';
-
-    }
-
-    renderLiveCalendar();
-
-  } catch(e) {
-
-    console.warn('Calendar load failed:', e.message);
-
-    var sc2 = document.getElementById('staticCalendar');
-
-    if (sc2) sc2.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">Calendar error — <a href="/auth/login" style="color:var(--b)">reconnect M365</a></div>';
-
-  }
-
-  try {
-
-    const tr = await fetch('/graph/teams');
-
-    if (tr.ok) {
-
-      const td = await tr.json();
-
-      M365.teams = td.chats || [];
-
-    }
-
-  } catch(e) { console.warn('Teams load failed:', e.message); }
-
-  // Load today tab with real data + show opening notification
-
-  try { await loadTodayData(); } catch(e) { console.warn('Today data failed:', e.message); }
-
-  // Load info@ mailbox
-
-  try { await loadInfoEmails(); } catch(e) { console.warn('info@ failed:', e.message); }
-
-  // Notification disabled to save API credits - use morning briefing button instead
-
-}
-
-function renderLiveCalendar() {
-
-  const el = document.getElementById('liveCalendar');
-
-  const staticCal = document.getElementById('staticCalendar');
-
-  if (!el) return;
-
-  el.style.display = 'block';
-
-  // Always clear the "Connecting..." placeholder
-
-  if (staticCal) staticCal.innerHTML = '';
-
-  if (M365.events.length === 0) {
-
-    el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No meetings scheduled today.</div>';
-
-    return;
-
-  }
-
-  el.style.display = 'block';
-
-  const staticRows = document.querySelectorAll('#pnl-today .card .row');
-
-  staticRows.forEach(r => r.style.display = 'none');
-
-  // Graph returns Brisbane local times (no Z) due to Prefer header
-
-  // Browser is in Brisbane, so new Date() is also Brisbane — direct comparison works
-
-  // Use server-provided Brisbane time for accurate timezone comparison
-
-  // Strip Z so both times are treated as Brisbane local (not UTC)
-
-  var nowLocal = M365.brisbaneNow ? new Date(M365.brisbaneNow.replace('Z','')) : new Date();
-
-  var upcoming = M365.events.filter(function(e) {
-
-    if (!e.end) return true;
-
-    try {
-
-      // Strip Z if present, parse as local Brisbane time
-
-      var endDate = new Date(e.end.replace('Z','').replace('z',''));
-
-      if (isNaN(endDate.getTime())) return true;
-
-      return endDate > nowLocal;
-
-    } catch(ex) { return true; }
-
-  });
-
-  // If all meetings are in the past, show "No more meetings today" - no fallback
-
-  if (upcoming.length === 0) {
-
-    el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No more meetings today.</div>';
-
-    return;
-
-  }
-
-  el.innerHTML = upcoming.map(function(e) {
-
-    var start = new Date(e.start.replace('Z',''));
-
-    var end = new Date(e.end.replace('Z',''));
-
-    var time = start.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
-
-    var endTime = end.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
-
-    var durationMins = Math.round((end - start) / 60000);
-
-    // Check if in progress
-
-    var now = new Date(e.start); // use same reference
-
-    var inProgress = start <= new Date() && end >= new Date();
-
-    var badge = inProgress ? '<span style="font-size:9px;background:var(--g);color:#fff;padding:1px 6px;border-radius:8px;margin-left:6px">In progress</span>' : '';
-
-    return '<div class="row"><div class="mtime">'+time+'</div><div><div class="mt">'+e.subject+badge+'</div><div class="mm">'+endTime+' · '+durationMins+' min'+(e.location?' · '+e.location:'')+'</div></div></div>';
-
-  }).join('');
-
-}
-
-function renderLiveEmails() {
-
-  var el = document.getElementById('liveEmailList');
-
-  if (!el || M365.emails.length === 0) {
-
-    if(el) el.innerHTML = '';
-
-    return;
-
-  }
-
-  var html = '';
-
-  M365.emails.forEach(function(e) {
-
-    var idx = M365.emails.indexOf(e);
-
-    var attach = e.hasAttachments ? ' <span style="color:var(--a);font-size:9px">📎</span>' : '';
-
-    var unread = !e.isRead ? '<span style="width:6px;height:6px;border-radius:50%;background:var(--b);display:inline-block;margin-right:4px;flex-shrink:0"></span>' : '';
-
-    var overdueTag = e.hoursOld >= 24 ? '<span class="eu">Overdue</span>' : '';
-
-    html += '<div class="erow" style="position:relative">'+
-      '<div onclick="openEmailView('+idx+')" style="flex:1;display:flex;align-items:center;gap:8px;cursor:pointer">'+
-        '<div class="ei"><div class="ef" style="display:flex;align-items:center">'+unread+e.from+attach+'</div><div class="es">'+e.subject+'</div></div>'+
-        '<div class="ea">'+e.hoursOld+'h '+overdueTag+'</div>'+
-      '</div>'+
-      '<button onclick="addEmailToTracker('+idx+')" title="Add to Open Actions" style="flex-shrink:0;background:none;border:1px solid var(--bl);border-radius:6px;padding:2px 6px;font-size:10px;color:var(--t3);cursor:pointer;font-family:var(--f);margin-left:4px">+ Track</button>'+
-    '</div>';
-
-  });
-
-  el.innerHTML = html || '<div style="font-size:12px;color:var(--t3);padding:8px 0">No emails in last 14 days.</div>';
-
-  var badges = document.querySelectorAll('.nb-r');
-
-  badges.forEach(function(b){ b.textContent = M365.emails.length; });
-
-}
-
-function openEmailView(idx) {
-
-  var e = M365.emails[idx];
-
-  if (!e) return;
-
-  var fromEmail = e.fromEmail || '';
-
-  var subj = (e.subject||'').replace(/'/g,'\'');
-
-  var from = (e.from||'').replace(/'/g,'\'');
-
-  var outlookUrl = 'https://outlook.office.com/mail/inbox';
-
-  openModal(e.from, e.subject,
-
-    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'+
-
-      '<button class="m-btn" style="background:#0078D4" onclick="window.open(\''+outlookUrl+'\',\'_blank\')">📧 Open in Outlook</button>'+
-
-      '<button class="m-btn" onclick="openDraftModal(\''+from+'\',\'Reply to: '+subj+'\',\'Re: '+subj+'\',\'email\',\''+fromEmail+'\')">✉ Draft reply</button>'+
-
-      (e.hasAttachments ? '<button class="m-btn" style="background:var(--a)" onclick="qa(\'The email from '+from+' with subject '+subj+' has attachments. Help me understand what I need to do with them and assist me in completing any forms.\')">📎 Help with attachments</button>' : '')+
-
-    '</div>'+
-
-    '<div class="mfield"><div class="mfl">From</div><div class="mfv">'+e.from+(fromEmail?' &lt;'+fromEmail+'&gt;':'')+'</div></div>'+
-
-    '<div class="mfield"><div class="mfl">Received</div><div class="mfv">'+e.hoursOld+' hours ago · '+new Date(e.received).toLocaleString('en-AU')+'</div></div>'+
-
-    (e.hasAttachments ? '<div class="alert-box warn"><div class="ab-title">📎 This email has attachments</div><div class="ab-text">Click "Help with attachments" for Cinderella to assist.</div></div>' : '')+
-
-    '<div class="mfield"><div class="mfl">Preview</div><div style="font-size:12px;color:var(--t1);line-height:1.6;background:var(--bg2);padding:10px 12px;border-radius:var(--rm);white-space:pre-wrap">'+
-
-      (e.preview||'No preview available')+
-
-    '</div></div>'+
-
-    '<div style="margin-top:4px"><button class="m-btn sec" onclick="loadFullEmail(\''+e.id+'\',\''+from+'\',\''+fromEmail+'\',\''+subj+'\')">Load full email</button></div>'
-
   );
-
+  const data = await response.json();
+  if (data.error) throw new Error(`Token refresh failed: ${data.error_description}`);
+  tokenStore.access_token  = data.access_token;
+  tokenStore.refresh_token = data.refresh_token || tokenStore.refresh_token;
+  tokenStore.expires_at    = Date.now() + (data.expires_in * 1000);
+  return tokenStore.access_token;
 }
 
-async function loadFullEmail(id, from, fromEmail, subj) {
+// ── GRAPH API HELPER ──
+async function graphGet(path, extraHeaders = {}) {
+  const token = await getValidToken();
+  const response = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
+    headers: { Authorization: `Bearer ${token}`, ...extraHeaders }
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error?.message || `Graph error ${response.status}`);
+  }
+  return response.json();
+}
 
-  document.getElementById('m-body').innerHTML += '<div id="fullEmailBody" style="margin-top:12px;font-size:11px;color:var(--t2)">Loading full email...</div>';
-
+// ── EMAILS: Get unreplied emails (cross-referenced with Sent Items) ──
+app.get('/graph/emails', async (req, res) => {
   try {
-
-    var r = await fetch('/graph/email/'+id);
-
-    var d = await r.json();
-
-    var el = document.getElementById('fullEmailBody');
-
-    if (el) el.innerHTML = '<div class="mfield"><div class="mfl">Full email</div><div style="font-size:12px;color:var(--t1);line-height:1.6;background:var(--bg2);padding:10px 12px;border-radius:var(--rm);white-space:pre-wrap;max-height:300px;overflow-y:auto">'+( d.body||d.error||'Could not load')+'</div></div>';
-
-  } catch(ex) {
-
-    var el = document.getElementById('fullEmailBody');
-
-    if (el) el.textContent = 'Failed to load: '+ex.message;
-
-  }
-
-}
-
-// ── TODAY TAB: Load real data ──
-
-async function loadTodayData() {
-
-  // Update meeting count
-
-  var mtgEl = document.getElementById('todayMtgCount');
-
-  var mtgSubEl = document.getElementById('todayMtgSub');
-
-  if (M365.events.length > 0) {
-
-    if (mtgEl) { mtgEl.textContent = M365.events.length; mtgEl.style.color = 'var(--t1)'; }
-
-    if (mtgSubEl) mtgSubEl.textContent = M365.events.length + ' meeting' + (M365.events.length !== 1 ? 's' : '') + ' today';
-
-  }
-
-  // Update email count
-
-  var emailEl = document.getElementById('todayEmailCount');
-
-  var emailSubEl = document.getElementById('todayEmailSub');
-
-  if (M365.emails.length > 0) {
-
-    var overdue = M365.emails.filter(function(e){ return e.hoursOld >= 24; }).length;
-
-    if (emailEl) { emailEl.textContent = M365.emails.length; emailEl.style.color = overdue > 0 ? 'var(--r)' : 'var(--a)'; }
-
-    if (emailSubEl) emailSubEl.textContent = overdue > 0 ? overdue + ' overdue >24h' : 'from last 14 days';
-
-  }
-
-  // Update metrics only - priorities generated on demand to save API credits
-
-  var countEl = document.getElementById('todayPriCount');
-
-  if (countEl) { countEl.textContent = M365.emails.length; }
-
-  // Show static briefing from real data (no AI call)
-
-  await refreshTodayBriefing();
-
-}
-
-async function refreshTodayPriorities() {
-
-  var el = document.getElementById('todayPriorities');
-
-  if (!el) return;
-
-  if (M365.emails.length === 0 && M365.events.length === 0) {
-
-    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Connect M365 to see live priorities.</div>';
-
-    return;
-
-  }
-
-  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Cinderella is analysing your day...</div>';
-
-  var emailSummary = M365.emails.slice(0, 10).map(function(e){
-
-    return e.from + ' (' + e.hoursOld + 'h ago' + (e.hasAttachments ? ' HAS ATTACHMENT' : '') + '): ' + e.subject;
-
-  }).join('\n');
-
-  var calSummary = M365.events.map(function(e){
-
-    return new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'}) + ' — ' + e.subject;
-
-  }).join('\n') || 'No meetings today';
-
-  var staffSummary = SD.length > 0 ? SD.filter(function(s){ return s.capacity >= 85 || (s.blockers && s.blockers.trim()); }).map(function(s){ return s.name + ': ' + s.capacity + '% capacity' + (s.blockers ? ', blocker: ' + s.blockers : ''); }).join('\n') : '';
-
-  var prompt = 'Based on the data below, list the top 5 priorities for Kandia TODAY ranked by urgency. For each priority: one line, start with [High]/[Med]/[Low], be specific (name people, subjects, meeting times). No preamble.\n\nEMAILS:\n' + emailSummary + '\n\nCALENDAR:\n' + calSummary + (staffSummary ? '\n\nSTAFF FLAGS:\n' + staffSummary : '');
-
-  try {
-
-    var r = await fetch('/proxy', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:400,system:SYS,messages:[{role:'user',content:prompt}]})});
-
-    var d = await r.json();
-
-    var text = d.content && d.content[0] ? d.content[0].text : '';
-
-    if (text) {
-
-      var lines = text.split('\n').filter(function(l){ return l.trim(); });
-
-      el.innerHTML = lines.map(function(l) {
-
-        var urgency = l.toLowerCase().includes('[high]') ? 'ph' : l.toLowerCase().includes('[med]') ? 'pm' : 'pl';
-
-        var label = l.toLowerCase().includes('[high]') ? 'High' : l.toLowerCase().includes('[med]') ? 'Med' : 'Low';
-
-        var text2 = l.replace(/\[high\]|\[med\]|\[low\]/gi, '').trim();
-
-        return '<div class="pri" onclick="qa(\'Tell me more about this priority and what I should do: ' + text2.replace(/'/g,'').substring(0,80) + '\'"><span class="pp ' + urgency + '">' + label + '</span><span class="pt">' + text2 + '</span></div>';
-
-      }).join('');
-
-    } else {
-
-      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Could not load priorities. Try refreshing.</div>';
-
-    }
-
-  } catch(ex) {
-
-    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Error loading priorities: ' + ex.message + '</div>';
-
-  }
-
-}
-
-async function refreshTodayBriefing() {
-
-  var el = document.getElementById('todayBriefingContent');
-
-  if (!el) return;
-
-  if (M365.emails.length === 0 && M365.events.length === 0) {
-
-    el.innerHTML = '<div class="ins"><div class="il">Not connected</div><div class="it">Connect M365 to see your live briefing here.</div></div>';
-
-    return;
-
-  }
-
-  var emailCount = M365.emails.length;
-
-  var overdue = M365.emails.filter(function(e){ return e.hoursOld >= 24; }).length;
-
-  var attachments = M365.emails.filter(function(e){ return e.hasAttachments; }).length;
-
-  var mtgCount = M365.events.length;
-
-  var staffBC = document.getElementById('briefingCheckin');
-
-  if (staffBC) {
-
-    var missing = ALL_STAFF.filter(function(s){ var checked = SD.map(function(x){ return x.name.toLowerCase(); }); return !checked.some(function(n){ return n.includes(s.name.split(' ')[0].toLowerCase()); }); });
-
-    staffBC.textContent = SD.length > 0 ? SD.length + ' of 7 check-ins received. ' + missing.length + ' outstanding.' : 'No check-ins yet — send the form to staff.';
-
-  }
-
-  // Build briefing items from real data
-
-  var items = [];
-
-  if (mtgCount > 0) {
-
-    var nextMtg = M365.events[0];
-
-    var nextTime = new Date(nextMtg.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
-
-    items.push({label:'Calendar', text: mtgCount + ' meeting' + (mtgCount > 1 ? 's' : '') + ' today. Next: ' + nextMtg.subject + ' at ' + nextTime + '. Click Ask Cinderella for full prep.', action: "qa('Help me prepare for my meetings today')"});
-
-  }
-
-  if (overdue > 0) {
-
-    var overdueEmails = M365.emails.filter(function(e){ return e.hoursOld >= 24; }).slice(0,3);
-
-    items.push({label:'Overdue emails', text: overdue + ' email' + (overdue > 1 ? 's' : '') + ' critically overdue: ' + overdueEmails.map(function(e){ return e.from; }).join(', ') + '.', action: "show('email',document.querySelector('[onclick*=email]'))"});
-
-  } else if (emailCount > 0) {
-
-    items.push({label:'Emails', text: emailCount + ' email' + (emailCount > 1 ? 's' : '') + ' in your inbox from the last 14 days.', action: "show('email',document.querySelector('[onclick*=email]'))"});
-
-  }
-
-  if (attachments > 0) {
-
-    items.push({label:'Attachments', text: attachments + ' email' + (attachments > 1 ? 's' : '') + ' with attachments needing your attention.', action: "qa('Which of my emails have attachments that need action? Summarise each one.')"});
-
-  }
-
-  var missing2 = ALL_STAFF.filter(function(s){ var checked = SD.map(function(x){ return x.name.toLowerCase(); }); return !checked.some(function(n){ return n.includes(s.name.split(' ')[0].toLowerCase()); }); });
-
-  if (missing2.length > 0) {
-
-    items.push({label:'Staff check-ins', text: missing2.length + ' staff have not submitted their weekly check-in: ' + missing2.map(function(s){ return s.name.split(' ')[0]; }).join(', ') + '.', action: "show('staff',document.querySelector('[onclick*=staff]'))"});
-
-  }
-
-  if (items.length === 0) {
-
-    items.push({label:'All clear', text: 'No urgent items right now. Your inbox is up to date and meetings are covered.', action: "qa('What should I focus on today?')"});
-
-  }
-
-  el.innerHTML = items.map(function(item){
-
-    return '<div class="ins" onclick="' + item.action + '"><div class="il">' + item.label + '</div><div class="it">' + item.text + '</div></div>';
-
-  }).join('');
-
-}
-
-// ── OPENING NOTIFICATION POPUP ──
-
-function showOpeningNotification(briefingText) {
-
-  // Remove existing if present
-
-  var existing = document.getElementById('cinderella-notify');
-
-  if (existing) existing.remove();
-
-  var now = new Date();
-
-  var h = now.getHours();
-
-  var greet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-
-  var overlay = document.createElement('div');
-
-  overlay.id = 'cinderella-notify';
-
-  overlay.style.cssText = 'position:fixed;top:16px;right:16px;width:340px;max-height:80vh;background:var(--bg);border:0.5px solid var(--bm);border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.18);z-index:9999;overflow:hidden;display:flex;flex-direction:column;animation:slideIn 0.3s ease';
-
-  var style = document.createElement('style');
-
-  style.textContent = '@keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}';
-
-  document.head.appendChild(style);
-
-  overlay.innerHTML =
-
-    '<div style="background:linear-gradient(90deg,#0A7A7A,#5DCFC9 60%,#F4C0D1);padding:12px 14px;display:flex;align-items:center;justify-content:space-between">' +
-
-      '<div style="font-family:Georgia,serif;font-size:14px;color:#fff;font-style:italic">Cinderella</div>' +
-
-      '<button onclick="dismissNotify()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center">×</button>' +
-
-    '</div>' +
-
-    '<div style="padding:14px;overflow-y:auto;flex:1">' +
-
-      '<div style="font-size:13px;font-weight:500;color:var(--t1);margin-bottom:10px">' + greet + ', Kandia</div>' +
-
-      '<div style="font-size:12px;color:var(--t1);line-height:1.6;white-space:pre-wrap">' + (briefingText || 'Loading your briefing...') + '</div>' +
-
-    '</div>' +
-
-    '<div style="padding:10px 14px;border-top:0.5px solid var(--bl);display:flex;gap:8px">' +
-
-      '<button onclick="openChatFromNotify()" style="flex:1;background:var(--g);color:#fff;border:none;border-radius:8px;padding:7px;font-size:11px;cursor:pointer;font-family:var(--f)">Open chat</button>' +
-
-      '<button onclick="dismissNotify()" style="flex:1;background:var(--bg2);color:var(--t2);border:0.5px solid var(--bm);border-radius:8px;padding:7px;font-size:11px;cursor:pointer;font-family:var(--f)">Got it</button>' +
-
-    '</div>';
-
-  document.getElementById('appRoot').appendChild(overlay);
-
-  // Auto-dismiss after 60 seconds
-
-  setTimeout(function(){
-
-    var el = document.getElementById('cinderella-notify');
-
-    if (el) { el.style.opacity = '0'; el.style.transition = 'opacity 0.5s'; setTimeout(function(){ if(el)el.remove(); }, 500); }
-
-  }, 60000);
-
-}
-
-async function generateOpeningNotification() {
-
-  // Build quick briefing text for the popup
-
-  var lines = [];
-
-  if (M365.events.length > 0) {
-
-    lines.push('📅 ' + M365.events.length + ' meeting' + (M365.events.length > 1 ? 's' : '') + ' today:');
-
-    M365.events.forEach(function(e){
-
-      lines.push('  ' + new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'}) + ' — ' + e.subject);
-
-    });
-
-  }
-
-  var overdue = M365.emails.filter(function(e){ return e.hoursOld >= 24; });
-
-  if (overdue.length > 0) {
-
-    lines.push('');
-
-    lines.push('⚠ ' + overdue.length + ' overdue email' + (overdue.length > 1 ? 's' : '') + ':');
-
-    overdue.slice(0,3).forEach(function(e){ lines.push('  ' + e.from + ': ' + e.subject); });
-
-  }
-
-  var attachments = M365.emails.filter(function(e){ return e.hasAttachments; });
-
-  if (attachments.length > 0) {
-
-    lines.push('');
-
-    lines.push('📎 ' + attachments.length + ' email' + (attachments.length > 1 ? 's' : '') + ' with attachments needing attention');
-
-  }
-
-  var missing = ALL_STAFF.filter(function(s){ var checked = SD.map(function(x){ return x.name.toLowerCase(); }); return !checked.some(function(n){ return n.includes(s.name.split(' ')[0].toLowerCase()); }); });
-
-  if (missing.length > 0) {
-
-    lines.push('');
-
-    lines.push('👥 ' + missing.length + ' staff check-ins outstanding');
-
-  }
-
-  if (lines.length === 0) lines.push('No urgent items right now. Have a great day!');
-
-  showOpeningNotification(lines.join('\n'));
-
-}
-
-// ── INFO@ MAILBOX ──
-
-var infoEmails = [];
-
-async function loadInfoEmails() {
-
-  try {
-
-    var r = await fetch('/graph/info-emails');
-
-    if (!r.ok) {
-      // Silently skip — info@ needs delegate access in M365 admin centre
-      console.warn('info@ mailbox unavailable (status', r.status, ')— grant Kandia delegate access to info@ in M365 admin');
-      return;
-    }
-
-    var d = await r.json();
-
-    infoEmails = d.emails || [];
-
-    console.log('info@ emails loaded:', infoEmails.length, 'emails');
-
-    if (infoEmails.length === 0) {
-
-      var el2 = document.getElementById('infoEmailList');
-
-      if (el2) el2.innerHTML = '<div style="font-size:10px;color:var(--t3);padding:4px 0">info@ — no unreplied emails</div>';
-
-    }
-
-    renderInfoEmails();
-
-  } catch(e) {
-
-    console.warn('info@ load failed:', e.message);
-
-  }
-
-}
-
-function renderInfoEmails() {
-
-  var el = document.getElementById('infoEmailList');
-
-  if (!el || infoEmails.length === 0) return;
-
-  el.innerHTML = '<div style="font-size:10px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;padding:8px 0 4px">info@risk2solution.com</div>' +
-
-    infoEmails.map(function(e, idx) {
-
-      var attach = e.hasAttachments ? ' <span style="color:var(--a);font-size:9px">📎</span>' : '';
-
-      var unread = !e.isRead ? '<span style="width:6px;height:6px;border-radius:50%;background:var(--b);display:inline-block;margin-right:4px"></span>' : '';
-
-      var overdue = e.hoursOld >= 24 ? '<span class="eu">Overdue</span>' : '';
-
-      return '<div class="erow" onclick="openInfoEmailView(' + idx + ')">' +
-
-        '<div class="ei"><div class="ef" style="display:flex;align-items:center">' + unread + e.from + attach + '</div>' +
-
-        '<div class="es">' + e.subject + '</div></div>' +
-
-        '<div class="ea">' + e.hoursOld + 'h ' + overdue + '</div></div>';
-
-    }).join('');
-
-}
-
-function openInfoEmailView(idx) {
-
-  var e = infoEmails[idx];
-
-  if (!e) return;
-
-  var fromEmail = e.fromEmail || '';
-
-  var subj = (e.subject||'').replace(/'/g,'');
-
-  var from = (e.from||'').replace(/'/g,'');
-
-  openModal(e.from + ' → info@risk2solution.com', e.subject,
-
-    '<div style="background:var(--bl2);border-radius:var(--rm);padding:6px 10px;font-size:10px;color:#185FA5;margin-bottom:12px">📬 Received by <strong>info@risk2solution.com</strong></div>' +
-
-    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">' +
-
-      '<button class="m-btn" style="background:#0078D4" onclick="openOutlook()">📧 Open in Outlook</button>' +
-
-      '<button class="m-btn" onclick="replyToInfoEmail(' + idx + ')">✉ Draft reply</button>' +
-
-    '</div>' +
-
-    '<div class="mfield"><div class="mfl">From</div><div class="mfv">' + e.from + (fromEmail ? ' &lt;' + fromEmail + '&gt;' : '') + '</div></div>' +
-
-    '<div class="mfield"><div class="mfl">Received</div><div class="mfv">' + e.hoursOld + ' hours ago</div></div>' +
-
-    (e.hasAttachments ? '<div class="alert-box warn"><div class="ab-title">📎 Has attachments</div></div>' : '') +
-
-    '<div class="mfield"><div class="mfl">Preview</div><div style="font-size:12px;color:var(--t1);line-height:1.6;background:var(--bg2);padding:10px 12px;border-radius:var(--rm);white-space:pre-wrap">' + (e.preview || 'No preview') + '</div></div>'
-
-  );
-
-}
-
-function replyToInfoEmail(idx) {
-
-  var e = infoEmails[idx];
-
-  if (!e) return;
-
-  openDraftModal(e.from, 'Reply to info@ email: ' + e.subject, 'Re: ' + e.subject, 'email', e.fromEmail);
-
-}
-
-function openOutlook(){ window.open('https://outlook.office.com/mail/inbox','_blank'); }
-
-
-function feedbackClick(i) {
-  var f = window._feedbackItems && window._feedbackItems[i];
-  if (!f) return;
-  qa('Draft a professional follow-up response to ' + f.client + ' regarding their feedback: ' + f.note);
-}
-
-function r2sProjectClick(i) {
-  var p = window._r2sProjects && window._r2sProjects[i];
-  if (!p) return;
-  qa('Tell me about the ' + p.company + ' project — current status, any blockers, and what I need to action this week.');
-}
-
-function openOutlookDrafts(){ window.open('https://outlook.office.com/mail/drafts','_blank'); }
-
-function dismissNotify(){ var el=document.getElementById('cinderella-notify'); if(el)el.remove(); }
-
-function openChatFromNotify(){ dismissNotify(); show('chat',document.querySelector('[onclick*=chat]')); }
-
-// ── MONDAY.COM FUNCTIONS ──
-
-var mondayData = { boards: [], feedback: [] };
-
-async function loadMondayData() {
-
-  var statusEl = document.getElementById('mondayStatus');
-
-  try {
-
-    var results = await Promise.all([
-
-      fetch('/monday/projects').then(function(r){ return r.json(); }),
-
-      fetch('/monday/feedback').then(function(r){ return r.json(); })
-
+    const fourteenDaysAgo = new Date(Date.now() - 14*24*60*60*1000).toISOString();
+
+    // Fetch inbox and sent items in parallel
+    const [inboxData, sentData] = await Promise.all([
+      graphGet(`/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${fourteenDaysAgo}&$orderby=receivedDateTime desc&$top=80&$select=subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,conversationId`),
+      graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${fourteenDaysAgo}&$select=conversationId&$top=100`)
     ]);
 
-    var projectData = results[0];
+    // Build set of conversation IDs already replied to
+    const repliedConversations = new Set(
+      (sentData.value || []).map(m => m.conversationId).filter(Boolean)
+    );
 
-    var feedbackData = results[1];
+    const noReply = ['noreply','no-reply','donotreply','do-not-reply','mailer-daemon','notifications@','notification@','automated@','alerts@','alert@','newsletter','@bounce','postmaster','news@','updates@','subscriptions@','unsubscribe','no_reply'];
+    const skipKeywords = ['capcoal','unsubscribe','notification','automated message','out of office','auto-reply','autoreply','luxury escapes','island printing','special offer','limited time','click here','dear customer','dear valued','winner','prize','survey','feedback request','receipt for','payment confirmation','order confirmation','shipping confirmation','your order','invoice #','statement of account'];
+    const spamDomains = ['luxuryescapes','islandprinting','mailchimp','constantcontact','campaignmonitor','sendgrid','klaviyo','hubspot','marketo','pardot'];
 
-    if (projectData.error) {
-
-      if (statusEl) statusEl.innerHTML = '<div class="alert-box warn"><div class="ab-title">Monday.com not connected</div><div class="ab-text">Add MONDAY_API_KEY to Render environment variables.</div></div>';
-
-      return;
-
-    }
-
-    mondayData.boards = projectData.boards || [];
-
-    mondayData.feedback = feedbackData.feedback || [];
-
-    if (statusEl) {
-
-      var totalItems = mondayData.boards.reduce(function(acc, b){ return acc + (b.items ? b.items.length : 0); }, 0);
-
-      statusEl.innerHTML = '<div class="alert-box ok"><div class="ab-title">✅ Monday.com connected · ' + totalItems + ' items across ' + mondayData.boards.length + ' boards</div>' +
-
-        mondayData.boards.map(function(b){
-
-          var items = b.items || [];
-
-          return '<div style="margin-top:6px"><strong>' + b.name + '</strong> (' + items.length + ' items)' +
-
-            (items.length > 0 ? '<div style="margin-top:4px">' + items.slice(0,5).map(function(item){
-
-              var status = item.column_values ? item.column_values.find(function(cv){ return cv.title && (cv.title.toLowerCase().includes('status') || cv.title.toLowerCase().includes('state')); }) : null;
-
-              return '<div style="font-size:10px;padding:2px 0;border-bottom:0.5px solid rgba(0,0,0,0.06)">' + item.name + (status && status.text ? ' — <span style="color:var(--g)">' + status.text + '</span>' : '') + '</div>';
-
-            }).join('') + (items.length > 5 ? '<div style="font-size:10px;color:var(--t3);margin-top:3px">+ ' + (items.length-5) + ' more items</div>' : '') + '</div>' : '') + '</div>';
-
-        }).join('') + '</div>';
-
-    }
-
-  } catch(ex) {
-
-    if (statusEl) statusEl.innerHTML = '<div class="alert-box warn"><div class="ab-title">Monday.com error</div><div class="ab-text">' + ex.message + '</div></div>';
-
+    const emails = inboxData.value
+      .filter(m => {
+        const addr = (m.from?.emailAddress?.address || '').toLowerCase();
+        const name = (m.from?.emailAddress?.name || '').toLowerCase();
+        const subj = (m.subject || '').toLowerCase();
+        if (noReply.some(p => addr.includes(p))) return false;
+        if (skipKeywords.some(p => subj.includes(p) || addr.includes(p))) return false;
+        if (spamDomains.some(p => addr.includes(p))) return false;
+        if (name.includes('automated') || name.includes('no reply') || name.includes('no-reply')) return false;
+        // Exclude if already replied to in this conversation
+        if (m.conversationId && repliedConversations.has(m.conversationId)) return false;
+        return true;
+      })
+      .slice(0, 25)
+      .map(m => ({
+        id: m.id,
+        subject: m.subject,
+        from: m.from?.emailAddress?.name || m.from?.emailAddress?.address,
+        fromEmail: m.from?.emailAddress?.address,
+        received: m.receivedDateTime,
+        preview: m.bodyPreview?.substring(0, 300),
+        hasAttachments: m.hasAttachments || false,
+        isRead: m.isRead || false,
+        conversationId: m.conversationId,
+        hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000)
+      }));
+    res.json({ emails });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-}
-
-function analyseMondayData() {
-
-  if (mondayData.boards.length === 0) {
-
-    qa('Summarise the current status of all client projects at Risk 2 Solution and flag anything needing attention.');
-
-    return;
-
-  }
-
-  var ctx = 'MONDAY.COM LIVE DATA (' + new Date().toLocaleDateString('en-AU') + ')\n\n';
-
-  mondayData.boards.forEach(function(b) {
-
-    ctx += 'BOARD: ' + b.name + '\n';
-
-    var items = b.items || [];
-
-    items.forEach(function(item) {
-
-      var cols = item.column_values ? item.column_values.filter(function(cv){ return cv.text && cv.text.trim(); }).map(function(cv){ return cv.title + ': ' + cv.text; }).join(' | ') : '';
-
-      ctx += '  - ' + item.name + (item.state ? ' [' + item.state + ']' : '') + (cols ? ' | ' + cols : '') + '\n';
-
-    });
-
-    ctx += '\n';
-
-  });
-
-  if (mondayData.feedback.length > 0) {
-
-    ctx += 'CLIENT FEEDBACK (' + mondayData.feedback.length + ' items):\n';
-
-    mondayData.feedback.forEach(function(item) {
-
-      var cols = item.column_values ? item.column_values.filter(function(cv){ return cv.text && cv.text.trim(); }).map(function(cv){ return cv.title + ': ' + cv.text; }).join(' | ') : '';
-
-      ctx += '  - ' + item.name + (cols ? ' | ' + cols : '') + '\n';
-
-    });
-
-  }
-
-  qa('Here is my live Monday.com project and feedback data. Please: (1) summarise all active projects and their current status, (2) flag anything overdue, at risk, or needing my immediate attention, (3) summarise client feedback themes, (4) give me a prioritised action list.\n\n' + ctx.substring(0, 3500));
-
-}
-
-function exportMondayToExcel() {
-
-  if (mondayData.boards.length === 0) {
-
-    alert('No Monday.com data loaded yet. Open Client Delivery to load data first.');
-
-    return;
-
-  }
-
-  if (typeof XLSX === 'undefined') {
-
-    alert('Excel library not loaded. Please refresh the page and try again.');
-
-    return;
-
-  }
-
-  var wb = XLSX.utils.book_new();
-
-  // Sheet for each board
-
-  mondayData.boards.forEach(function(b) {
-
-    var items = b.items || [];
-
-    if (items.length === 0) return;
-
-    // Get all column titles
-
-    var allCols = [];
-
-    items.forEach(function(item) {
-
-      (item.column_values || []).forEach(function(cv) {
-
-        if (cv.title && !allCols.includes(cv.id)) allCols.push(cv.id);
-
-      });
-
-    });
-
-    var headers = ['Item Name', 'Status'].concat(allCols);
-
-    var rows = [headers];
-
-    items.forEach(function(item) {
-
-      var row = [item.name, item.state || ''];
-
-      allCols.forEach(function(col) {
-
-        var cv = (item.column_values || []).find(function(c){ return c.title === col; });
-
-        row.push(cv ? (cv.text || '') : '');
-
-      });
-
-      rows.push(row);
-
-    });
-
-    // Convert column ids to readable headers
-
-rows[0] = rows[0].map(function(h){ return h.replace(/_/g,' ').replace(/\b\w/g, function(l){ return l.toUpperCase(); }); });
-
-var ws = XLSX.utils.aoa_to_sheet(rows);
-
-    // Set column widths
-
-    ws['!cols'] = headers.map(function(){ return { wch: 20 }; });
-
-    var sheetName = b.name.substring(0, 31); // Excel sheet name limit
-
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
-
-  });
-
-  // Feedback sheet
-
-  if (mondayData.feedback.length > 0) {
-
-    var allFbCols = [];
-
-    mondayData.feedback.forEach(function(item) {
-
-      (item.column_values || []).forEach(function(cv) {
-
-        if (cv.title && !allFbCols.includes(cv.id)) allFbCols.push(cv.id);
-
-      });
-
-    });
-
-    var fbHeaders = ['Item Name'].concat(allFbCols);
-
-    var fbRows = [fbHeaders];
-
-    mondayData.feedback.forEach(function(item) {
-
-      var row = [item.name];
-
-      allFbCols.forEach(function(col) {
-
-        var cv = (item.column_values || []).find(function(c){ return c.title === col; });
-
-        row.push(cv ? (cv.text || '') : '');
-
-      });
-
-      fbRows.push(row);
-
-    });
-
-    var fbWs = XLSX.utils.aoa_to_sheet(fbRows);
-
-    fbWs['!cols'] = fbHeaders.map(function(){ return { wch: 20 }; });
-
-    XLSX.utils.book_append_sheet(wb, fbWs, 'Client Feedback');
-
-  }
-
-  var filename = 'R2S_Projects_' + new Date().toLocaleDateString('en-AU').replace(/\//g, '-') + '.xlsx';
-
-  XLSX.writeFile(wb, filename);
-
-}
-
-// ── STAFF WEEK/MONTH TRACKING ──
-
-var currentStaffView = 'week';
-
-var allHistoricalData = []; // All check-ins ever stored with week stamps
-
-function setStaffView(view) {
-
-  currentStaffView = view;
-
-  ['Week','Month','History'].forEach(function(v) {
-
-    var btn = document.getElementById('staffView'+v+'View') || document.getElementById('view'+v+'Btn');
-
-    if (btn) btn.classList.remove('active');
-
-  });
-
-  document.getElementById('view'+view.charAt(0).toUpperCase()+view.slice(1)+'Btn').classList.add('active');
-
-  document.getElementById('staffWeekView').style.display = view === 'week' ? 'block' : 'none';
-
-  document.getElementById('staffMonthView').style.display = view === 'month' ? 'block' : 'none';
-
-  document.getElementById('staffHistoryView').style.display = view === 'history' ? 'block' : 'none';
-
-  if (view === 'month') renderMonthSummary();
-
-  if (view === 'history') renderHistory();
-
-}
-
-function getWeekEnding(dateStr) {
-
-  // Get the Friday of the week for a given date
-
-  var d = new Date(dateStr || Date.now());
-
-  var day = d.getDay();
-
-  var diff = (day <= 5) ? (5 - day) : (12 - day);
-
-  d.setDate(d.getDate() + diff);
-
-  return d.toISOString().split('T')[0];
-
-}
-
-function getMonthKey(dateStr) {
-
-  var d = new Date(dateStr || Date.now());
-
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-
-}
-
-function getMonthLabel(monthKey) {
-
-  var parts = monthKey.split('-');
-
-  var d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, 1);
-
-  return d.toLocaleString('en-AU', { month: 'long', year: 'numeric' });
-
-}
-
-function groupByWeek(submissions) {
-
-  var weeks = {};
-
-  submissions.forEach(function(s) {
-
-    var wk = s.weekEnding || getWeekEnding(s.submitted);
-
-    if (!weeks[wk]) weeks[wk] = [];
-
-    var existing = weeks[wk].findIndex(function(e) { return e.name && s.name && e.name.toLowerCase() === s.name.toLowerCase(); });
-
-    if (existing >= 0) {
-
-      if (new Date(s.submitted) > new Date(weeks[wk][existing].submitted)) weeks[wk][existing] = s;
-
+});
+
+
+
+// ── EMAILS: Read info@risk2solution.com shared mailbox ──
+app.get('/graph/info-emails', async (req, res) => {
+  try {
+    const fourteenDaysAgo = new Date(Date.now() - 14*24*60*60*1000).toISOString();
+    const data = await graphGet(
+      `/users/info@risk2solution.com/mailFolders/inbox/messages?$filter=receivedDateTime ge ${fourteenDaysAgo}&$orderby=receivedDateTime desc&$top=30&$select=subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,conversationId`
+    );
+    // Fetch sent items to filter out replied conversations
+    const sentData = await graphGet(
+      `/users/info@risk2solution.com/mailFolders/sentitems/messages?$filter=createdDateTime ge ${fourteenDaysAgo}&$select=conversationId&$top=100`
+    ).catch(() => ({ value: [] }));
+    const infoReplied = new Set((sentData.value || []).map(m => m.conversationId).filter(Boolean));
+
+    const noReply = ['noreply','no-reply','donotreply','mailer-daemon','notifications@','automated@','newsletter','@bounce'];
+    const skipKeywords = ['unsubscribe','capcoal','luxury escapes','island printing','out of office','auto-reply','automated'];
+
+    const emails = (data.value || [])
+      .filter(m => {
+        const addr = (m.from?.emailAddress?.address || '').toLowerCase();
+        const subj = (m.subject || '').toLowerCase();
+        if (noReply.some(p => addr.includes(p))) return false;
+        if (skipKeywords.some(p => subj.includes(p) || addr.includes(p))) return false;
+        if (m.conversationId && infoReplied.has(m.conversationId)) return false;
+        return true;
+      })
+      .slice(0, 15)
+      .map(m => ({
+        id: m.id,
+        subject: m.subject,
+        from: m.from?.emailAddress?.name || m.from?.emailAddress?.address,
+        fromEmail: m.from?.emailAddress?.address,
+        received: m.receivedDateTime,
+        preview: m.bodyPreview?.substring(0, 200),
+        hasAttachments: m.hasAttachments || false,
+        isRead: m.isRead || false,
+        mailbox: 'info@risk2solution.com',
+        hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000)
+      }));
+    res.json({ emails });
+  } catch (err) {
+    if (err.message.includes('ErrorAccessDenied') || err.message.includes('AuthenticationError') || err.message.includes('401')) {
+      res.status(403).json({ error: 'info@ mailbox access denied. Kandia needs delegate access to info@risk2solution.com' });
     } else {
-
-      weeks[wk].push(s);
-
+      res.status(500).json({ error: err.message });
     }
-
-  });
-
-  return weeks;
-
-}
-
-function sortWeeks(weeks) {
-
-  // Sort week keys chronologically even if they are formatted strings like "16 May 2026"
-
-  return Object.keys(weeks).sort(function(a, b) {
-
-    var da = new Date(a);
-
-    var db = new Date(b);
-
-    if (isNaN(da)) da = new Date(a.replace(/(\d+)\s(\w+)\s(\d+)/, '$2 $1 $3'));
-
-    if (isNaN(db)) db = new Date(b.replace(/(\d+)\s(\w+)\s(\d+)/, '$2 $1 $3'));
-
-    return da - db;
-
-  });
-
-}
-
-function groupByMonth(submissions) {
-
-  var months = {};
-
-  submissions.forEach(function(s) {
-
-    var mk = getMonthKey(s.submitted || s.weekEnding);
-
-    if (!months[mk]) months[mk] = [];
-
-    months[mk].push(s);
-
-  });
-
-  return months;
-
-}
-
-function calcWeekStats(submissions) {
-
-  if (!submissions || submissions.length === 0) return null;
-
-  var caps = submissions.map(function(s) { return s.capacity || 0; });
-
-  var avg = Math.round(caps.reduce(function(a, b) { return a + b; }, 0) / caps.length);
-
-  var overloaded = submissions.filter(function(s) { return s.capacity >= 85; }).length;
-
-  var available = submissions.filter(function(s) { return s.capacity < 65; }).length;
-
-  var blockers = submissions.filter(function(s) { return hasBlocker(s.blockers); }).length;
-
-  return { avg: avg, overloaded: overloaded, available: available, blockers: blockers, count: submissions.length };
-
-}
-
-function renderMonthSummary() {
-
-  // Get all data from JSONBin to build history
-
-  if (!C.bin || !C.key) {
-
-    document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">JSONBin not configured.</div>';
-
-    return;
-
   }
+});
 
-  document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading monthly data...</div>';
+// ── EMAILS: Search emails by topic (for meeting prep) ──
+app.get('/graph/emails/search', async (req, res) => {
+  try {
+    const { topic } = req.query;
+    if (!topic) return res.json({ emails: [] });
+    const data = await graphGet(
+      `/me/messages?$search="${encodeURIComponent(topic)}"&$top=10&$select=subject,from,receivedDateTime,bodyPreview,hasAttachments`
+    );
+    const emails = (data.value || []).map(m => ({
+      subject: m.subject,
+      from: m.from?.emailAddress?.name || m.from?.emailAddress?.address,
+      fromEmail: m.from?.emailAddress?.address,
+      received: m.receivedDateTime,
+      preview: m.bodyPreview?.substring(0, 200),
+      hasAttachments: m.hasAttachments || false,
+      hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000)
+    }));
+    res.json({ emails });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-  // Use cached data if available, otherwise fetch
+// ── CALENDAR: Get today's events ──
+app.get('/graph/calendar', async (req, res) => {
+  try {
+    // Brisbane is UTC+10 (no daylight saving)
+    const BRISBANE_OFFSET_MS = 10 * 60 * 60 * 1000;
+    const now = new Date();
+    // Shift now forward by 10h to get Brisbane's current date
+    const brisbaneNow = new Date(now.getTime() + BRISBANE_OFFSET_MS);
+    const y = brisbaneNow.getUTCFullYear();
+    const m = brisbaneNow.getUTCMonth();
+    const d = brisbaneNow.getUTCDate();
+    // Brisbane midnight in UTC = subtract 10h offset
+    const startOfDay = new Date(Date.UTC(y, m, d, 0, 0, 0) - BRISBANE_OFFSET_MS).toISOString();
+    const endOfDay   = new Date(Date.UTC(y, m, d, 23, 59, 59) - BRISBANE_OFFSET_MS).toISOString();
+    const data = await graphGet(
+      `/me/calendarView?startDateTime=${startOfDay}&endDateTime=${endOfDay}&$orderby=start/dateTime&$select=subject,start,end,location,attendees`,
+      { 'Prefer': 'outlook.timezone="Australia/Brisbane"' }
+    );
+    const events = data.value.map(e => ({
+      subject: e.subject,
+      start: e.start?.dateTime,
+      end: e.end?.dateTime,
+      location: e.location?.displayName || '',
+      attendees: e.attendees?.map(a => a.emailAddress?.name).filter(Boolean).slice(0, 5)
+    }));
+    res.json({ events, brisbaneNow });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-  // Always fetch fresh from JSONBin for accurate month/history data
+// ── CALENDAR: Create an event ──
+app.post('/graph/calendar/create', async (req, res) => {
+  try {
+    const token = await getValidToken();
+    const { subject, start, end, attendees, body } = req.body;
+    const response = await fetch('https://graph.microsoft.com/v1.0/me/events', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subject,
+        start: { dateTime: start, timeZone: 'Australia/Brisbane' },
+        end:   { dateTime: end,   timeZone: 'Australia/Brisbane' },
+        body:  { contentType: 'text', content: body || '' },
+        attendees: (attendees || []).map(email => ({
+          emailAddress: { address: email }, type: 'required'
+        }))
+      })
+    });
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    res.json({ success: true, event: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-  var fetchFn = (window._allCheckIns && window._allCheckIns.length > 0)
+// ── TEAMS: Get recent unread chats ──
+app.get('/graph/teams', async (req, res) => {
+  try {
+    console.log('[Teams] Fetching chats...');
+    const chatsData = await graphGet('/me/chats?$top=20&$expand=members');
+    if (chatsData.error) {
+      console.warn('[Teams] Graph error:', JSON.stringify(chatsData.error));
+      return res.status(400).json({ error: chatsData.error.message || 'Graph API error', chats: [] });
+    }
+    const allChats = chatsData.value || [];
+    console.log('[Teams] Found', allChats.length, 'chats');
+    const chats = [];
+    for (const chat of allChats.slice(0, 15)) {
+      try {
+        const msgs = await graphGet('/me/chats/' + chat.id + '/messages?$top=5');
+        const valid = (msgs.value || []).filter(m => m.body && m.body.content && m.from && m.from.user && m.from.user.displayName);
+        if (valid.length > 0) {
+          // Get participant names for topic
+          const members = (chat.members || []).map(m => (m.displayName || '').split(' ')[0]).filter(Boolean).join(', ');
+          chats.push({
+            chatId: chat.id,
+            topic: chat.topic || members || 'Direct message',
+            lastMessage: valid[0].body.content.replace(/<[^>]*>/g, '').substring(0, 150),
+            from: valid[0].from.user.displayName,
+            time: valid[0].createdDateTime
+          });
+        }
+      } catch (e) { console.warn('[Teams] Skipping chat:', e.message); }
+    }
+    console.log('[Teams] Returning', chats.length, 'chats with messages');
+    res.json({ chats });
+  } catch (err) {
+    console.error('[Teams] Fatal error:', err.message);
+    res.status(500).json({ error: err.message, chats: [] });
+  }
+});
 
-    ? Promise.resolve(window._allCheckIns)
 
-    : fetch('/checkins/latest')
+// ── MONDAY.COM: Get approved boards only ──
+const MONDAY_BOARD_IDS = [2031906973, 2005758439]; // Project/Client Feedback + Client Projects ONLY
 
-        .then(function(r){ return r.json(); })
+// ── AURORA INTEGRATION ──
+const AURORA_URL      = process.env.AURORA_URL      || 'https://aurora-agent-b6f3b2fcd3a9gqct.australiaeast-01.azurewebsites.net';
+const AURORA_PASSWORD = process.env.AURORA_PASSWORD || '';
 
-        .then(function(d){ return (Array.isArray(d.record)?d.record:[]).filter(function(e){return e&&e.name;}); });
+function getAuroraToken() {
+  if (!AURORA_PASSWORD) throw new Error('AURORA_PASSWORD not set in environment variables');
+  return Buffer.from('aurora:' + AURORA_PASSWORD + ':' + Date.now()).toString('base64');
+}
 
-  fetchFn
+async function callAurora(path) {
+  const token = getAuroraToken();
+  const res = await fetch(AURORA_URL + path, {
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
+  });
+  if (!res.ok) throw new Error('Aurora ' + path + ' returned ' + res.status);
+  return res.json();
+}
 
-    .then(function(all) {
-
-      window._allCheckIns = all; // update cache
-
-      var byMonth = groupByMonth(all);
-
-      var months = Object.keys(byMonth).sort().reverse();
-
-      if (months.length === 0) {
-
-        document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">No historical data yet. Check-ins submitted this week will be stored here.</div>';
-
-        return;
-
+app.get('/monday/projects', async (req, res) => {
+  const apiKey = process.env.MONDAY_API_KEY;
+  if (!apiKey) return res.status(400).json({ error: 'MONDAY_API_KEY not configured in Render environment variables' });
+  try {
+    const query = `{
+      boards(ids: [2031906973, 2005758439]) {
+        id
+        name
+        state
+        items_count
+        items_page(limit: 100) {
+          items {
+            id
+            name
+            state
+            column_values {
+              id
+              text
+            }
+          }
+        }
       }
-
-      // Build month navigation
-
-      var navHtml = months.map(function(mk, i) {
-
-        return '<button class="month-tab' + (i === 0 ? ' active' : '') + '" data-mk="' + mk + '" onclick="showMonthFromBtn(this)">' + getMonthLabel(mk) + '</button>';
-
-      }).join('');
-
-      document.getElementById('monthNavBar').innerHTML = navHtml;
-
-      showMonth(months[0], byMonth);
-
-      window._allMonthData = byMonth;
-
-    })
-
-    .catch(function(e) {
-
-      document.getElementById('monthContent').innerHTML = '<div style="font-size:12px;color:var(--r);padding:8px 0">Error loading data: ' + e.message + '</div>';
-
+    }`;
+    const response = await fetch('https://api.monday.com/v2', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+        'API-Version': '2024-01'
+      },
+      body: JSON.stringify({ query })
     });
-
-}
-
-function showMonthFromCard(card) {
-
-  var mk = card.getAttribute('data-monthkey');
-
-  // Stay in history view and show the month detail there
-
-  showHistoryMonth(mk);
-
-}
-
-function showMonthFromCardInMonthly(mk) {
-
-  // Switch to monthly view and show month
-
-  setStaffView('month');
-
-  showMonth(mk);
-
-  document.querySelectorAll('.month-tab').forEach(function(btn) {
-
-    btn.classList.toggle('active', btn.getAttribute('data-mk') === mk);
-
-  });
-
-}
-
-function showMonthFromBtn(btn) {
-
-  var mk = btn.getAttribute('data-mk');
-
-  showMonth(mk);
-
-}
-
-function showMonth(monthKey, byMonth) {
-
-  window._currentMonthKey = monthKey;
-
-  if (byMonth) window._allMonthData = byMonth;
-
-  renderMonthContent(monthKey);
-
-}
-
-function _showMonthOld(monthKey, byMonth) {
-
-  window._currentMonthKey = monthKey;
-
-  var data = byMonth || window._allMonthData || {};
-
-  document.querySelectorAll('.month-tab').forEach(function(t) {
-
-    t.classList.toggle('active', t.textContent === getMonthLabel(monthKey));
-
-  });
-
-  var submissions = data[monthKey] || [];
-
-  var byWeek = groupByWeek(submissions);
-
-  var weeks = Object.keys(byWeek).sort().reverse();
-
-  var el = document.getElementById('monthContent');
-
-  if (weeks.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No data for this month.</div>'; return; }
-
-  // Month overview stats
-
-  var allStats = calcWeekStats(submissions);
-
-  var html = '<div class="mrow" style="margin-bottom:16px">' +
-
-    '<div class="met"><div class="ml">Month avg capacity</div><div class="mv" style="color:' + (allStats.avg >= 80 ? 'var(--a)' : 'var(--g)') + '">' + allStats.avg + '%</div><div class="ms">' + allStats.count + ' submissions</div></div>' +
-
-    '<div class="met"><div class="ml">Overloaded weeks</div><div class="mv" style="color:var(--r)">' + weeks.filter(function(w) { return calcWeekStats(byWeek[w]).overloaded > 0; }).length + '</div><div class="ms">of ' + weeks.length + ' weeks</div></div>' +
-
-    '<div class="met"><div class="ml">Blockers raised</div><div class="mv" style="color:var(--a)">' + allStats.blockers + '</div><div class="ms">this month</div></div>' +
-
-    '<div class="met" onclick="generateMonthReport(window._currentMonthKey)"><div class="ml">AI analysis</div><div class="mv" style="font-size:14px;color:var(--b)">Ask</div><div class="ms">Cinderella</div></div>' +
-
-    '</div>';
-
-  // Week by week breakdown
-
-  html += '<div class="card"><div class="ct">Week by week — ' + getMonthLabel(monthKey) + '</div>';
-
-  weeks.forEach(function(wk) {
-
-    var ws = calcWeekStats(byWeek[wk]);
-
-    var wkLabel = 'Week ending ' + new Date(wk).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
-
-    html += '<div style="padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer;" data-wk="' + wk + '" onclick="showWeekDetailFromEl(this)">' +
-
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
-
-        '<span style="font-size:12px;font-weight:500;color:var(--t1)">' + wkLabel + '</span>' +
-
-        '<span style="font-size:11px;color:' + (ws.avg >= 80 ? 'var(--a)' : 'var(--g)') + '">' + ws.avg + '% avg · ' + ws.count + ' check-ins</span>' +
-
-      '</div>' +
-
-      '<div style="display:flex;gap:12px;font-size:10px;color:var(--t2)">' +
-
-        (ws.overloaded > 0 ? '<span style="color:var(--r)">⚠ ' + ws.overloaded + ' overloaded</span>' : '') +
-
-        (ws.available > 0 ? '<span style="color:var(--g)">✓ ' + ws.available + ' available</span>' : '') +
-
-        (ws.blockers > 0 ? '<span style="color:var(--a)">🚧 ' + ws.blockers + ' blockers</span>' : '') +
-
-      '</div>' +
-
-    '</div>';
-
-  });
-
-  html += '</div>';
-
-  // Per-staff trends
-
-  html += '<div class="card"><div class="ct">Staff trends this month</div>' + renderStaffTrends(byWeek, weeks) + '</div>';
-
-  el.innerHTML = html;
-
-}
-
-function renderStaffTrends(byWeek, weeks) {
-
-  var staffMap = {};
-
-  weeks.forEach(function(wk) {
-
-    byWeek[wk].forEach(function(s) {
-
-      var nm = cap(s.name);
-
-      if (!staffMap[nm]) staffMap[nm] = [];
-
-      staffMap[nm].push({ week: wk, capacity: s.capacity, blockers: s.blockers });
-
-    });
-
-  });
-
-  return Object.entries(staffMap).map(function(entry) {
-
-    var nm = entry[0], records = entry[1].sort(function(a, b) { return a.week < b.week ? -1 : 1; });
-
-    var caps = records.map(function(r) { return r.capacity; });
-
-    var avg = Math.round(caps.reduce(function(a, b) { return a + b; }, 0) / caps.length);
-
-    var trend = caps.length > 1 ? (caps[caps.length - 1] - caps[0] > 5 ? '↑ Rising' : caps[0] - caps[caps.length - 1] > 5 ? '↓ Falling' : '→ Stable') : '—';
-
-    var trendCol = trend.includes('Rising') ? 'var(--r)' : trend.includes('Falling') ? 'var(--g)' : 'var(--t3)';
-
-    var longBlocker = records.filter(function(r) { return hasBlocker(r.blockers); }).length >= 2;
-
-    return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:0.5px solid var(--bl)">' +
-
-      '<span style="font-size:12px;color:var(--t1);min-width:130px">' + nm + '</span>' +
-
-      '<div style="flex:1;background:var(--bg2);border-radius:3px;height:5px;overflow:hidden"><div style="height:100%;border-radius:3px;background:' + (avg >= 85 ? 'var(--r)' : avg >= 70 ? 'var(--a)' : 'var(--g)') + ';width:' + avg + '%"></div></div>' +
-
-      '<span style="font-size:11px;font-weight:500;min-width:35px;text-align:right;color:' + (avg >= 85 ? 'var(--r)' : avg >= 70 ? 'var(--a)' : 'var(--g)') + '">' + avg + '%</span>' +
-
-      '<span style="font-size:10px;color:' + trendCol + ';min-width:70px">' + trend + '</span>' +
-
-      (longBlocker ? '<span style="font-size:9px;background:var(--al);color:#854F0B;padding:1px 6px;border-radius:8px">Ongoing blocker</span>' : '') +
-
-    '</div>';
-
-  }).join('');
-
-}
-
-function analyseWeek(weekEnding) {
-
-  closeModal();
-
-  qa('Analyse the staff check-in data for the week ending ' + weekEnding + ' and give me a summary of team health, capacity concerns and any blockers that needed attention.');
-
-}
-
-function showWeekDetailFromEl(el) {
-
-  showWeekDetail(el.getAttribute('data-wk'));
-
-}
-
-function showWeekDetail(weekEnding) {
-
-  var data = window._allMonthData || {};
-
-  var allSubs = Object.values(data).reduce(function(a, b) { return a.concat(b); }, []);
-
-  var weekSubs = allSubs.filter(function(s) { return getWeekEnding(s.submitted) === weekEnding; });
-
-  var wkLabel = 'Week ending ' + new Date(weekEnding).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
-
-  openModal(wkLabel, weekSubs.length + ' check-ins received',
-
-    weekSubs.map(function(s) {
-
-      var pct = s.capacity || 0;
-
-      return '<div style="padding:8px 0;border-bottom:0.5px solid var(--bl)">' +
-
-        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
-
-          '<strong style="font-size:12px">' + cap(s.name) + '</strong>' +
-
-          '<span style="font-size:10px;color:var(--t2)">' + (s.role || '') + '</span>' +
-
-          '<span style="margin-left:auto;font-size:12px;font-weight:500;color:' + (pct >= 85 ? 'var(--r)' : pct >= 70 ? 'var(--a)' : 'var(--g)') + '">' + pct + '%</span>' +
-
-        '</div>' +
-
-        (s.blockers ? '<div style="font-size:10px;color:var(--a)">🚧 ' + s.blockers + '</div>' : '') +
-
-        (s.projects ? '<div style="font-size:10px;color:var(--t2)">Projects: ' + s.projects + '</div>' : '') +
-
-      '</div>';
-
-    }).join('') +
-
-    '<button class="m-btn" style="margin-top:12px" onclick="qa(\'Analyse this week ending ' + weekEnding + ' staff data and give me a summary of team health, capacity concerns and any blockers that needed attention.\')">Ask Cinderella to analyse this week</button>'
-
-  );
-
-}
-
-function renderHistory() {
-
-  var el = document.getElementById('historyContent');
-
-  if (!el) return;
-
-  if (!C.bin || !C.key) { el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">JSONBin not configured.</div>'; return; }
-
-  el.innerHTML = '<div style="font-size:12px;color:var(--t2);padding:8px 0">Loading historical data...</div>';
-
-  var fetchFn = (window._allCheckIns && window._allCheckIns.length > 0)
-
-    ? Promise.resolve(window._allCheckIns)
-
-    : fetch('/checkins/latest')
-
-        .then(function(r){ return r.json(); })
-
-        .then(function(d){ return (Array.isArray(d.record)?d.record:[]).filter(function(e){return e&&e.name;}); });
-
-  fetchFn.then(function(all) {
-
-    window._allCheckIns = all;
-
-    var byMonth = groupByMonth(all);
-
-    window._allMonthData = byMonth;
-
-    var months = Object.keys(byMonth).sort().reverse();
-
-    if (months.length === 0) {
-
-      el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0">No history yet. Data accumulates as staff submit weekly check-ins.</div>';
-
-      return;
-
-    }
-
-    window._historyMonthData = byMonth; // store for onclick access
-
-    var html = '<div id="historyMonthList">' + months.map(function(mk, mi) {
-
-      var subs = byMonth[mk];
-
-      var wkData = groupByWeek(subs);
-
-      var wkCount = Object.keys(wkData).length;
-
-      var stats = calcWeekStats(subs);
-
-      return '<div class="card" style="cursor:pointer;margin-bottom:8px" data-mi="' + mi + '" onclick="showHistoryMonthByIndex(this.dataset.mi)">' +
-
-        '<div class="ct">' + getMonthLabel(mk) + '<span class="ct-action">View all submissions →</span></div>' +
-
-        '<div style="display:flex;gap:16px;font-size:12px;color:var(--t1);flex-wrap:wrap">' +
-
-          '<span><strong>' + stats.avg + '%</strong> avg</span>' +
-
-          '<span><strong>' + wkCount + '</strong> week' + (wkCount !== 1 ? 's' : '') + '</span>' +
-
-          '<span><strong>' + stats.count + '</strong> submissions</span>' +
-
-          (stats.overloaded > 0 ? '<span style="color:var(--r)"><strong>' + stats.overloaded + '</strong> overloaded</span>' : '') +
-
-          (stats.blockers > 0 ? '<span style="color:var(--a)"><strong>' + stats.blockers + '</strong> blockers</span>' : '') +
-
-        '</div>' +
-
-      '</div>';
-
-    }).join('') + '</div>';
-
-    window._historyMonths = months; // store for index lookup
-
-    el.innerHTML = html;
-
-  }).catch(function(e) {
-
-    el.innerHTML = '<div style="font-size:12px;color:var(--r);padding:8px 0">Error: ' + e.message + '</div>';
-
-  });
-
-}
-
-function showHistoryMonthByIndex(idx) {
-
-  var months = window._historyMonths || [];
-
-  var mk = months[parseInt(idx)];
-
-  if (!mk) return;
-
-  showHistoryMonth(mk);
-
-}
-
-function showHistoryMonth(monthKey) {
-
-  var data = window._allMonthData || {};
-
-  var subs = data[monthKey] || [];
-
-  var byWeek = groupByWeek(subs);
-
-  var sortedWks = sortWeeks(byWeek).reverse();
-
-  var histEl = document.getElementById('historyContent');
-
-  if (!histEl) return;
-
-  var html = '<div style="margin-bottom:12px"><button onclick="renderHistory()" style="font-size:11px;background:none;border:none;color:var(--b);cursor:pointer;padding:0;font-family:var(--f)">← Back to all months</button></div>' +
-
-    '<div style="font-size:14px;font-weight:600;color:var(--t1);margin-bottom:14px">' + getMonthLabel(monthKey) + ' — All check-ins</div>';
-
-  if (sortedWks.length === 0) { histEl.innerHTML = html + '<div style="color:var(--t3)">No submissions for this month.</div>'; return; }
-
-  window._historyEntries = {};
-
-  var entryIdx = 0;
-
-  sortedWks.forEach(function(wk) {
-
-    var entries = byWeek[wk];
-
-    html += '<div class="card" style="margin-bottom:10px"><div class="ct">Week ending ' + wk + ' <span style="font-size:10px;color:var(--t3)">(' + entries.length + ' check-ins)</span></div>';
-
-    entries.forEach(function(s) {
-
-      var pct = s.capacity || 0;
-
-      window._historyEntries[entryIdx] = s;
-
-      html += '<div style="padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer" onclick="showHistoryEntry(' + entryIdx + ')">' +
-
-        '<div style="display:flex;align-items:center;gap:8px">' +
-
-          '<strong style="font-size:12px;flex:1">' + cap(s.name) + '</strong>' +
-
-          '<span style="font-size:10px;color:var(--t2)">' + (s.role||'') + '</span>' +
-
-          '<span style="font-size:12px;font-weight:500;color:' + (pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)') + '">' + pct + '%</span>' +
-
-        '</div>' +
-
-        (s.projects ? '<div style="font-size:10px;color:var(--t2);margin-top:3px">Projects: ' + s.projects + '</div>' : '') +
-
-        (s.blockers ? '<div style="font-size:10px;color:var(--a);margin-top:2px">Blocker: ' + s.blockers + '</div>' : '') +
-
-        '<div style="font-size:9px;color:var(--t3);margin-top:3px">Click to see full submission</div>' +
-
-      '</div>';
-
-      entryIdx++;
-
-    });
-
-    html += '</div>';
-
-  });
-
-  histEl.innerHTML = html;
-
-}
-
-function showHistoryEntry(idx) {
-
-  var s = window._historyEntries && window._historyEntries[idx];
-
-  if (!s) return;
-
-  var pct = s.capacity || 0;
-
-  var pctN = s.capacityNext || 0;
-
-  openModal(cap(s.name), (s.role||'Staff') + ' · Week ending ' + s.weekEnding,
-
-    '<div class="mfield"><div class="mfl">This week capacity</div>' +
-
-    '<div style="display:flex;align-items:center;gap:10px"><div class="bw" style="flex:1;height:8px"><div class="bar ' + bc(pct) + '" style="width:' + pct + '%"></div></div><strong style="color:' + (pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)') + '">' + pct + '%</strong></div></div>' +
-
-    (pctN ? '<div class="mfield"><div class="mfl">Next week forecast</div><div style="display:flex;align-items:center;gap:10px"><div class="bw" style="flex:1;height:8px"><div class="bar ' + bc(pctN) + '" style="width:' + pctN + '%"></div></div><strong>' + pctN + '%</strong></div></div>' : '') +
-
-    '<div class="mfield"><div class="mfl">Workload trend</div><div class="mfv">' + (s.trend||'—') + '</div></div>' +
-
-    '<div class="mfield"><div class="mfl">Projects</div><div class="mfv">' + (s.projects||'—') + '</div></div>' +
-
-    (s.blockers ? '<div class="mfield"><div class="mfl">Blockers</div><div class="mfv" style="color:var(--a)">' + s.blockers + '</div></div>' : '') +
-
-    '<div class="mfield"><div class="mfl">Skills</div><div class="mfv">' + ((s.skills||'').split(',').filter(function(x){return x.trim();}).map(function(sk){return '<span class="mfv-tag" style="background:var(--gl);color:#0F6E56">'+sk.trim()+'</span>';}).join('')||'—') + '</div></div>' +
-
-    '<div class="mfield"><div class="mfl">Availability next week</div><div class="mfv">' + (s.availability||'Full week') + (s.leave?' — '+s.leave:'') + '</div></div>' +
-
-    (s.notes ? '<div class="mfield"><div class="mfl">Notes to COO</div><div class="mfv">' + s.notes + '</div></div>' : '') +
-
-    '<div class="mfield"><div class="mfl">Submitted</div><div class="mfv" style="color:var(--t3)">' + (s.submitted ? new Date(s.submitted).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—') + '</div></div>'
-
-  );
-
-}
-
-function toggleVoice() {
-
-  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-
-    alert('Voice input is not supported in this browser. Please use Chrome or Edge.');
-
-    return;
-
+    const data = await response.json();
+    if (data.errors) return res.status(400).json({ error: data.errors[0]?.message || 'Monday.com error' });
+
+    // Only return the approved boards — safety check
+    const boards = (data.data?.boards || []).filter(b => MONDAY_BOARD_IDS.includes(parseInt(b.id))).map(b => ({
+      ...b,
+      items: b.items_page?.items || []
+    }));
+    res.json({ boards });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
+});
 
-  if (isListening) {
-
-    stopVoice();
-
-  } else {
-
-    startVoice();
-
+// ── MONDAY.COM: Get client feedback only ──
+app.get('/monday/feedback', async (req, res) => {
+  const apiKey = process.env.MONDAY_API_KEY;
+  if (!apiKey) return res.status(400).json({ error: 'MONDAY_API_KEY not configured' });
+  try {
+    const query = `{
+      boards(ids: [2031906973]) {
+        name
+        items_page(limit: 50) {
+          items {
+            id
+            name
+            column_values {
+              text
+            }
+          }
+        }
+      }
+    }`;
+    const response = await fetch('https://api.monday.com/v2', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+        'API-Version': '2024-01'
+      },
+      body: JSON.stringify({ query })
+    });
+    const data = await response.json();
+    if (data.errors) return res.status(400).json({ error: data.errors[0]?.message });
+    res.json({ feedback: data.data?.boards?.[0]?.items_page?.items || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
+});
 
-}
+// ── PROXY (forwards chat requests to Claude) ──
+const MAX_CONVERSATION_MESSAGES = 20; // keep last 20 messages (~10 back-and-forth)
+const MAX_OUTPUT_TOKENS = 1000;       // cap responses — increase if she gets cut off
 
-function startVoice() {
+app.options('/proxy', (req, res) => res.sendStatus(200));
+app.post('/proxy', async (req, res) => {
 
-  var SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-  recognition = new SpeechRecognition();
-
-  recognition.lang = 'en-AU';
-
-  recognition.continuous = false;
-
-  recognition.interimResults = true;
-
-  recognition.maxAlternatives = 1;
-
-  var micBtn = document.getElementById('micBtn');
-
-  var cinput = document.getElementById('cinput');
-
-  var originalPlaceholder = cinput.placeholder;
-
-  recognition.onstart = function() {
-
-    isListening = true;
-
-    micBtn.classList.add('listening');
-
-    micBtn.title = 'Listening... click to stop';
-
-    cinput.placeholder = 'Listening...';
-
-  };
-
-  recognition.onresult = function(event) {
-
-    var transcript = '';
-
-    for (var i = event.resultIndex; i < event.results.length; i++) {
-
-      transcript += event.results[i][0].transcript;
-
-    }
-
-    cinput.value = transcript;
-
-    resize(cinput);
-
-    // If final result, auto-send
-
-    if (event.results[event.results.length - 1].isFinal) {
-
-      setTimeout(function() {
-
-        if (cinput.value.trim()) send();
-
-      }, 500);
-
-    }
-
-  };
-
-  recognition.onerror = function(event) {
-
-    console.warn('Voice error:', event.error);
-
-    if (event.error === 'not-allowed') {
-
-      alert('Microphone access was denied. Please allow microphone access in your browser settings.');
-
-    }
-
-    stopVoice();
-
-  };
-
-  recognition.onend = function() {
-
-    stopVoice();
-
-    cinput.placeholder = originalPlaceholder;
-
-  };
+  // Log every AI call
+  const callTime = new Date().toLocaleString('en-AU', {timeZone: 'Australia/Brisbane'});
+  const msgs = req.body?.messages || [];
+  const lastMsg = msgs[msgs.length-1]?.content?.substring(0, 150) || 'unknown';
+  const logEntry = `${callTime} | msgs:${msgs.length} | "${lastMsg}"`;
+  aiCallLog.push(logEntry);
+  if (aiCallLog.length > 100) aiCallLog.shift();
+  try { appendFileSync(LOG_PATH, logEntry + '\n'); } catch(e) {}
+  console.log('[AI CALL]', logEntry);
 
   try {
+    const body = { ...req.body };
 
-    recognition.start();
+    // ── Trim conversation history ──
+    if (body.messages && body.messages.length > MAX_CONVERSATION_MESSAGES) {
+      const trimmed = body.messages.slice(-MAX_CONVERSATION_MESSAGES);
+      // Always preserve the first message if it's a system-style user message
+      const first = body.messages[0];
+      if (first && !trimmed.includes(first)) {
+        trimmed.unshift(first);
+      }
+      body.messages = trimmed;
+      console.log(`[TRIMMED] History cut from ${msgs.length} → ${body.messages.length} messages`);
+    }
 
+    // ── Cap output tokens as safety net ──
+    if (!body.max_tokens || body.max_tokens > MAX_OUTPUT_TOKENS) {
+      body.max_tokens = MAX_OUTPUT_TOKENS;
+    }
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify(body)
+    });
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: { message: err.message } });
+  }
+});
+
+// ── DEBUG: Check config (remove after fixing auth) ──
+app.get('/debug-auth', requireAuth, (req, res) => {
+  res.json({
+    clientId: process.env.AZURE_CLIENT_ID || 'NOT SET',
+    tenantId: process.env.AZURE_TENANT_ID || 'NOT SET',
+    secretLength: (process.env.AZURE_CLIENT_SECRET || '').length,
+    secretFirst4: (process.env.AZURE_CLIENT_SECRET || '').substring(0, 4),
+    secretLast4: (process.env.AZURE_CLIENT_SECRET || '').slice(-4),
+    redirectUri: process.env.REDIRECT_URI || 'NOT SET',
+    scopes: SCOPES
+  });
+});
+
+
+// ── VIEW AI CALL LOGS ──
+app.get('/view-logs', requireAuth, (req, res) => {
+  let fileLogs = '';
+  try { fileLogs = readFileSync(LOG_PATH, 'utf8'); } catch(e) { fileLogs = 'No log file yet.'; }
+  res.send('<pre style="font-family:monospace;font-size:12px;padding:20px;white-space:pre-wrap">' +
+    '<h2>AI Call Log (last 100)</h2>' +
+    '<p>Total in memory: ' + aiCallLog.length + '</p>' +
+    '<hr>' +
+    (aiCallLog.length > 0 ? aiCallLog.join('\n') : 'No AI calls recorded yet since server started.') +
+    '<hr><h3>From file:</h3>' + fileLogs +
+    '</pre>');
+});
+
+// ── CLEAR LOGS ──
+app.get('/clear-logs', requireAuth, (req, res) => {
+  aiCallLog.length = 0;
+  try { writeFileSync(LOG_PATH, ''); } catch(e) {}
+  res.send('Logs cleared.');
+});
+
+// ── CHECK-IN DATA STORAGE (replaces JSONBin) ──
+const CHECKINS_PATH = '/home/checkins.json';
+
+function loadCheckIns() {
+  try {
+    if (existsSync(CHECKINS_PATH)) {
+      return JSON.parse(readFileSync(CHECKINS_PATH, 'utf8'));
+    }
+  } catch(e) { console.warn('CheckIns load error:', e.message); }
+  return [];
+}
+
+function saveCheckIns(data) {
+  writeFileSync(CHECKINS_PATH, JSON.stringify(data, null, 2));
+}
+
+app.get('/checkins/latest', (req, res) => {
+  const data = loadCheckIns();
+  console.log(`[Sync] /checkins/latest — returning ${data.length} check-ins`);
+  if (data.length > 0) {
+    console.log('[Sync] Names:', data.map(d => d.name || 'unknown').join(', '));
+    console.log('[Sync] Submitted dates:', data.map(d => d.submitted || d.weekEnding || 'no date').join(', '));
+  }
+  res.json({ record: data });
+});
+
+app.put('/checkins/update', (req, res) => {
+  try {
+    const data = Array.isArray(req.body) ? req.body : [];
+    saveCheckIns(data);
+    res.json({ success: true });
   } catch(e) {
-
-    console.warn('Voice start error:', e);
-
-    stopVoice();
-
+    res.status(500).json({ error: e.message });
   }
+});
 
-}
-
-function stopVoice() {
-
-  isListening = false;
-
-  var micBtn = document.getElementById('micBtn');
-
-  if (micBtn) {
-
-    micBtn.classList.remove('listening');
-
-    micBtn.title = 'Voice input';
-
-  }
-
-  if (recognition) {
-
-    try { recognition.stop(); } catch(e) {}
-
-    recognition = null;
-
-  }
-
-}
-
-// ── MODAL KEY LOOKUP (COO duties + other keyed modals) ──
-
-function omKey(key) {
-
-  var MODALS = buildModals();
-
-  var m = MODALS[key];
-
-  if (!m) { console.warn('No modal for key:', key); return; }
-
-  // Open modal with empty body first
-
-  openModal(m.title, m.sub || '', '');
-
-  // Then inject built element directly to preserve event handlers
-
-  var bodyEl = document.getElementById('m-body');
-
-  if (!bodyEl) return;
-
-  bodyEl.innerHTML = '';
-
-  if (typeof m.build === 'function') {
-
-    var built = m.build();
-
-    if (built instanceof Element) {
-
-      bodyEl.appendChild(built);
-
-    } else {
-
-      bodyEl.innerHTML = built || '';
-
-    }
-
-  }
-
-}
-
-// Close modal shorthand
-
-function cm() { closeModal(); }
-
-// ── GENERATE EMAIL INSIGHTS ──
-
-async function generateEmailInsights() {
-
-  if (M365.emails.length === 0) { qa('Analyse my emails and give me insights'); return; }
-
-  var insEl = document.getElementById('emailInsights');
-
-  if (insEl) insEl.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Cinderella is analysing your inbox...</div>';
-
-  var emailSummary = M365.emails.slice(0,15).map(function(e){
-
-    return e.from+' ('+e.hoursOld+'h ago'+(e.hasAttachments?' HAS ATTACHMENT':'')+('): '+e.subject);
-
-  }).join('\n');
-
-  var infoSummary = infoEmails.slice(0,5).map(function(e){
-
-    return '[info@] '+e.from+' ('+e.hoursOld+'h ago): '+e.subject;
-
-  }).join('\n');
-
+app.post('/checkins/submit', async (req, res) => {
   try {
+    const entry = {
+      ...req.body,
+      submitted: req.body.submitted || new Date().toISOString(),
+      receivedAt: new Date().toISOString()  // server-side receipt stamp
+    };
+    if (!entry.weekEnding) {
+      // Week ends on FRIDAY in Brisbane time
+      const nowBris = new Date(new Date().toLocaleString('en-US', {timeZone:'Australia/Brisbane'}));
+      const jsDay = nowBris.getDay();
+      const daysToFri = jsDay <= 5 ? 5 - jsDay : 6;
+      const fri = new Date(nowBris); fri.setDate(fri.getDate() + daysToFri);
+      entry.weekEnding = fri.getFullYear()+'-'+String(fri.getMonth()+1).padStart(2,'0')+'-'+String(fri.getDate()).padStart(2,'0');
+    }
+    if (!entry.name) return res.status(400).json({ error: 'Name is required' });
 
-    var r = await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    // PRIMARY: save to local file
+    const existing = loadCheckIns();
+    const idx = existing.findIndex(e =>
+      e.name && e.name.toLowerCase() === entry.name.toLowerCase() &&
+      e.weekEnding === entry.weekEnding
+    );
+    if (idx >= 0) existing[idx] = entry;
+    else existing.push(entry);
+    saveCheckIns(existing);
+    console.log('[CheckIn] SAVED:', entry.name, '| week ending', entry.weekEnding, '| received', entry.receivedAt);
 
-      model:'claude-sonnet-4-6',max_tokens:500,system:SYS,
-
-      messages:[{role:'user',content:'Analyse these emails and give me 4 specific, actionable insights in plain language. Each insight 1-2 sentences max. Start each with an emoji.\n\n'+emailSummary+'\n\n'+infoSummary}]
-
-    })});
-
-    var d = await r.json();
-
-    var rep = d.content&&d.content[0]?d.content[0].text:'';
-
-    if (insEl && rep) {
-
-      var lines = rep.split('\n').filter(function(l){ return l.trim(); });
-
-      insEl.innerHTML = lines.map(function(l){
-
-        return '<div class="ins" onclick="qa(\''+l.replace(/'/g,'').replace(/"/g,'').substring(0,100)+'\')" style="cursor:pointer"><div class="il">💡 Insight</div><div class="it">'+l+'</div></div>';
-
-      }).join('');
-
+    // BACKUP: also write to Azure Blob Storage
+    try {
+      const cc = await getBlobContainer();
+      if (cc) {
+        const safeName = (entry.name||'unknown').replace(/\s+/g, '-');
+        const blobKey = 'checkins/' + entry.weekEnding + '/' + safeName + '.json';
+        const bc = cc.getBlockBlobClient(blobKey);
+        const blob_payload = JSON.stringify(entry);
+        await bc.upload(blob_payload, blob_payload.length, { blobHTTPHeaders: { blobContentType: 'application/json' } });
+        console.log('[CheckIn] BLOB BACKUP:', blobKey);
+      }
+    } catch(blobErr) {
+      console.warn('[CheckIn] Blob backup failed (not critical):', blobErr.message);
     }
 
-  } catch(ex) {
-
-    if (insEl) insEl.innerHTML = '<div style="font-size:11px;color:var(--r)">Could not load insights: '+ex.message+'</div>';
-
+    res.json({ success: true, name: entry.name, weekEnding: entry.weekEnding });
+  } catch(e) {
+    console.error('[CheckIn] ERROR:', e.message);
+    res.status(500).json({ error: e.message });
   }
-
-}
-
-function refreshEmailInsights() { generateEmailInsights(); }
-
-// ── COO DUTIES MODAL DEFINITIONS ──
-
-function replyToFinanceEmail(idx) {
-
-  var e = window._financeEmails && window._financeEmails[idx];
-
-  if (!e) return;
-
-  openDraftModal(e.from, 'Reply to finance email', 'Re: ' + (e.subject||''), 'email', e.fromEmail);
-
-}
-
-function buildModals() {
-
-  return {
-
-    'duty-people': {title:'People & Culture', sub:'Staffing, check-ins, performance, 1:1s, KPIs', build: function() {
-
-      var d = document.createElement('div');
-
-      var checkInMeetings = M365.events.filter(function(e){ var s=(e.subject||'').toLowerCase(); return s.includes('check')||s.includes('1:1')||s.includes('one on one'); });
-
-      d.innerHTML = (checkInMeetings.length>0 ?
-
-        '<div class="alert-box ok"><div class="ab-title">📅 Check-in meeting today: '+checkInMeetings[0].subject+'</div></div>' :
-
-        '<div class="alert-box warn"><div class="ab-title">No check-in meetings today</div><div class="ab-text">Consider scheduling 1:1s with your team.</div></div>') +
-
-        getMissingCheckIns();
-
-      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-
-      [['Generate action plan','Generate a complete people and culture action plan for Kandia this week at Risk 2 Solution based on staff check-in data and calendar.'],
-
-       ['Schedule 1:1 meetings','Which staff members does Kandia most need to have a 1:1 with this week and why? List them in priority order.'],
-
-       ['Send weekly check-in','Draft a message to send to all 7 staff asking them to complete their weekly check-in form for this week.'],
-
-       ['Review KPIs','What KPIs should Kandia be reviewing for her team this week? List them with current status where known.'],
-
-       ['Performance reviews','Generate a performance review schedule and process for Risk 2 Solution staff for this quarter.'],
-
-       ['Burnout risk check','Which staff members are at risk of burnout based on check-in data? What should Kandia do for each one?']
-
-      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
-
-      return d;
-
-    }},
-
-    'duty-finance': {title:'Financial Oversight', sub:'P&L, debt collection, finance updates', build: function() {
-
-      var d = document.createElement('div');
-
-      var financeEmails = M365.emails.concat(infoEmails).filter(function(e){
-
-        var from=(e.from||'').toLowerCase(); var subj=(e.subject||'').toLowerCase();
-
-        return from.includes('diane')||from.includes('kruger')||from.includes('nicole')||from.includes('sofianos')||subj.includes('p&l')||subj.includes('finance')||subj.includes('debt')||subj.includes('invoice')||subj.includes('payment');
-
-      });
-
-      var financeMeetings = M365.events.filter(function(e){ var s=(e.subject||'').toLowerCase(); return s.includes('finance')||s.includes('p&l')||s.includes('budget'); });
-
-      d.innerHTML = (financeEmails.length>0 ?
-
-        '<div class="alert-box ok"><div class="ab-title">📧 '+financeEmails.length+' finance-related email'+(financeEmails.length>1?'s':'')+' this week</div>'+
-
-        '<div class="ab-text" style="margin-top:6px">'+financeEmails.map(function(e,fi){ window._financeEmails=window._financeEmails||{}; window._financeEmails[fi]=e;
-
-          return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.08)">'+
-
-            '<span><strong>'+e.from+'</strong><br><span style="font-size:10px">'+e.subject+'</span></span>'+
-
-            '<div style="display:flex;gap:4px;margin-left:8px"><button onclick="openOutlook()" style="font-size:9px;padding:2px 8px;border-radius:8px;background:#0078D4;color:#fff;border:none;cursor:pointer">Open</button>'+
-
-            '<button onclick="replyToFinanceEmail('+fi+')" style="font-size:9px;padding:2px 8px;border-radius:8px;background:var(--g);color:#fff;border:none;cursor:pointer">Reply</button></div></div>';
-
-        }).join('')+'</div></div>' :
-
-        '<div class="alert-box warn"><div class="ab-title">No finance emails from Diane or Nicole this week</div><div class="ab-text">Consider requesting a P&L update.</div></div>') +
-
-        (financeMeetings.length>0?'<div class="alert-box ok"><div class="ab-title">📅 Finance meeting: '+financeMeetings[0].subject+'</div></div>':'');
-
-      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-
-      var b1=document.createElement('button');b1.className='m-btn';b1.style.marginBottom='6px';b1.textContent='📊 Summarise finance update';b1.onclick=function(){qa('Based on any finance-related emails, give Kandia a summary of the current financial position at Risk 2 Solution including P&L, outstanding debt collection, and any cash flow concerns.');cm();};d.appendChild(b1);
-
-      var b2=document.createElement('button');b2.className='m-btn';b2.style.cssText='background:#0078D4;margin-bottom:6px;display:block';b2.textContent='📅 Schedule finance meeting';b2.onclick=function(){openDraftModal('Diane Kruger','Schedule a finance review meeting','Finance review meeting','meeting','diane.k@risk2solution.com');cm();};d.appendChild(b2);
-
-      var b3=document.createElement('button');b3.className='m-btn sec';b3.style.cssText='margin-bottom:6px;display:block';b3.textContent='📧 Request finance information';b3.onclick=function(){openDraftModal('Diane Kruger','Request the latest P&L, debt collection status and cash flow forecast','Finance update request','email','diane.k@risk2solution.com');cm();};d.appendChild(b3);
-
-      return d;
-
-    }},
-
-    'duty-reporting': {title:'Board Reporting', sub:'Monthly board report — succinct, 2 pages max', build: function() {
-
-      var d = document.createElement('div');
-
-      var boardMeetings = M365.events.filter(function(e){ var s=(e.subject||'').toLowerCase(); return s.includes('board')||s.includes('directors'); });
-
-      var lastMonth = new Date(new Date().getFullYear(), new Date().getMonth()-1, 1).toLocaleString('en-AU',{month:'long',year:'numeric'});
-
-      var thisMonth = new Date().toLocaleString('en-AU',{month:'long',year:'numeric'});
-
-      d.innerHTML = (boardMeetings.length>0?'<div class="alert-box ok"><div class="ab-title">📅 Board meeting: '+boardMeetings[0].subject+'</div><div class="ab-text">Prepare your board report before this meeting.</div></div>':'') +
-
-        '<div class="mfield"><div class="mfl">Report scope</div><div class="mfv">Month prior: <strong>'+lastMonth+'</strong><br>Month ahead: <strong>'+thisMonth+'</strong><br>Format: Succinct, 2 pages max</div></div>';
-
-      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-
-      [['📄 Generate board paper','Generate a formal COO Board Paper for Risk 2 Solution for the period ending ' + new Date().toLocaleDateString('en-AU',{month:'long',year:'numeric'}) + '. Format it as a proper board paper with these sections:\n\n**BOARD PAPER — COO REPORT**\n**Period:** [Month Year]\n**Prepared by:** Kandia, Chief Operating Officer\n**Date:** ' + new Date().toLocaleDateString('en-AU') + '\n\n**1. EXECUTIVE SUMMARY**\nBrief 3-sentence summary of the month.\n\n**2. OPERATIONAL PERFORMANCE**\nClient delivery status, SLA performance, platform health, active onboardings (Titan Corp, Delta Inc, Prentice Group).\n\n**3. PEOPLE & CULTURE**\nStaff utilisation, any capacity or performance issues, recruitment, training.\n\n**4. FINANCIAL SNAPSHOT**\nKey financial highlights, P&L status, debt collection, any variances.\n\n**5. RISK & COMPLIANCE**\nISO 27001 progress, any incidents, compliance status, governance items.\n\n**6. MONTH AHEAD — PRIORITIES**\nTop 3-5 priorities for the coming month. Decisions required from the board.\n\n**7. ITEMS FOR BOARD NOTING**\nAny other matters for the board to note.\n\nKeep each section concise. Use available email and calendar data. Flag where information is not available. Maximum 2 pages total.'],
-
-       ['✅ Month in review','Give me a summary of last month at Risk 2 Solution for the board report covering client delivery, staff, platform, compliance, and any incidents.'],
-
-       ['🔭 Month ahead priorities','What are the top priorities for Risk 2 Solution next month that the board needs to know about?'],
-
-       ['📊 Key metrics summary','Generate a key metrics summary for the board: SLA performance, staff utilisation, client onboarding status, and financial highlights.']
-
-      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
-
-      return d;
-
-    }},
-
-    'duty-ops': {title:'Operations Oversight', sub:'Policies, SOPs, compliance, governance, projects', build: function() {
-
-      var d = document.createElement('div');
-
-      d.innerHTML = '<div class="mfield"><div class="mfl">Weekly operations checklist</div><div class="mfv">Click below to generate each area.</div></div>';
-
-      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-
-      [['📋 Full operations checklist','Generate a complete weekly operations checklist for Kandia at Risk 2 Solution covering: policies and procedures review, SOPs review, project status, compliance and governance, staff utilisation, client delivery, platform health, and any other operational flows.'],
-
-       ['📁 Policies & procedures review','Generate a policies and procedures review checklist for Risk 2 Solution. What should Kandia check, when should each be reviewed, and are there any overdue?'],
-
-       ['📝 SOPs review','List all SOPs that Risk 2 Solution should have in place, which exist, which need creating, and which need reviewing.'],
-
-       ['✅ Compliance & governance','Generate a compliance and governance checklist for this week at Risk 2 Solution including ISO 27001 progress, any overdue audits, policy sign-offs, and access control reviews.'],
-
-       ['🔄 Process improvement','What process improvements should Kandia prioritise this quarter? Rank by impact and effort.'],
-
-       ['📊 Operational metrics','What operational metrics should Kandia review weekly? Generate a dashboard summary.']
-
-      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
-
-      return d;
-
-    }},
-
-    'duty-clients': {title:'Client Delivery', sub:'Project tracking, client feedback, Monday.com', build: function() {
-
-      var d = document.createElement('div');
-
-      var clientEmails = M365.emails.filter(function(e){ var s=(e.subject||'').toLowerCase(); return s.includes('titan')||s.includes('delta')||s.includes('prentice')||s.includes('onboard')||s.includes('project')||s.includes('delivery'); });
-
-      d.innerHTML = '<div id="mondayStatus"><div style="font-size:12px;color:var(--t2);padding:8px 0;display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:var(--a);flex-shrink:0"></span><span>Loading Monday.com project data...</span></div></div>' +
-
-        (clientEmails.length>0?'<div class="alert-box ok" style="margin-top:8px"><div class="ab-title">📧 '+clientEmails.length+' client-related email'+(clientEmails.length>1?'s':'')+' this week</div><div class="ab-text">'+clientEmails.slice(0,3).map(function(e){return e.from+': '+e.subject;}).join('<br>')+'</div></div>':'');
-
-      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-
-      var eb=document.createElement('button');eb.className='m-btn';eb.style.cssText='background:#217346;display:block;width:100%;margin-bottom:8px';eb.textContent='📊 Export to Excel';eb.onclick=function(){exportMondayToExcel();};d.appendChild(eb);
-
-      var ab=document.createElement('button');ab.className='m-btn sec';ab.style.cssText='display:block;width:100%;margin-bottom:6px';ab.textContent='🤖 Full Cinderella analysis';ab.onclick=function(){analyseMondayData();cm();};d.appendChild(ab);
-
-      [['🔴 Flag risks and issues','What are the current delivery risks and open issues across all client projects? Flag what Kandia needs to do about each one.'],
-
-       ['💬 Client feedback summary','Summarise all client feedback themes from Monday.com. Flag anything requiring immediate action.'],
-
-       ['📧 Draft client status update','Draft a professional project status update email for active clients.']
-
-      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
-
-      var rb=document.createElement('button');rb.className='m-btn sec';rb.style.cssText='display:block;width:100%;margin-bottom:6px;background:#f96e08;color:#fff';rb.textContent='🟧 Load Monday.com projects';rb.onclick=function(){loadMondayData();};d.appendChild(rb);
-
-      setTimeout(function(){loadMondayData();},200);
-
-      return d;
-
-    }},
-
-    'duty-strategy': {title:'Strategy & Planning', sub:'OKRs, roadmap, market positioning', build: function() {
-
-      var d = document.createElement('div');
-
-      d.innerHTML = '<div class="mfield"><div class="mfl">Strategic focus</div><div class="mfv">Integrated Risk Management · Security · Training (RTO #4785) · Emergency Planning · Cybersecurity</div></div>';
-
-      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-
-      [['📋 Quarterly OKR review','Generate a quarterly OKR review for Risk 2 Solution. Cover: progress on key objectives, wins, misses, and recommended adjustments for next quarter.'],
-
-       ['🎯 Strategic priorities','What are the top 3-5 strategic priorities for Risk 2 Solution this quarter and what does success look like for each?'],
-
-       ['📈 Growth opportunities','What growth opportunities should Risk 2 Solution be pursuing right now based on the current client base and market?'],
-
-       ['🗺 Roadmap review','Generate a product and operational roadmap summary for Risk 2 Solution for the next 6 months.']
-
-      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
-
-      return d;
-
-    }},
-
-    'duty-risk': {title:'Risk & Compliance', sub:'ISO 27001, incident management, governance', build: function() {
-
-      var d = document.createElement('div');
-
-      d.innerHTML = '<div class="mfield"><div class="mfl">Compliance status</div><div class="mfv">ISO 27001 in progress · Incident escalation process active · Governance framework in place</div></div>';
-
-      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-
-      [['🛡 ISO 27001 checklist','Generate a current ISO 27001 audit preparation checklist for Risk 2 Solution. Flag any overdue items.'],
-
-       ['⚠ Incident log review','Generate an incident review summary for this month. What patterns are emerging and what needs escalation?'],
-
-       ['📋 Compliance calendar','What compliance deadlines and review dates should Kandia have on her radar in the next 90 days?'],
-
-       ['🔍 Risk register review','Generate a top-level risk register for Risk 2 Solution covering operational, financial, client, staff and technology risks.']
-
-      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
-
-      return d;
-
-    }},
-
-    'duty-tech': {title:'Technology & Platform', sub:'Platform health, v3.3 roadmap, infrastructure', build: function() {
-
-      var d = document.createElement('div');
-
-      d.innerHTML = '<div class="mfield"><div class="mfl">Platform status</div><div class="mfv">R2S v3.2 live · v3.3 in development · SLA 96.4%</div></div>';
-
-      var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
-
-      [['🖥 Platform health check','Generate a platform health summary for Risk 2 Solution. Cover: uptime, SLA performance, open incidents, and v3.3 development progress.'],
-
-       ['🔧 Technical debt review','What technical debt should Risk 2 Solution prioritise addressing this quarter?'],
-
-       ['🚀 v3.3 roadmap','Summarise the v3.3 platform roadmap and flag any risks to delivery.'],
-
-       ['🔐 Security review','Generate a security review checklist for the Risk 2 Solution platform covering access control, data encryption, and vulnerability management.']
-
-      ].forEach(function(p){ var b=document.createElement('button');b.className='m-btn sec';b.style.cssText='margin-bottom:6px;display:block;width:100%';b.textContent=p[0];b.onclick=function(){qa(p[1]);cm();};d.appendChild(b); });
-
-      return d;
-
-    }}
-
-  };
-
+});
+
+// Manual check-in entry (dashboard only — requires auth)
+app.post('/checkins/manual', requireAuth, async (req, res) => {
+  try {
+    const entry = { ...req.body, submitted: req.body.submitted || new Date().toISOString(), manualEntry: true, receivedAt: new Date().toISOString() };
+    if (!entry.weekEnding) {
+      // Week ends on FRIDAY in Brisbane time
+      const nowBris = new Date(new Date().toLocaleString('en-US', {timeZone:'Australia/Brisbane'}));
+      const jsDay = nowBris.getDay();
+      const daysToFri = jsDay <= 5 ? 5 - jsDay : 6;
+      const fri = new Date(nowBris); fri.setDate(fri.getDate() + daysToFri);
+      entry.weekEnding = fri.getFullYear()+'-'+String(fri.getMonth()+1).padStart(2,'0')+'-'+String(fri.getDate()).padStart(2,'0');
+    }
+    const existing = loadCheckIns();
+    const idx = existing.findIndex(e =>
+      e.name && e.name.toLowerCase() === (entry.name||'').toLowerCase() &&
+      e.weekEnding === entry.weekEnding
+    );
+    if (idx >= 0) existing[idx] = entry;
+    else existing.push(entry);
+    saveCheckIns(existing);
+    console.log('[CheckIn] MANUAL ENTRY:', entry.name, '| week ending', entry.weekEnding);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// ── AZURE BLOB STORAGE ──
+const BLOB_CONN = process.env.BLOB_CONNECTION_STRING;
+const BLOB_CONT = process.env.AZURE_STORAGE_CONTAINER || 'cinderella-data';
+const DOCS_LOCAL = '/home/documents/';
+
+async function getBlobContainer() {
+  if (!BLOB_CONN) return null;
+  try {
+    const { BlobServiceClient } = await import('@azure/storage-blob');
+    const client = BlobServiceClient.fromConnectionString(BLOB_CONN);
+    const cc = client.getContainerClient(BLOB_CONT);
+    await cc.createIfNotExists();
+    return cc;
+  } catch(e) {
+    console.warn('Blob unavailable:', e.message);
+    return null;
+  }
 }
 
 // ── DOCUMENT LIBRARY ──
-
-var docLibrary = []; // {name, type, content, size, url}
-// Load documents from Azure Blob Storage on startup
-async function loadDocLibrary() {
+app.get('/docs/list', requireAuth, async (req, res) => {
   try {
-    var r = await fetch('/docs/list');
-    if (!r.ok) return;
-    var d = await r.json();
-    docLibrary = (d.docs||[]).map(function(f){ return { name:f.name, type:f.type||'', size:f.size||0, uploaded:new Date(f.uploaded).toLocaleTimeString('en-AU'), fromBlob:true }; });
-    renderDocLibrary();
-  } catch(e){ console.warn('Doc library load:', e.message); }
-}
+    const cc = await getBlobContainer();
+    if (cc) {
+      const docs = [];
+      for await (const b of cc.listBlobsFlat()) {
+        docs.push({ name: b.name, size: b.properties.contentLength, uploaded: b.properties.lastModified, type: b.properties.contentType || 'application/octet-stream' });
+      }
+      return res.json({ docs });
+    }
+    // Local fallback
+    if (!existsSync(DOCS_LOCAL)) return res.json({ docs: [] });
+    const files = readdirSync(DOCS_LOCAL).map(f => {
+      const s = statSync(pathJoin(DOCS_LOCAL, f));
+      return { name: f, size: s.size, uploaded: s.mtime };
+    });
+    res.json({ docs: files });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
-async function handleDocUpload(event) {
-
-  var files = event.target.files;
-
-  if (!files.length) return;
-
-  for (var i = 0; i < files.length; i++) {
-
-    var file = files[i];
-
-    var content = await readFileContent(file);
-
-    // Upload to Azure Blob Storage
-  var b64 = content.split(',')[1]||content;
-  fetch('/docs/upload', {
-    method: 'POST',
-    headers: { 'Content-Type': file.type||'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) },
-    body: typeof content === 'string' ? Uint8Array.from(atob(b64), c=>c.charCodeAt(0)) : content
-  }).then(function(r){ return r.json(); }).then(function(){ loadDocLibrary(); }).catch(function(e){ console.warn('Upload failed:',e.message); });
-  docLibrary.push({ name: file.name, type: file.type, content: content, size: file.size, uploaded: new Date().toLocaleTimeString('en-AU') });
-
-  }
-
-  renderDocLibrary();
-
-  // Reset input
-
-  document.getElementById('docUpload').value = '';
-
-}
-
-function readFileContent(file) {
-
-  return new Promise(function(resolve) {
-
-    var reader = new FileReader();
-
-    reader.onload = function(e) { resolve(e.target.result); };
-
-    reader.onerror = function() { resolve('[Could not read file]'); };
-
-    if (file.type === 'text/plain' || file.type === 'text/markdown' || file.name.endsWith('.txt') || file.name.endsWith('.md') || file.name.endsWith('.csv')) {
-
-      reader.readAsText(file);
-
+app.post('/docs/upload', requireAuth, express.raw({ type: '*/*', limit: '20mb' }), async (req, res) => {
+  try {
+    const fname = decodeURIComponent(req.headers['x-filename'] || 'upload.bin');
+    const ctype = req.headers['content-type'] || 'application/octet-stream';
+    const cc = await getBlobContainer();
+    if (cc) {
+      const bc = cc.getBlockBlobClient(fname);
+      await bc.uploadData(req.body, { blobHTTPHeaders: { blobContentType: ctype } });
     } else {
-
-      reader.readAsDataURL(file); // base64 for binary files
-
+      if (!existsSync(DOCS_LOCAL)) mkdirSync(DOCS_LOCAL, { recursive: true });
+      writeFileSync(pathJoin(DOCS_LOCAL, fname), req.body);
     }
-
-  });
-
-}
-
-function renderDocLibrary() {
-
-  var listEl = document.getElementById('docList');
-
-  var emptyEl = document.getElementById('docEmpty');
-
-  if (!listEl) return;
-
-  if (docLibrary.length === 0) {
-
-    listEl.innerHTML = '';
-
-    if (emptyEl) emptyEl.style.display = 'block';
-
-    return;
-
-  }
-
-  if (emptyEl) emptyEl.style.display = 'none';
-
-  listEl.innerHTML = docLibrary.map(function(doc, idx) {
-
-    var icon = doc.name.endsWith('.pdf') ? '📄' : doc.name.endsWith('.docx') || doc.name.endsWith('.doc') ? '📝' : doc.name.endsWith('.csv') ? '📊' : '📃';
-
-    var kb = Math.round(doc.size / 1024);
-
-    return '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);border-radius:var(--rm);margin-bottom:6px">'+
-
-      '<span style="font-size:16px">'+icon+'</span>'+
-
-      '<div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:500;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+doc.name+'</div>'+
-
-      '<div style="font-size:10px;color:var(--t3)">'+kb+'KB · Uploaded '+doc.uploaded+'</div></div>'+
-
-      '<button onclick="askAboutDoc('+idx+')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--b);color:#fff;border:none;cursor:pointer;flex-shrink:0">Ask Cinderella</button>'+
-
-      '<button onclick="removeDoc('+idx+')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:none;border:0.5px solid var(--bm);color:var(--t2);cursor:pointer;flex-shrink:0;margin-left:4px">✕</button>'+
-
-    '</div>';
-
-  }).join('');
-
-}
-
-function removeDoc(idx) {
-
-  var doc = docLibrary[idx];
-  if (doc && doc.name) {
-    fetch('/docs/'+encodeURIComponent(doc.name), {method:'DELETE'}).catch(function(){});
-  }
-  docLibrary.splice(idx, 1);
-
-  renderDocLibrary();
-
-}
-
-function askAboutDoc(idx) {
-
-  var doc = docLibrary[idx];
-
-  if (!doc) return;
-
-  var content = typeof doc.content === 'string' && !doc.content.startsWith('data:') ? doc.content.substring(0, 3000) : '[Binary file — cannot read content directly]';
-
-  show('chat', document.querySelector('[onclick*=chat]'));
-
-  qa('I have uploaded a document called "' + doc.name + '". Here is its content:\n\n' + content + '\n\nPlease summarise this document and tell me what key information it contains that is relevant to Risk 2 Solution.');
-
-}
-
-function getDocContext() {
-
-  if (docLibrary.length === 0) return '';
-
-  var ctx = '\n\nDOCUMENT LIBRARY (' + docLibrary.length + ' document' + (docLibrary.length > 1 ? 's' : '') + ' uploaded by Kandia):\n';
-
-  docLibrary.forEach(function(doc) {
-
-    var content = typeof doc.content === 'string' && !doc.content.startsWith('data:') ? doc.content.substring(0, 1500) : '[Binary file]';
-
-    ctx += '\nDOCUMENT: ' + doc.name + '\n' + content + '\n---\n';
-
-  });
-
-  return ctx;
-
-}
-
-// ── WORD DOCUMENT EXPORT ──
-
-function downloadStoredDoc(idx) {
-
-  var doc = window._dlDocs && window._dlDocs[idx];
-
-  if (!doc) return;
-
-  downloadAsWord(doc.title, doc.content);
-
-}
-
-function downloadAsWord(title, content) {
-
-  // Create a simple HTML-based .doc file that Word can open
-
-  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>'+
-
-    'body{font-family:Calibri,sans-serif;font-size:11pt;line-height:1.4;margin:2cm}'+
-
-    'h1{font-size:16pt;color:#1a1a18;margin-bottom:6pt}'+
-
-    'h2{font-size:13pt;color:#1D9E75;margin-top:14pt;margin-bottom:4pt}'+
-
-    'h3{font-size:11pt;color:#378ADD;margin-top:10pt}'+
-
-    'p{margin-bottom:6pt}'+
-
-    '.header{border-bottom:2pt solid #1D9E75;padding-bottom:6pt;margin-bottom:14pt}'+
-
-    '.footer{border-top:1pt solid #ccc;padding-top:6pt;margin-top:20pt;font-size:9pt;color:#888}'+
-
-    '</style></head><body>'+
-
-    '<div class="header"><h1>'+title+'</h1>'+
-
-    '<p style="color:#888;font-size:9pt">Risk 2 Solution · Generated by Cinderella · '+new Date().toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'})+'</p></div>'+
-
-    content.replace(/\n/g,'<br>').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/^# (.*)/gm,'<h1>$1</h1>').replace(/^## (.*)/gm,'<h2>$1</h2>').replace(/^### (.*)/gm,'<h3>$1</h3>')+
-
-    '<div class="footer">Risk 2 Solution · Confidential · Generated '+new Date().toLocaleString('en-AU')+'</div>'+
-
-    '</body></html>';
-
-  var blob = new Blob([html], { type: 'application/msword' });
-
-  var url = URL.createObjectURL(blob);
-
-  var a = document.createElement('a');
-
-  a.href = url;
-
-  a.download = title.replace(/[^a-z0-9]/gi,'_').substring(0,50) + '_' + new Date().toLocaleDateString('en-AU').replace(/\//g,'-') + '.doc';
-
-  document.body.appendChild(a);
-
-  a.click();
-
-  document.body.removeChild(a);
-
-  URL.revokeObjectURL(url);
-
-}
-
-function addDownloadButton(content, title) {
-
-  // Add a download button after any AI response that looks like a report
-
-  var btn = document.createElement('div');
-
-  btn.style.cssText = 'margin-top:8px';
-
-  var dlIdx = Object.keys(window._dlDocs||{}).length;
-
-  window._dlDocs = window._dlDocs || {};
-
-  window._dlDocs[dlIdx] = {title: title||'Report', content: content};
-
-  btn.innerHTML = '<button onclick="downloadStoredDoc('+dlIdx+')" style="font-size:11px;padding:5px 12px;border-radius:6px;background:#2B579A;color:#fff;border:none;cursor:pointer;font-family:var(--f)">📄 Download as Word document</button>';
-
-  return btn;
-
-}
-
-function loadCfg(){
-
-  try{const s=localStorage.getItem('cin_cfg_v3');if(s){const p=JSON.parse(s);if(p.api)C.api=p.api;if(p.bin)C.bin=p.bin;if(p.key)C.key=p.key;}}catch(e){}
-
-  document.getElementById('setupMo').style.display='none';
-
-  if(C.api)document.getElementById('s-api').value='(baked in — working)';
-
-  if(C.bin)document.getElementById('s-bin').value=C.bin;
-
-  if(C.key)document.getElementById('s-key').value=C.key;
-
-  if(C.bin&&C.key){syncNow();
-  loadDocLibrary();
-  loadTracker();setInterval(syncNow,60*60*1000);}
-
-}
-
-function saveSetup(){
-
-  C.api=document.getElementById('s-api').value.trim();
-
-  C.bin=document.getElementById('s-bin').value.trim();
-
-  C.key=document.getElementById('s-key').value.trim();
-
-  try{localStorage.setItem('cin_cfg_v3',JSON.stringify(C));}catch(e){}
-
-  document.getElementById('setupMo').style.display='none';
-
-  if(C.bin&&C.key){syncNow();setInterval(syncNow,60*60*1000);}
-
-}
-
-function skipSetup(){document.getElementById('setupMo').style.display='none';}
-
-function getCurrentWeekEnding() {
-
-  var d = new Date();
-
-  var day = d.getDay();
-
-  var daysToFri = day === 5 ? 0 : day === 6 ? 6 : 5 - day;
-
-  var fri = new Date(d);
-
-  fri.setDate(d.getDate() + daysToFri);
-
-  return fri.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
-
-}
-
-async function syncNow(){
-
-  if(!C.bin||!C.key){setSyncUI('off','JSONBin not configured');return;}
-
-  const btn=document.getElementById('syncBtn');
-
-  btn.textContent='Syncing...';btn.className='sync-btn warn';
-
-  setSyncUI('warn','Syncing...');
-
-  try{
-
-    const r=await fetch(`/checkins/latest`);
-
-    if(r.status===401){
-      btn.textContent='Session expired';btn.className='sync-btn warn';
-      setSyncUI('warn','Session expired — <a href="/login" style="color:var(--b)">click here to log in again</a>');
-      return;
-    }
-
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
-
-    // Guard against HTML response (login page redirect)
-    const text=await r.text();
-    if(text.trim().startsWith('<')){
-      btn.textContent='Session expired';btn.className='sync-btn warn';
-      setSyncUI('warn','Session expired — please refresh and log in again');
-      return;
-    }
-    const d=JSON.parse(text);
-
-    const allRaw=(Array.isArray(d.record)?d.record:[]).filter(e=>e&&e.name);
-
-    window._allCheckIns = allRaw; // store all for history/monthly views
-
-    // Show check-ins submitted since last Monday (current calendar week)
-
-    var lastMonday = new Date();
-
-    lastMonday.setHours(0,0,0,0);
-
-    var dow = lastMonday.getDay();
-
-    lastMonday.setDate(lastMonday.getDate() - (dow === 0 ? 6 : dow - 1));
-
-    var thisWeek = allRaw.filter(function(e){
-      // Match by submitted timestamp OR weekEnding as fallback
-      if (e.submitted) return new Date(e.submitted) >= lastMonday;
-      if (e.weekEnding) {
-        var we = new Date(e.weekEnding);
-        var weMonday = new Date(we); weMonday.setDate(we.getDate() - 6);
-        return weMonday >= lastMonday || we >= lastMonday;
-      }
-      return false;
-    });
-
-    // No fallback to previous week — this week stays empty until staff submit
-
-    const byP={};
-
-    thisWeek.forEach(e=>{const k=e.name.toLowerCase();if(!byP[k]||new Date(e.submitted)>new Date(byP[k].submitted))byP[k]=e;});
-
-    SD=Object.values(byP);
-
-    const t=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
-
-    btn.textContent=`Synced ${t}`;btn.className='sync-btn ok';
-
-    setSyncUI('on',`Last synced ${t} · ${SD.length} check-in${SD.length!==1?'s':''}`);
-
-    try{updateAll();}catch(e){console.warn('updateAll error:',e.message);}
-
-  }catch(e){
-
-    btn.textContent='Sync failed';btn.className='sync-btn';
-
-    setSyncUI('warn',`Sync failed: ${e.message}`);
-
-  }
-
-}
-
-function setSyncUI(state,msg){
-
-  const bar=document.getElementById('syncBar');
-
-  const dot=document.getElementById('syncDot');
-
-  const txt=document.getElementById('syncTxt');
-
-  if(!bar||!dot||!txt){console.warn('Sync UI elements missing');return;}
-
-  bar.style.display='flex';
-
-  dot.className='sdot2 '+(state==='on'?'on':state==='warn'?'warn':'off');
-
-  txt.textContent=msg;
-
-}
-
-function updateAll(){
-
-  const n=SD.length;
-
-  const tc=document.getElementById('todayCount');
-
-  if(tc){tc.textContent=n;tc.style.color=n>=8?'var(--g)':n>=4?'var(--a)':'var(--r)';}
-
-  const badge=document.getElementById('staffBadge');
-
-  if(badge){badge.textContent=n;badge.style.display=n>0?'inline-block':'none';}
-
-  const bc=document.getElementById('briefingCheckin');
-
-  if(bc){bc.textContent=n>0?`${n} of 12 check-ins this week. ${SD.filter(s=>s.capacity>=85).length} overloaded. ${SD.filter(s=>hasBlocker(s.blockers)).length} blockers.`:'No check-ins yet. Send the form to staff.';}
-
-  try{renderStaff();
-
-    // Update check-in count metric
-
-    var countEl = document.getElementById('todayCount');
-
-    var subEl = document.getElementById('checkinSub');
-
-    if (countEl) { countEl.textContent = SD.length; countEl.style.color = SD.length < ALL_STAFF.length ? 'var(--a)' : 'var(--g)'; }
-
-    if (subEl) subEl.textContent = 'of ' + ALL_STAFF.length + ' this week — click to see who is missing';}catch(e){console.warn('renderStaff:',e.message);}
-
-  try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
-
-  try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
-
-  if(n>0){
-
-    const avg=Math.round(SD.reduce((a,s)=>a+s.capacity,0)/n);
-
-    const els={'sm-avg':avg+'%','sm-n':n,'sm-ov':SD.filter(s=>s.capacity>=85).length,'sm-fr':SD.filter(s=>s.capacity<65).length,'sk-ov':SD.filter(s=>s.capacity>=85).length,'sk-fr':SD.filter(s=>s.capacity<70).length};
-
-    var snSub=document.getElementById('sm-n-sub');
-
-    if(snSub) snSub.textContent='of '+ALL_STAFF.length+' this week — click to see who is missing';
-
-    Object.entries(els).forEach(([id,val])=>{const el=document.getElementById(id);if(el)el.textContent=val;});
-
-    const smAvg=document.getElementById('sm-avg');
-
-    if(smAvg)smAvg.style.color=avg>=80?'var(--a)':'var(--t1)';
-
-  }
-
-  buildCharts();
-
-}
-
-function buildCharts(){
-
-  if(!charts.email){
-
-    const ctx=document.getElementById('emailChart');
-
-    if(ctx)charts.email=new Chart(ctx,{type:'bar',data:{labels:['Mon','Tue','Wed','Thu','Fri'],datasets:[{label:'Received',data:[18,24,15,21,9],backgroundColor:'#B5D4F4',borderRadius:3},{label:'Sent',data:[12,17,9,13,6],backgroundColor:'#1D9E75',borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:10}}},y:{ticks:{font:{size:10}},grid:{color:'rgba(128,128,128,0.1)'}}}}});
-
-  }
-
-  // Aurora project context — inject live data into chat
-  if (window._auroraData && window._auroraData.projects) {
-    var aurProjs = window._auroraData.projects;
-    var aurCtx = '\n\nAURORA PROJECTS (live from Aurora agent):\n';
-    aurProjs.forEach(function(p) {
-      aurCtx += '- ' + p.client + ' [' + p.phase + ']';
-      if (p.totalOutstanding > 0) aurCtx += ' | $' + Math.round(p.totalOutstanding).toLocaleString() + ' outstanding';
-      if (p.overdueDeliverables && p.overdueDeliverables.length > 0) aurCtx += ' | ' + p.overdueDeliverables.length + ' overdue deliverables';
-      if (p.consultant) aurCtx += ' | Consultant: ' + p.consultant;
-      if (p.dueDate) aurCtx += ' | Due: ' + p.dueDate;
-      aurCtx += '\n';
-    });
-    aurCtx += 'Total outstanding invoices: $' + Math.round(window._auroraData.totalOutstandingAll||0).toLocaleString() + '\n';
-    aurCtx += 'Total overdue deliverables: ' + (window._auroraData.totalOverdue||0) + '\n';
-    liveCtx += aurCtx;
-  }
-
-  if(SD.length>0){
-
-    const labels=SD.map(s=>s.name.split(' ')[0]);
-
-    const vals=SD.map(s=>s.capacity);
-
-    const colors=SD.map(s=>s.capacity>=85?'#E24B4A':s.capacity>=70?'#EF9F27':'#1D9E75');
-
-    if(charts.cap)charts.cap.destroy();
-
-    const ctx2=document.getElementById('capChart');
-
-    if(ctx2)charts.cap=new Chart(ctx2,{type:'bar',data:{labels,datasets:[{label:'Capacity %',data:vals,backgroundColor:colors,borderRadius:4}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{max:100,ticks:{callback:v=>v+'%',font:{size:10}},grid:{color:'rgba(128,128,128,0.1)'}},y:{ticks:{font:{size:10}}}}}});
-
-    const over=SD.filter(s=>s.capacity>=85).length;
-
-    const mid=SD.filter(s=>s.capacity>=65&&s.capacity<85).length;
-
-    const free=SD.filter(s=>s.capacity<65).length;
-
-    if(charts.dist)charts.dist.destroy();
-
-    const ctx3=document.getElementById('distChart');
-
-    if(ctx3)charts.dist=new Chart(ctx3,{type:'doughnut',data:{labels:['Overloaded >85%','Busy 65-85%','Available <65%'],datasets:[{data:[over,mid,free],backgroundColor:['#E24B4A','#EF9F27','#1D9E75'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:8}}}}});
-
-  }
-
-}
-
-const EMPTY_B=['none','n/a','no','nil','-','no blockers','nothing','nope','na','no blocker'];
-
-function hasBlocker(b){const t=(b||'').trim();return t.length>2&&!EMPTY_B.includes(t.toLowerCase());}
-
-function cap(name){return(name||'').split(' ').map(w=>w?w.charAt(0).toUpperCase()+w.slice(1):'').join(' ');}
-
-function initials(n){return cap(n||'??').split(' ').map(w=>w[0]||'').join('').substring(0,2).toUpperCase();}
-
-function bc(c){return c>=85?'br':c>=70?'ba':'bg';}
-
-function renderStaff(){
-
-  const el=document.getElementById('staffGrid');
-
-  if(!el)return;
-
-  if(SD.length===0){
-    var missing=ALL_STAFF.map(function(s){return s.name.split(' ')[0];}).join(', ');
-    el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center;grid-column:1/-1">No check-ins received this week yet.<br><span style="font-size:11px">Waiting on: '+missing+'</span><br><br><button onclick="sendAllReminders()" style="font-size:11px;padding:5px 14px;background:var(--g);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f);margin-right:8px">Send reminders to all staff</button><button onclick="openManualCheckin()" style="font-size:11px;padding:5px 14px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer;font-family:var(--f)">+ Add check-in manually</button></div>';
-    return;
-  }
-
-  const sorted=[...SD].sort((a,b)=>b.capacity-a.capacity);
-
-  el.innerHTML=sorted.map((s,i)=>{
-
-    const av=AV_STYLES[i%AV_STYLES.length];
-
-    const tc=s.trend==='Heavier'?'up':s.trend==='Lighter'?'dn':'';
-
-    const ti=s.trend==='Heavier'?'↑ Heavier':s.trend==='Lighter'?'↓ Lighter':'→ Similar';
-
-    const tags=[];
-
-    if(s.trend)tags.push(`<span class="stag ${tc}">${ti}</span>`);
-
-    if(s.availability&&s.availability!=='Full week')tags.push(`<span class="stag lv">${s.availability}</span>`);
-
-    if(s.blockers&&s.blockers.trim())tags.push('<span class="stag bl">Blocker</span>');
-
-    const skills=(s.skills||'').split(',').filter(x=>x.trim()).slice(0,3).map(sk=>`<span class="stag">${sk.trim()}</span>`).join('');
-
-    const sub=s.submitted?new Date(s.submitted).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'';
-
-    const pct=s.capacity||0;
-
-    const capCol = pct>=90?'#C8211E':pct>=75?'#D97706':'#0A9A94';
-    const capBg  = pct>=90?'rgba(200,33,30,0.08)':pct>=75?'rgba(217,119,6,0.08)':'rgba(10,154,148,0.08)';
-    const hasBlockerReal = s.blockers && !s.blockers.toLowerCase().match(/^(none|no|ntr|n\/a|not at the moment|-)$/);
-    const cardAccent = hasBlockerReal ? '#C8211E' : pct>=90 ? '#C8211E' : pct>=75 ? '#D97706' : '#0A9A94';
-    const skillsPills = (s.skills||'').split(',').filter(x=>x.trim()).slice(0,4).map(sk=>
-      `<span style="font-size:9.5px;font-weight:600;padding:2px 8px;border-radius:999px;background:#E6F7F7;color:#0A9A94;white-space:nowrap">${sk.trim()}</span>`
-    ).join('');
-
-    return `<div class="sc" onclick="openStaffModal(${i})" style="border-top:3px solid ${cardAccent}">
-
-      <!-- Header: avatar + name + time -->
-      <div class="sh">
-        <div style="width:36px;height:36px;border-radius:50%;background:${cardAccent};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0">${initials(s.name)}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:13px;font-weight:700;color:var(--t1);line-height:1.2">${cap(s.name)}</div>
-          <div style="font-size:10.5px;color:var(--t3);margin-top:1px">${cap(s.role)||'—'}</div>
-        </div>
-        <div style="font-size:9.5px;color:var(--t3);text-align:right;flex-shrink:0">${sub}</div>
-      </div>
-
-      <!-- Capacity bar section -->
-      <div style="padding:0 15px 12px">
-        <div style="background:${capBg};border-radius:8px;padding:10px 12px">
-          <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">
-            <span style="font-size:9px;font-weight:700;color:${capCol};text-transform:uppercase;letter-spacing:.08em">This week — capacity</span>
-            <span style="font-size:20px;font-weight:800;color:${capCol};letter-spacing:-1px;line-height:1">${pct}%</span>
-          </div>
-          <div style="height:8px;background:rgba(0,0,0,0.08);border-radius:999px;overflow:hidden">
-            <div style="height:100%;width:${pct}%;background:${capCol};border-radius:999px"></div>
-          </div>
-          ${s.trend?`<div style="font-size:9.5px;color:${capCol};opacity:.8;margin-top:5px;font-weight:500">${s.trend==='Lighter'?'↓ Lighter':s.trend==='Heavier'?'↑ Heavier':'→ Similar'} than last week</div>`:''}
-        </div>
-
-        <!-- Projects -->
-        ${s.projects?`<div style="margin-top:10px"><div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px">Projects</div><div style="font-size:11px;color:var(--t2);line-height:1.45">${s.projects}</div></div>`:''}
-
-        <!-- Blocker -->
-        ${hasBlockerReal?`<div style="margin-top:10px;background:#FEE2E2;border-radius:6px;padding:7px 10px"><div style="font-size:9px;font-weight:700;color:#C8211E;text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px">⚠ Blocker</div><div style="font-size:11px;color:#7F1D1D">${s.blockers}</div></div>`:''}
-
-        <!-- Skills -->
-        ${skillsPills?`<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:10px">${skillsPills}</div>`:''}
-      </div>
-    </div>`;
-
-  }).join('');
-
-  const insEl=document.getElementById('staffInsights');
-
-  if(!insEl)return;
-
-  const overloaded=SD.filter(s=>s.capacity>=85);
-
-  const free=SD.filter(s=>s.capacity<65);
-
-  let html='';
-
-  if(overloaded.length>0)html+=`<div class="ins" onclick="show('skills',null)"><div class="il">Overload alert</div><div class="it">${overloaded.length===1?cap(overloaded[0].name.split(' ')[0])+' is':overloaded.map(s=>cap(s.name.split(' ')[0])).join(' and ')+' are'} above 85% capacity — check skill matches.</div></div>`;
-
-  const realBlockers=SD.filter(s=>hasBlocker(s.blockers));
-
-  if(realBlockers.length>0)html+=`<div class="ins" onclick="qa('Suggest how to resolve these staff blockers: ${realBlockers.map(s=>cap(s.name)+': '+s.blockers).join('; ')}')"><div class="il">Blockers flagged</div><div class="it">${realBlockers.map(s=>cap(s.name.split(' ')[0])).join(' and ')} ${realBlockers.length===1?'has':'have'} reported blockers needing your attention.</div></div>`;
-
-  if(free.length>0&&overloaded.length>0){const freeNames=free.map(s=>cap(s.name.split(' ')[0]));html+=`<div class="ins" onclick="show('skills',null)"><div class="il">Capacity available</div><div class="it">${freeNames.length===1?freeNames[0]+' has':freeNames.join(' and ')+' have'} capacity below 65% and could absorb work.</div></div>`;}
-
-  if(!html)html='<div style="font-size:11px;color:var(--t3);padding:4px 0">Team capacity looks healthy this week.</div>';
-
-  insEl.innerHTML=html;
-
-}
-
-function showMissingStaffModal() {
-
-  var checked = SD.map(function(s){ return s.name.toLowerCase(); });
-
-  var missing = ALL_STAFF.filter(function(s){
-
-    var first = s.name.split(' ')[0].toLowerCase();
-
-    return !checked.some(function(n){ return n.includes(first); });
-
-  });
-
-  var received = ALL_STAFF.filter(function(s){
-
-    var first = s.name.split(' ')[0].toLowerCase();
-
-    return checked.some(function(n){ return n.includes(first); });
-
-  });
-
-  window._missingStaffModal = {};
-
-  var missingRows = missing.map(function(s, i) {
-
-    window._missingStaffModal[i] = s;
-
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:0.5px solid var(--bl)">' +
-
-      '<div><div style="font-size:12px;font-weight:500;color:var(--t1)">' + s.name + '</div>' +
-
-      '<div style="font-size:10px;color:var(--t3)">' + s.email + '</div></div>' +
-
-      '<button onclick="sendReminderFromModal(' + i + ')" style="font-size:10px;padding:4px 12px;border-radius:8px;background:#A32D2D;color:#fff;border:none;cursor:pointer;font-family:var(--f);white-space:nowrap">Send reminder</button>' +
-
-    '</div>';
-
-  }).join('');
-
-  var receivedRows = received.map(function(s) {
-
-    var entry = SD.find(function(e){ return e.name.toLowerCase().includes(s.name.split(' ')[0].toLowerCase()); });
-
-    var pct = entry ? entry.capacity : 0;
-
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:0.5px solid var(--bl)">' +
-
-      '<div style="font-size:12px;color:var(--t1)">' + s.name + '</div>' +
-
-      '<span style="font-size:11px;font-weight:500;color:' + (pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)') + '">' + pct + '%</span>' +
-
-    '</div>';
-
-  }).join('');
-
-  var body =
-
-    (missing.length > 0 ?
-
-      '<div class="alert-box" style="margin-bottom:12px"><div class="ab-title">⚠ ' + missing.length + ' staff have not submitted their check-in this week</div></div>' +
-
-      missingRows :
-
-      '<div class="alert-box ok"><div class="ab-title">✅ All staff have submitted this week</div></div>') +
-
-    (received.length > 0 ?
-
-      '<div style="margin-top:16px"><div style="font-size:10px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Submitted this week</div>' + receivedRows + '</div>' : '') +
-
-    '<hr class="m-divider">' +
-
-    '<button class="m-btn" onclick="sendAllReminders()" style="width:100%">Send reminder to all ' + missing.length + ' missing staff</button>';
-
-  openModal('Staff check-in status', SD.length + ' of ' + ALL_STAFF.length + ' submitted this week', body);
-
-}
-
-async function sendReminderFromModal(idx) {
-  var s = window._missingStaffModal && window._missingStaffModal[idx];
-  if (!s) return;
-  var firstName = s.name.split(' ')[0];
-  var subject = 'Reminder: weekly check-in';
-  var emailBody = 'Hi ' + firstName + ',\n\nI hope you are having a great week so far!\n\nPlease don\'t forget to send your weekly check-in. It\'s always helpful to sync up on priorities, address any roadblocks, and make sure you have what you need to keep things moving forward.\n\nYou can complete it here:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin\n\nThanks so much!\n\nKandia';
-  closeModal();
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/docs/read/:name', requireAuth, async (req, res) => {
   try {
-    var r = await fetch('/graph/email/draft', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subject:subject,body:emailBody,to:[s.email]})});
-    var d = await r.json();
-    if (d.success) {
-      openModal('Reminder saved to Drafts', 'For ' + s.name,
-        '<div class="alert-box ok"><div class="ab-title">Draft saved to Outlook Drafts</div>' +
-        '<div class="ab-text">Open Outlook Drafts, review and send the reminder to ' + firstName + '.</div></div>' +
-        '<div style="display:flex;gap:8px;margin-top:12px">' +
-          '<button class="m-btn" style="background:#0078D4" onclick="openOutlookDrafts()">Open Outlook Drafts</button>' +
-          '<button class="m-btn sec" onclick="closeModal()">Close</button>' +
-        '</div>'
-      );
-      return;
+    const fname = decodeURIComponent(req.params.name);
+    const cc = await getBlobContainer();
+    let buf;
+    if (cc) {
+      const bc = cc.getBlockBlobClient(fname);
+      buf = await bc.downloadToBuffer();
+    } else {
+      buf = readFileSync(pathJoin(DOCS_LOCAL, fname));
     }
-  } catch(e) { console.warn('Draft failed:', e.message); }
-  showToast('Could not create draft — check your M365 connection');
-}
+    if (fname.match(/\.(txt|md|csv)$/i)) {
+      res.setHeader('Content-Type', 'text/plain'); res.send(buf.toString('utf8'));
+    } else {
+      res.json({ data: buf.toString('base64'), name: fname });
+    }
+  } catch(e) { res.status(404).json({ error: e.message }); }
+});
 
-function staffAction(type) {
-
-  var st = window._currentStaff;
-
-  if (!st) return;
-
-  if (type === 0) openDraftModal(st.name, 'Checking in on workload', 'Checking in — how can I support you?', 'email');
-
-  else if (type === 1) openDraftModal(st.name, '1:1 check-in', '1:1 — workload check-in', 'meeting');
-
-  else if (type === 2) { closeModal(); actionBlocker(st.name, st.blockers || ''); }
-
-  else if (type === 3) { show('skills',null); closeModal(); }
-
-  else if (type === 4) { deleteCheckIn(st.name, st.weekEnding||''); }
-
-}
-
-function openStaffModal(idx){
+app.delete('/docs/:name', requireAuth, async (req, res) => {
   try {
-    const sorted=[...SD].sort((a,b)=>b.capacity-a.capacity);
-    const st=sorted[idx];
-    if(!st){ console.warn('No staff at index', idx); return; }
-
-    const pct = st.capacity||0;
-    const pctNext = st.capacityNext||0;
-    const capCol = pct>=90?'#C8211E':pct>=75?'#D97706':'#0D8A62';
-    const nxtCol = pctNext>=90?'#C8211E':pctNext>=75?'#D97706':'#0D8A62';
-
-    function barRow(label, val, col) {
-      return '<div style="margin-bottom:14px">' +
-        '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px">' +
-          '<span style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em">'+label+'</span>' +
-          '<span style="font-size:22px;font-weight:800;color:'+col+';letter-spacing:-1px;line-height:1">'+val+'%</span>' +
-        '</div>' +
-        '<div style="width:100%;height:14px;background:#E8E6E1;border-radius:999px;overflow:hidden">' +
-          '<div style="height:100%;width:'+val+'%;background:'+col+';border-radius:999px"></div>' +
-        '</div>' +
-      '</div>';
+    const fname = decodeURIComponent(req.params.name);
+    const cc = await getBlobContainer();
+    if (cc) {
+      await cc.getBlockBlobClient(fname).delete();
+    } else {
+      const fp = pathJoin(DOCS_LOCAL, fname);
+      if (existsSync(fp)) unlinkSync(fp);
     }
-
-    const hasBlocker = st.blockers && !st.blockers.toLowerCase().match(/^(none|no|n\/a|not at the moment|-)$/);
-    const matches = findMatches().filter(m=>m.busy.name===st.name||m.free.name===st.name);
-    const skills = (st.skills||'').split(',').map(s=>s.trim()).filter(Boolean);
-    const submittedStr = st.submitted
-      ? new Date(st.submitted).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})
-      : 'Unknown';
-
-    var html =
-      // ── CAPACITY BARS ── full width, stacked
-      '<div style="background:#F8F8F6;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #E8E6E1;width:100%;box-sizing:border-box">' +
-        barRow('This week — capacity', pct, capCol) +
-        (pctNext ? '<div style="height:1px;background:#E8E6E1;margin:6px 0 16px"></div>' + barRow('Next week — forecast', pctNext, nxtCol) : '') +
-      '</div>' +
-
-      // ── BLOCKER ── own row, below capacity
-      (hasBlocker ?
-        '<div style="background:#FEE2E2;border-radius:10px;padding:12px 16px;margin-bottom:16px">' +
-          '<div style="font-size:9px;font-weight:700;color:#C8211E;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px">⚠ Blocker reported</div>' +
-          '<div style="font-size:13px;color:#7F1D1D;line-height:1.5">'+st.blockers+'</div>' +
-        '</div>' : '') +
-
-      // ── STATS GRID ──
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">' +
-        '<div style="background:#F8F8F6;border-radius:8px;padding:10px 14px;border:1px solid #E8E6E1">' +
-          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px">Workload trend</div>' +
-          '<div style="font-size:13px;color:#111110;font-weight:500">'+(st.trend||'—')+'</div>' +
-        '</div>' +
-        '<div style="background:#F8F8F6;border-radius:8px;padding:10px 14px;border:1px solid #E8E6E1">' +
-          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px">Availability next week</div>' +
-          '<div style="font-size:13px;color:#111110;font-weight:500">'+(st.availability||'Full week')+(st.leave?' — '+st.leave:'')+'</div>' +
-        '</div>' +
-      '</div>' +
-
-      // ── PROJECTS ──
-      '<div style="margin-bottom:16px">' +
-        '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Projects this week</div>' +
-        '<div style="font-size:13px;color:#111110;line-height:1.5">'+(st.projects||'—')+'</div>' +
-      '</div>' +
-
-      // ── SKILLS ──
-      (skills.length>0 ?
-        '<div style="margin-bottom:16px">' +
-          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:7px">Skills</div>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
-            skills.map(s=>'<span style="background:#EEF4FF;color:#1D4ED8;font-size:11px;font-weight:600;padding:4px 12px;border-radius:999px;border:1px solid #BFDBFE">'+s+'</span>').join('') +
-          '</div>' +
-        '</div>' : '') +
-
-      // ── NOTES ──
-      (st.notes ?
-        '<div style="margin-bottom:16px">' +
-          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">Notes to COO</div>' +
-          '<div style="font-size:13px;color:#111110;line-height:1.5;background:#FEFCE8;padding:10px 14px;border-radius:8px;border:1px solid #FEF08A">'+st.notes+'</div>' +
-        '</div>' : '') +
-
-      // ── SKILL MATCHES ──
-      (matches.length>0 ?
-        '<div style="margin-bottom:16px">' +
-          '<div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Skill match opportunities</div>' +
-          matches.map(m=>
-            '<div style="background:#DCEEE6;border-left:3px solid #0D8A62;border-radius:0 8px 8px 0;padding:9px 14px;margin-bottom:5px">' +
-            '<div style="font-size:12px;font-weight:600;color:#0D8A62">'+(m.busy.name===st.name?'Support available from '+m.free.name+' ('+m.free.capacity+'%)':'Can support '+m.busy.name+' ('+m.busy.capacity+'%)')+'</div>' +
-            '<div style="font-size:11px;color:#4A4844;margin-top:2px">Shared skills: '+m.shared.join(', ')+'</div></div>'
-          ).join('') +
-        '</div>' : '') +
-
-      '<div style="font-size:10px;color:#9A9693;margin-bottom:18px;padding-top:4px;border-top:1px solid #E8E6E1">Submitted '+submittedStr+'</div>' +
-
-      // ── ACTIONS ──
-      '<div style="display:flex;gap:8px;margin-bottom:10px">' +
-        '<button onclick="staffAction(0)" style="flex:1;padding:10px 0;border-radius:8px;background:#0D8A62;color:#fff;border:none;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--f)">✉ Email</button>' +
-        '<button onclick="staffAction(1)" style="flex:1;padding:10px 0;border-radius:8px;background:#1D4ED8;color:#fff;border:none;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--f)">📅 1:1</button>' +
-        (hasBlocker?'<button onclick="staffAction(2)" style="flex:1;padding:10px 0;border-radius:8px;background:#FEE2E2;color:#C8211E;border:1.5px solid #C8211E;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--f)">🚧 Blocker</button>':'') +
-        (matches.length>0?'<button onclick="staffAction(3)" style="flex:1;padding:10px 0;border-radius:8px;background:#F8F8F6;color:#111110;border:1px solid #E8E6E1;font-size:12.5px;font-weight:500;cursor:pointer;font-family:var(--f)">✦ Skill match</button>':'') +
-      '</div>' +
-      '<button onclick="staffAction(4)" style="width:100%;padding:10px 0;border-radius:8px;background:#fff;color:#C8211E;border:1.5px solid #C8211E;font-size:12.5px;font-weight:600;cursor:pointer;font-family:var(--f)">Delete this check-in</button>';
-
-    window._currentStaff = st;
-    // Use · character directly (not &middot; since openModal uses innerHTML for subtitle now)
-    openModal(cap(st.name), (cap(st.role)||'Staff member')+' · Week ending '+(st.weekEnding||''), html);
-  } catch(err) { console.error('openStaffModal error:', err); }
-}
-
-function parseSkills(str){return(str||'').split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);}
-
-function findMatches(){
-
-  const overloaded=SD.filter(s=>s.capacity>=85);
-
-  const available=SD.filter(s=>s.capacity<70);
-
-  const results=[];
-
-  overloaded.forEach(busy=>{
-
-    const bs=parseSkills(busy.skills);
-
-    available.forEach(free=>{
-
-      if(free.name===busy.name)return;
-
-      const fs=parseSkills(free.skills);
-
-      const shared=bs.filter(b=>fs.some(f=>f.includes(b)||b.includes(f)||levenshtein(b,f)<3));
-
-      if(shared.length>0)results.push({busy,free,shared,slack:100-free.capacity});
-
-    });
-
-  });
-
-  return results.sort((a,b)=>b.slack-a.slack);
-
-}
-
-function levenshtein(a,b){
-
-  const m=a.length,n=b.length;
-
-  const dp=Array.from({length:m+1},(_,i)=>[i,...Array(n).fill(0)]);
-
-  for(let j=0;j<=n;j++)dp[0][j]=j;
-
-  for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)dp[i][j]=a[i-1]===b[j-1]?dp[i-1][j-1]:1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);
-
-  return dp[m][n];
-
-}
-
-function renderSkillMatch(){
-
-  const matches=findMatches();
-
-  const mbadge=document.getElementById('matchBadge');
-
-  if(mbadge){mbadge.textContent=matches.length;mbadge.style.display=matches.length>0?'inline-block':'none';}
-
-  const skn=document.getElementById('sk-n');if(skn)skn.textContent=matches.length;
-
-  const ml=document.getElementById('matchList');
-
-  if(!ml){renderSkillsMatrix();return;}
-
-  if(matches.length===0){
-
-    const _ov=SD.filter(s=>s.capacity>=85);
-
-    const _av=SD.filter(s=>s.capacity<70);
-
-    let _msg='';
-
-    if(SD.length===0){_msg='Sync check-ins to see skill matches. Cinderella auto-detects when an overloaded staff member has a skill-matched colleague with spare capacity.';}
-
-    else if(_ov.length>0&&_av.length===0){_msg=_ov.map(s=>cap(s.name.split(' ')[0])).join(' and ')+(_ov.length===1?' is':' are')+' overloaded but no colleagues have spare capacity.';}
-
-    else if(_ov.length>0&&_av.length>0){_msg=_ov.length+' staff overloaded but no skill matches found. Consider external support or cross-training.';}
-
-    else{_msg='No skill matches needed — team capacity is well distributed this week.';}
-
-    ml.innerHTML=`<div style="font-size:12px;color:var(--t2);padding:8px 0;line-height:1.5">${_msg}</div>`;
-
-  } else {
-
-    ml.innerHTML=matches.map((m,i)=>`
-
-      <div class="smatch" onclick="actionSkillMatch('${m.busy.name}','${m.free.name}',${m.busy.capacity},${m.free.capacity},'${m.shared.join(', ')}')">
-
-        <div class="smatch-head"><span class="smatch-flag">${m.busy.capacity}% → ${m.free.capacity}%</span><div class="smatch-names">${cap(m.busy.name)} <span style="opacity:.6">needs support from</span> ${cap(m.free.name)}</div></div>
-
-        <div class="smatch-skills">Shared skills: ${m.shared.map(s=>cap(s)).join(', ')}</div>
-
-        <div class="smatch-action">Click to email staff, schedule a handover call, or get task suggestions</div>
-
-      </div>`).join('');
-
-  }
-
-  renderSkillsMatrix();
-
-}
-
-function renderHR(){
-
-  const overloaded=SD.filter(s=>s.capacity>=85);
-
-  const avail=SD.filter(s=>s.availability&&s.availability!=='Full week');
-
-  const heavy=SD.filter(s=>s.trend==='Heavier');
-
-  const realBlockersList=SD.filter(s=>hasBlocker(s.blockers));
-
-  const hn=document.getElementById('hr-n');if(hn)hn.textContent=realBlockersList.length+overloaded.length+avail.length;
-
-  const hbl=document.getElementById('hr-bl');if(hbl)hbl.textContent=realBlockersList.length;
-
-  const hav=document.getElementById('hr-av');if(hav)hav.textContent=avail.length;
-
-  const hbadge=document.getElementById('hrBadge');
-
-  if(hbadge)hbadge.style.display=(realBlockersList.length>0||overloaded.length>0)?'inline-block':'none';
-
-  const el=document.getElementById('hrList');
-
-  if(!el)return;
-
-  let html='';
-
-  overloaded.forEach(s=>{html+=`<div class="hr-card" onclick="actionCapacity('${s.name}',${s.capacity},'${(s.skills||'').replace(/'/g,"\\'")}')"><div class="hr-title">⚠ Overload risk — ${s.name}</div><div class="hr-sub">${s.capacity}% capacity · Trend: ${s.trend||'—'} · ${s.role||'—'}</div><span class="hr-tag" style="background:var(--rl);color:#A32D2D">Click to email or schedule 1:1</span></div>`;});
-
-  realBlockersList.forEach(s=>{html+=`<div class="hr-card" onclick="actionBlocker('${s.name}','${(s.blockers||'').replace(/'/g,"\\'")}')"><div class="hr-title">🚧 Blocker — ${s.name}</div><div class="hr-sub">${s.blockers}</div><span class="hr-tag" style="background:var(--al);color:#854F0B">Click to email or schedule call</span></div>`;});
-
-  avail.forEach(s=>{html+=`<div class="hr-card" onclick="openDraftModal('${s.name}','Coverage planning — ${s.name} is ${s.availability} this week','Coverage planning — your availability this week','email')"><div class="hr-title">📅 Availability — ${s.name}</div><div class="hr-sub">${s.availability}${s.leave?' · '+s.leave:''}</div><span class="hr-tag" style="background:var(--al);color:#854F0B">Email re: coverage</span></div>`;});
-
-  heavy.forEach(s=>{if(s.capacity<85)html+=`<div class="hr-card" onclick="actionCapacity('${s.name}',${s.capacity},'${(s.skills||'').replace(/'/g,"\\'")}')"><div class="hr-title">↑ Increasing load — ${s.name}</div><div class="hr-sub">${s.capacity}% capacity · Heavier than last week</div><span class="hr-tag" style="background:var(--bl2);color:#185FA5">Click to check in</span></div>`;});
-
-  if(!html)html='<div style="font-size:12px;color:var(--t3);padding:8px 0">'+(SD.length===0?'Sync check-ins to see HR insights.':'No HR flags this week — your team looks healthy.')+'</div>';
-
-  el.innerHTML=html;
-
-}
-
-function filterStaff(type){
-
-  if(SD.length===0){openModal('No check-ins yet','Send the check-in form to staff first','<div class="mfv">Once staff submit their weekly check-in, capacity data will appear here automatically.</div>');return;}
-
-  const filtered=type==='over'?[...SD].filter(s=>s.capacity>=85).sort((a,b)=>b.capacity-a.capacity):[...SD].filter(s=>s.capacity<65).sort((a,b)=>a.capacity-b.capacity);
-
-  if(filtered.length===0){openModal(type==='over'?'No overloaded staff':'No staff with bandwidth','Great news!','<div class="alert-box ok"><div class="ab-title">'+(type==='over'?'No one is above 85% capacity this week':'Everyone is at 65% or above this week')+'</div><div class="ab-text">Team workload looks well distributed.</div></div>');return;}
-
-  const title=type==='over'?`Overloaded staff (${filtered.length})`:`Staff with bandwidth (${filtered.length})`;
-
-  const sub=type==='over'?'Above 85% capacity — action recommended':'Below 65% capacity — available for additional work';
-
-  const cards=filtered.map(s=>{
-
-    const n=cap(s.name);const pct=s.capacity;
-
-    const barCol=pct>=85?'var(--r)':pct>=70?'var(--a)':'var(--g)';
-
-    const matches=type==='over'?findMatches().filter(m=>m.busy.name===s.name):findMatches().filter(m=>m.free.name===s.name);
-
-    const matchHtml=matches.length>0?`<div style="font-size:11px;color:var(--g);margin-top:5px;font-weight:500">✓ Skill match found: ${matches.map(m=>cap(type==='over'?m.free.name:m.busy.name)).join(', ')} can help</div>`:'';
-
-    const solutions=type==='over'
-
-      ?`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button class="m-btn" style="font-size:11px;padding:6px 12px" onclick="actionCapacity('${s.name}',${pct},'${(s.skills||'').replace(/'/g,"\\'")}')">View solutions</button><button class="m-btn sec" style="font-size:11px;padding:6px 12px" onclick="openDraftModal('${n}','Wellbeing check-in — ${n} is at ${pct}% capacity','Checking in — how can I support you?','email')">Email ${n}</button><button class="m-btn sec" style="font-size:11px;padding:6px 12px;background:#217346;color:#fff;border:none" onclick="openDraftModal('${n}','1:1 to discuss capacity reduction','1:1 — workload review','meeting')">Schedule 1:1</button></div>`
-
-      :`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"><button class="m-btn" style="font-size:11px;padding:6px 12px" onclick="show('skills',null);closeModal()">See skill matches</button><button class="m-btn sec" style="font-size:11px;padding:6px 12px" onclick="openDraftModal('${n}','Assigning additional work — ${n} has available capacity this week','Additional work this week','email')">Email ${n}</button></div>`;
-
-    return `<div style="background:var(--bg2);border-radius:10px;padding:12px 14px;margin-bottom:10px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div style="font-size:13px;font-weight:500;color:var(--t1)">${n}</div><div style="font-size:10px;color:var(--t2)">${s.role||''}</div><div style="margin-left:auto;font-size:14px;font-weight:500;color:${barCol}">${pct}%</div></div><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;background:var(--bg);border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;border-radius:3px;background:${barCol};width:${pct}%"></div></div></div>${s.projects?`<div style="font-size:11px;color:var(--t2);margin-top:5px">Projects: ${s.projects}</div>`:''}${hasBlocker(s.blockers)?`<div style="font-size:11px;color:var(--r);margin-top:4px">Blocker: ${s.blockers}</div>`:''}${matchHtml}${solutions}</div>`;
-
-  }).join('');
-
-  const summaryType=type==='over'?'<div class="alert-box"><div class="ab-title">Action recommended</div><div class="ab-text">These staff members are at risk of burnout.</div></div>':'<div class="alert-box ok"><div class="ab-title">Capacity available</div><div class="ab-text">These staff members have bandwidth this week.</div></div>';
-
-  openModal(title,sub,summaryType+cards);
-
-}
-
-let briefingDone=false;
-
-function show(id,btn){
-
-  document.querySelectorAll('.pnl,.pnl-chat').forEach(p=>{p.classList.remove('active');p.scrollTop=0;});
-
-  document.querySelectorAll('.ni').forEach(b=>b.classList.remove('active'));
-
-  const el=document.getElementById('pnl-'+id);
-
-  if(el){el.classList.add('active');requestAnimationFrame(()=>el.scrollTop=0);}
-
-  if(btn)btn.classList.add('active');
-
-  setTimeout(()=>{if(id==='email'&&!charts.email)buildCharts();if(id==='staff')buildCharts();},50);
-
-  if(id==='chat'&&!briefingDone){briefingDone=true;} // briefing now on-demand only
-
-  // Load live data when COO tab opens
-  if(id==='today'){
-    loadFinancialSnapshot();
-  }
-  if(id==='coo'){
-    loadOpenActions(false);
-    loadR2SMetrics();
-    loadBoardReportStatus();
-    loadFinancialSnapshot();
-  }
-  if(id==='aurora'){
-    loadAuroraFull(false);
-  }
-  if(id==='tracker') loadTracker();
-
-  if(id==='clockify') loadClockify();
-  if(id==='compliance') loadCompliance();
-  if(id==='leave') loadLeaveEntries();
-
-}
-
-async function autoBriefing(){
-
-  const now=new Date();
-
-  const h=now.getHours();
-
-  const greet=h<12?'morning':h<17?'afternoon':'evening';
-
-  setB(true);
-
-  // Fetch real emails and calendar first
-
-  var briefNow = new Date();
-
-  var briefToday = briefNow.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Australia/Brisbane'});
-
-  var emailCtx='No emails loaded.';
-
-  var calCtx='No calendar loaded.';
-
-  try{
-
-    const er=await fetch('/graph/emails');
-
-    if(er.ok){
-
-      const ed=await er.json();
-
-      M365.emails=ed.emails||[];
-
-      renderLiveEmails();
-
-      if(M365.emails.length>0){
-
-        emailCtx='UNREAD EMAILS NEEDING REPLY ('+M365.emails.length+' total, showing top 8):\n'+
-
-          M365.emails.slice(0,8).map(function(e){
-
-            return '- FROM: '+e.from+' <'+( e.fromEmail||'')+'>'+
-
-              ' | '+e.hoursOld+'h ago'+
-
-              (e.hoursOld>=24?' [CRITICALLY OVERDUE]':e.hoursOld>=12?' [OVERDUE]':'')+
-
-              (e.hasAttachments?' [HAS ATTACHMENTS]':'')+
-
-              '\n  SUBJECT: '+e.subject+
-
-              '\n  PREVIEW: '+(e.preview||'');
-
-          }).join('\n');
-
-      } else {
-
-        emailCtx='No unread emails requiring reply.';
-
-      }
-
-    }
-
-  }catch(ex){emailCtx='Email data unavailable: '+ex.message;}
-
-  try{
-
-    const cr=await fetch('/graph/calendar');
-
-    if(cr.ok){
-
-      const cd=await cr.json();
-
-      M365.events=cd.events||[];
-
-      renderLiveCalendar();
-
-      if(M365.events.length>0){
-
-        calCtx='CALENDAR TODAY:\n'+M365.events.map(function(e){
-
-          var t=new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
-
-          var et=new Date(e.end.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
-
-          return '- '+t+' to '+et+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
-
-        }).join('\n');
-
-      } else {
-
-        calCtx='No meetings scheduled today.';
-
-      }
-
-    }
-
-  }catch(ex){calCtx='Calendar data unavailable: '+ex.message;}
-
-  var staffCtx=SD.length>0?'\nSTAFF CHECK-INS:\n'+SD.map(function(s){
-
-    return '- '+s.name+' ('+( s.role||'staff')+'): '+(s.capacity||0)+'% capacity, trend: '+(s.trend||'unknown')+', projects: '+(s.projects||'none')+', blockers: '+(s.blockers||'none');
-
-  }).join('\n'):'\nNo staff check-ins received yet this week.';
-
-  const briefingPrompt='TODAY IS: ' + briefToday + ' (Brisbane AEST).\nGive me my daily briefing now using ONLY the real data below. Do not make up or assume any information not in this data.\n\n'+
-
-    emailCtx+'\n\n'+calCtx+staffCtx+
-
-    '\n\nFormat your response in exactly these 4 sections:\n\n'+
-
-    '**1. TOP PRIORITIES**\n'+
-
-    'Based on the emails and calendar above, list the top 3-5 things I must action today ranked by urgency. Be very specific — name the person, their email, the exact subject, and what needs doing. For each meeting today, flag what preparation is needed. For emails with attachments, flag them specifically.\n\n'+
-
-    '**2. EMAILS NEEDING A REPLY**\n'+
-
-    'List every email that needs my response, most overdue first. Show: sender name, how long ago, subject, and one line on what they need from me.\n\n'+
-
-    '**3. TEAM FLAGS**\n'+
-
-    'Any staff capacity issues, blockers, or burnout risks from check-in data. If no check-ins, say so in one line.\n\n'+
-
-    '**4. CALENDAR TODAY**\n'+
-
-    'List every meeting with time. For any meeting that needs preparation, tell me exactly what to prepare and flag if I have no prep time blocked before it.\n\n'+
-
-    'Keep each section tight. If a section has nothing to report, say so in one line. Use plain language — no jargon.';
-
-  try{
-
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1200,system:SYS,messages:[{role:'user',content:briefingPrompt}]})});
-
-    if(!r.ok)throw new Error('HTTP '+r.status);
-
-    const d=await r.json();
-
-    if(d.error)throw new Error(d.error.message);
-
-    const rep=d.content&&d.content.length>0?d.content.filter(function(b){return b.type==='text';}).map(function(b){return b.text;}).join('\n'):'';
-
-    setB(false);
-
-    if(rep)addMsg('a',rep);
-
-    else addMsg('a','Good '+greet+' Kandia — I loaded your emails and calendar. Type "give me my briefing" to see your priorities.');
-
-  }catch(e){
-
-    setB(false);
-
-    addMsg('a','Good '+greet+' Kandia. I loaded your data but had trouble generating the briefing ('+e.message+'). Type "give me my briefing" and I will try again.');
-
-  }
-
-}
-
-function openModal(title,sub,body){
-
-  document.getElementById('m-title').textContent=title;
-
-  document.getElementById('m-sub').innerHTML=sub||'';
-
-  document.getElementById('m-body').innerHTML=body||'';
-
-  document.getElementById('modal').classList.add('open');
-
-}
-
-function closeModal(){document.getElementById('modal').classList.remove('open');}
-
-const SYS=[
-
-  'You are Cinderella, the personal executive assistant to Kandia Du Bruyn, COO of Risk 2 Solution Group — Australia\'s most awarded integrated risk management company.',
-
-  '',
-
-  'ABOUT RISK 2 SOLUTION GROUP: Professional services firm specialising in Risk Management (Presilience® programs, Business Continuity, CRO-as-a-Service), Security (SoCI compliance, OVA prevention, CSO-as-a-Service), Technology & Cybersecurity (vCISO, SOC monitoring, Vulnerability Remediation), Training & Education (RTO #4785, Graduate qualifications, R2S Academy eLearning), and Emergency Planning Services (EMPs, Evacuation Diagrams, Warden Training, BCP). ISO certified: 9001, 45001, 14001, 18788. 20+ years, 800+ clients, 150,000+ people trained. Murrarie QLD. NOTE: Medical division divested — never reference medical personnel or medical services.',
-
-  '',
-
-  'MICROSOFT 365 IS FULLY CONNECTED. You have live access to Kandia emails, calendar and Teams. The live data is in every message. Use it. Never say M365 is not connected.',
-
-  '',
-
-  'YOUR ROLE: Kandia right hand. Proactive, warm, direct. Surface what matters before she asks. Draft properly. Flag problems early. Apply best-practice COO knowledge for professional services and consulting firms.',
-
-  '',
-
-  'COMMUNICATION: Warm EA tone. Professional but human. Lead with the most important thing first. Plain English, no jargon. Short answers when short will do.',
-
-  '',
-
-  'SCHEDULING: When Kandia asks to schedule a meeting, ALWAYS respond with the meeting details AND include a special block at the end in this exact format (no deviations): SCHEDULE_MEETING:{"subject":"Meeting title","attendees":["email@domain.com"],"start":"2026-05-12T10:00:00","end":"2026-05-12T10:30:00","body":"Meeting notes here"}. Use ISO datetime strings in Brisbane time (UTC+10). This triggers the calendar creation button. Always include it when scheduling is requested.',
-
-  '',
-
-  'BRIEFING FORMAT: 1. TOP PRIORITIES (based on emails and calendar, ranked by urgency) 2. EMAILS NEEDING REPLY (most overdue first) 3. TEAM FLAGS (capacity, blockers, missing check-ins) 4. CALENDAR TODAY (meetings with times, flag anything needing prep).',
-
-  '',
-
-  'WHAT KEEPS KANDIA UP AT NIGHT: Cash flow and financial performance. Client delivery and project management. Staff capacity, wellbeing and effectiveness. RTO compliance and training delivery standards. Government panel obligations. Board reporting. ISO certification maintenance.',
-
-  '',
-
-  'BUSINESS CONTEXT: Risk 2 Solution Group, Australia. Team: Janita Zhang (Marketing & IT), Reinette Kruger (Admin), Diane Kruger (Finance & Corporate Ops, diane.k@risk2solution.com), Garima Arora (Emergency Planning Design), Paul Johnston (Risk Management), Dani Stevenson (Training), Ross Mackenzie (Training & Capability),  Dave Cohen is CEO. Key service lines: Risk Management, Security, Emergency Planning, Training (RTO), Cybersecurity. Presilience® is the flagship methodology.',
-
-  'STAFF CHECK-IN DATA: When Kandia asks about staff history, check-ins, skills, capacity trends, cross-training or succession, full historical check-in data is included in the context above (FULL CHECK-IN HISTORY section). Use it to give specific, named answers about each staff member. Never say you cannot access this data — it is provided directly in the message.',
-
-  '',
-
-  'NEVER: Say M365 is not connected. Say you cannot access emails or calendar. Make decisions without checking with Kandia. Write essays when a paragraph will do. Be vague.',
-
-  '',
-
-  'DOCUMENTS: Produce in full, contextualised for risk management professional services. Ready to use immediately.',
-
-  '',
-
-  'EMAILS: Complete, ready-to-send. Warm but professional. Sign off as Kandia or Kandia COO.'
-
-].join('\n')
-
-async function send(){
-
-  const inp=document.getElementById('cinput');
-
-  const text=inp.value.trim();
-
-  if((!text&&chatAttachments.length===0)||busy)return;
-
-  inp.value='';resize(inp);
-  var pendingAtts=chatAttachments.slice();chatAttachments=[];renderChatAttachments();
-
-  // Build live context from real M365 data + staff check-ins
-
-  var docCtx = (typeof getDocContext === 'function') ? getDocContext() : '';
-
-  // Build full week date reference so Cinderella picks correct dates
-
-  var now = new Date();
-
-  var brisbaneNow = new Date(now.toLocaleString('en-US', {timeZone:'Australia/Brisbane'}));
-
-  var todayStr = brisbaneNow.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
-
-  var liveCtx = 'TODAY IS: ' + todayStr + ' (Brisbane AEST)\n';
-
-  liveCtx += 'DATE REFERENCE — use these exact dates when scheduling:\n';
-
-  var dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-
-  for (var di = 0; di < 14; di++) {
-
-    var futureDate = new Date(brisbaneNow);
-
-    futureDate.setDate(brisbaneNow.getDate() + di);
-
-    var dayLabel = di === 0 ? 'Today' : di === 1 ? 'Tomorrow' : futureDate.toLocaleDateString('en-AU',{weekday:'long'});
-
-    liveCtx += dayLabel + ' = ' + futureDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'}) + '\n';
-
-  }
-
-  liveCtx += 'IMPORTANT: Always use the exact date from the reference above — never guess the date from the day name alone.\n\n';
-
-  if(M365.emails.length>0){
-
-    liveCtx+='\n\nLIVE EMAILS (unread, top 5 most recent):\n'+M365.emails.slice(0,5).map(function(e){
-
-      return '- FROM: '+e.from+(e.fromEmail?' <'+e.fromEmail+'>':'')+' | '+e.hoursOld+'h ago'+(e.hasAttachments?' [HAS ATTACHMENT]':'')+' | SUBJECT: '+e.subject+(e.preview?' | PREVIEW: '+e.preview:'');
-
-    }).join('\n');
-
-  }
-
-  if(M365.events.length>0){
-
-    liveCtx+='\n\nCALENDAR TODAY (real data):\n'+M365.events.map(function(e){
-
-      return '- '+new Date(e.start.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})+' to '+new Date(e.end.replace('Z','')).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})+': '+e.subject+(e.location?' at '+e.location:'')+(e.attendees&&e.attendees.length?' with '+e.attendees.join(', '):'');
-
-    }).join('\n');
-
-  }
-
-  if(SD.length>0){
-
-    liveCtx+='\n\nCURRENT WEEK STAFF CHECK-INS:\n'+SD.map(s=>`- ${s.name} (${s.role||'?'}): this week ${s.capacity}%${s.capacityNext?' | next week forecast '+s.capacityNext+'%':''} | trend: ${s.trend||'?'} | projects: ${s.projects||'none'} | blockers: ${s.blockers||'none'} | skills: ${s.skills||'?'}${s.notes?' | notes: '+s.notes:''}`).join('\n');
-
-  } else {
-
-    liveCtx+='\n\nNo check-ins received yet this week.';
-
-  }
-
-  // Detect if user is asking about historical data and fetch it
-
-  var historyKeywords = ['history','previous week','last week','past week','all of may','whole of may','all of april','check-in history','check ins from','checkins from','previous check','staff history','all staff','whole month','may check','april check','historical','last month','previous month','all weeks','multiple weeks','cross-train','single point','succession','skill gap','capabilities'];
-
-  var needsHistory = historyKeywords.some(function(k){ return text.toLowerCase().includes(k); });
-
-  if (needsHistory && C.bin && C.key && (window._allCheckIns && window._allCheckIns.length > 0 || true)) {
-
-    try {
-
-      var allCI = window._allCheckIns && window._allCheckIns.length > 0 ? window._allCheckIns : null;
-
-      if (!allCI) {
-
-        var hRes = await fetch('/checkins/latest');
-
-        var hData = await hRes.json();
-
-        allCI = (Array.isArray(hData.record)?hData.record:[]).filter(function(e){return e&&e.name;});
-
-        window._allCheckIns = allCI;
-
-      }
-
-      if (allCI && allCI.length > 0) {
-
-        // Group by week for context
-
-        var byWk = groupByWeek(allCI);
-
-        var wkKeys = sortWeeks(byWk).reverse();
-
-        liveCtx += '\n\nFULL CHECK-IN HISTORY ('+allCI.length+' submissions across '+wkKeys.length+' weeks):';
-
-        wkKeys.slice(0, 4).forEach(function(wk) { // limit to last 4 weeks to save tokens
-
-          liveCtx += '\nWeek ending '+wk+':\n';
-
-          byWk[wk].forEach(function(s){
-
-            liveCtx += '  - '+s.name+(s.role?' ('+s.role+')':'')+': capacity '+( s.capacity||0)+'%'+(s.capacityNext?' next week '+(s.capacityNext||0)+'%':'')+' trend:'+(s.trend||'?')+' projects:'+(s.projects||'none')+(s.blockers?' BLOCKER:'+s.blockers:'')+' skills:'+(s.skills||'unknown')+'\n';
-
-          });
-
-        });
-
-        liveCtx += '\nSKILLS SUMMARY BY STAFF MEMBER:\n';
-
-        var staffSkills = {};
-
-        allCI.forEach(function(s){
-
-          if (!staffSkills[s.name]) staffSkills[s.name] = {skills:[], roles:[], capacity:[]};
-
-          if (s.skills) s.skills.split(',').forEach(function(sk){ if(sk.trim()&&!staffSkills[s.name].skills.includes(sk.trim())) staffSkills[s.name].skills.push(sk.trim()); });
-
-          if (s.role && !staffSkills[s.name].roles.includes(s.role)) staffSkills[s.name].roles.push(s.role);
-
-          if (s.capacity) staffSkills[s.name].capacity.push(s.capacity);
-
-        });
-
-        Object.keys(staffSkills).forEach(function(name){
-
-          var d = staffSkills[name];
-
-          var avgCap = d.capacity.length ? Math.round(d.capacity.reduce(function(a,b){return a+b;},0)/d.capacity.length) : 0;
-
-          liveCtx += '  - '+name+': skills=['+d.skills.join(', ')+'] avg capacity='+avgCap+'%\n';
-
-        });
-
-      }
-
-    } catch(ex) {
-
-      console.warn('History fetch failed:', ex.message);
-
-    }
-
-  }
-
-  if(!liveCtx)liveCtx='\n\nNo live M365 data yet — M365 not connected or no data loaded.';
-
-  // Build display text for UI
-  var dispText=pendingAtts.length>0?'📎 '+pendingAtts.map(function(a){return a.name;}).join(', ')+(text?'\n'+text:''):text;
-  addMsg('u',dispText||(pendingAtts.length>0?'(files attached)':text));
-
-  // Build API content — includes full file data for this one call only
-  var apiContent;
-  if(pendingAtts.length>0){
-    apiContent=[];
-    pendingAtts.forEach(function(att){
-      if(att.type==='pdf'){
-        apiContent.push({type:'document',source:{type:'base64',media_type:'application/pdf',data:att.base64}});
-      } else if(att.type==='image'){
-        apiContent.push({type:'image',source:{type:'base64',media_type:att.mimeType||'image/jpeg',data:att.base64}});
-      } else {
-        apiContent.push({type:'text',text:'[Attached file: '+att.name+']\n'+(att.content||'').substring(0,8000)});
-      }
-    });
-    if(text) apiContent.push({type:'text',text:text});
-  } else {
-    apiContent=text;
-  }
-
-  // Store text-only in msgs history — binary not re-sent on subsequent calls
-  var histText=(pendingAtts.length>0?'[Files: '+pendingAtts.map(function(a){return a.name;}).join(', ')+'] ':'')+text;
-  msgs.push({role:'user',content:histText});
-  setB(true);
-
-  // For this API call, swap last message with full content (including files)
-  var apiMsgs=msgs.slice(0,-1).concat([{role:'user',content:apiContent}]);
-
-  try{
-
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:2000,system:SYS+liveCtx+docCtx,messages:apiMsgs})});
-
-    const d=await r.json();
-
-    if(d.error)throw new Error(d.error.message);
-
-    const rep=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('\n')||'No response.';
-
-    msgs.push({role:'assistant',content:rep});setB(false);addMsg('a',rep);
-
-  }catch(e){setB(false);addMsg('a',`Error: ${e.message}. Check your API key.`);}
-
-}
-
-function addMsg(role,text){
-
-  const el=document.getElementById('msgs');
-
-  const d=document.createElement('div');
-
-  d.className='msg '+role;
-
-  // Detect SCHEDULE_MEETING block in Cinderella's response
-
-  var displayText = text;
-
-  var scheduleData = null;
-
-  if (role === 'a') {
-
-    var schedMatch = text.match(/SCHEDULE_MEETING:({[^}]+})/);
-
-    if (schedMatch) {
-
-      try {
-
-        scheduleData = JSON.parse(schedMatch[1]);
-
-        // Remove the raw JSON from display text
-
-        displayText = text.replace(/SCHEDULE_MEETING:{[^}]+}/, '').trim();
-
-      } catch(e) { scheduleData = null; }
-
-    }
-
-  }
-
-  var formatted = displayText
-
-    .replace(/\n/g,'<br>')
-
-    .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-
-    .replace(/^### (.*)/gm,'<strong>$1</strong>')
-
-    .replace(/^## (.*)/gm,'<strong style="font-size:13px">$1</strong>');
-
-  var schedBtn = '';
-
-  if (scheduleData) {
-
-    var idx = Object.keys(window._pendingMeetings||{}).length;
-
-    window._pendingMeetings = window._pendingMeetings || {};
-
-    window._pendingMeetings[idx] = scheduleData;
-
-    var startDate = scheduleData.start ? new Date(scheduleData.start) : null;
-
-    var startStr = startDate ? startDate.toLocaleString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long',day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
-
-    schedBtn = '<div style="margin-top:10px;background:var(--bl2);border-radius:var(--rm);padding:10px 12px">' +
-
-      '<div style="font-size:11px;font-weight:500;color:#185FA5;margin-bottom:6px">📅 Ready to create in your calendar:</div>' +
-
-      '<div style="font-size:11px;color:var(--t1);margin-bottom:8px"><strong>' + (scheduleData.subject||'Meeting') + '</strong><br>' + startStr + '<br>With: ' + (scheduleData.attendees||[]).join(', ') + '</div>' +
-
-      '<button onclick="createCalendarEvent(' + idx + ')" style="background:#0078D4;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:500;cursor:pointer;font-family:var(--f)">✅ Add to Outlook Calendar</button>' +
-
-      '<button onclick="draftMeetingInvite(' + idx + ')" style="background:none;border:0.5px solid var(--bm);color:var(--t2);border-radius:6px;padding:7px 14px;font-size:11px;cursor:pointer;font-family:var(--f);margin-left:6px">📧 Also draft invite email</button>' +
-
-    '</div>';
-
-  }
-
-  d.innerHTML = '<div class="sndr">' + (role==='u'?'You':'Cinderella') + '</div>' +
-
-    '<div class="bub ' + role + '">' + formatted + schedBtn + '</div>';
-
-  el.appendChild(d);
-
-  // Download button for long reports
-
-  if (role === 'a' && !scheduleData && displayText.length > 500) {
-
-    var rw = ['report','summary','checklist','review','analysis','plan','board','register','assessment','briefing','audit','process','policy'];
-
-    if (rw.some(function(k){ return displayText.toLowerCase().includes(k); })) {
-
-      var dlDiv = document.createElement('div');
-
-      dlDiv.style.cssText = 'padding:4px 4px 8px 4px';
-
-      window._dlDocs = window._dlDocs || {};
-
-      var di = Object.keys(window._dlDocs).length;
-
-      window._dlDocs[di] = {title: displayText.split('\n')[0].replace(/[#*]/g,'').trim().substring(0,60)||'Report', content: displayText};
-
-      dlDiv.innerHTML = '<button onclick="downloadStoredDoc('+di+')" style="font-size:10px;padding:4px 12px;border-radius:6px;background:#2B579A;color:#fff;border:none;cursor:pointer;font-family:var(--f)">📄 Download as Word</button>';
-
-      var bb = d.querySelectorAll('.bub.a');
-
-      if (bb.length > 0) bb[0].appendChild(dlDiv);
-
-    }
-
-  }
-
-  el.scrollTop=el.scrollHeight;
-
-}
-
-function draftMeetingInvite(idx) {
-
-  var data = window._pendingMeetings && window._pendingMeetings[idx];
-
-  if (!data) return;
-
-  var attendee = (data.attendees||[''])[0];
-
-  var startStr = data.start ? new Date(data.start).toLocaleString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}) : '';
-
-  var context = 'Send a meeting invitation email for: ' + (data.subject||'Meeting') + ' on ' + startStr;
-
-  openDraftModal(attendee, context, 'Invitation: ' + (data.subject||'Meeting'), 'email', attendee);
-
-}
-
-async function createCalendarEvent(idx) {
-
-  var data = window._pendingMeetings && window._pendingMeetings[idx];
-
-  if (!data) { alert('Meeting data not found.'); return; }
-
-  var btn = event.target;
-
-  btn.textContent = 'Creating...';
-
-  btn.disabled = true;
-
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── EMAIL DRAFT ──
+app.post('/graph/email/draft', async (req, res) => {
   try {
-
-    var r = await fetch('/graph/calendar/create', {
-
+    const token = await getValidToken();
+    const { subject, body, to } = req.body;
+    const toRecipients = (Array.isArray(to) ? to : to.split(/[;,]/).map(e => e.trim()).filter(Boolean))
+      .map(email => ({ emailAddress: { address: email.trim() } }));
+    const response = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
       method: 'POST',
-
-      headers: { 'Content-Type': 'application/json' },
-
-      body: JSON.stringify({
-
-        subject: data.subject,
-
-        start: data.start,
-
-        end: data.end,
-
-        attendees: data.attendees || [],
-
-        body: data.body || ''
-
-      })
-
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject, body: { contentType: 'Text', content: body }, toRecipients })
     });
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    res.json({ success: true, id: data.id });
+  } catch(err) { res.status(500).json({ error: err.message }); }
+});
 
-    var d = await r.json();
+// ── REPORT GENERATION ──
+app.post('/generate/report', requireAuth, async (req, res) => {
+  try {
+    const { type, label } = req.body;
+    const monthDate = new Date(); monthDate.setMonth(monthDate.getMonth() - 1);
+    const monthName = monthDate.toLocaleString('en-AU', { month: 'long' });
+    const yr = monthDate.getFullYear();
+    let context = `REPORT: ${label||type} | MONTH: ${monthName} ${yr}\n\n`;
 
-    if (d.error) throw new Error(d.error);
+    // Staff check-ins for last month
+    try {
+      const raw = JSON.parse(readFileSync('/home/checkins.json', 'utf8') || '[]');
+      const mm = monthDate.getMonth(); const yy = monthDate.getFullYear();
+      const monthly = raw.filter(c => { if (!c.submitted) return false; const d = new Date(c.submitted); return d.getMonth()===mm && d.getFullYear()===yy; });
+      if (monthly.length > 0) {
+        context += `STAFF CHECK-INS (${monthName}):\n`;
+        monthly.forEach(c => { context += `- ${c.name}: ${c.capacity}% capacity | Projects: ${c.projects||'not stated'} | Blockers: ${c.blockers||'none'} | Focus: ${c.focus||'-'}\n`; });
+        context += '\n';
+      }
+    } catch(e) {}
 
-    btn.textContent = '✅ Created in Outlook!';
+    // Document library
+    try {
+      const cc = await getBlobContainer();
+      if (cc) {
+        const names = []; for await (const b of cc.listBlobsFlat()) names.push(b.name);
+        if (names.length) context += `DOCUMENTS IN LIBRARY: ${names.join(', ')}\n\n`;
+      }
+    } catch(e) {}
 
-    btn.style.background = 'var(--g)';
+    // Key emails from last month
+    try {
+      const token = await getValidToken();
+      const since = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1).toISOString();
+      const until = new Date(monthDate.getFullYear(), monthDate.getMonth()+1, 1).toISOString();
+      const emailData = await graphGet(`/me/messages?$top=30&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${until}&$select=subject,from,importance&$orderby=receivedDateTime desc`);
+      if (emailData.value?.length) {
+        context += `KEY EMAILS (${monthName}):\n`;
+        emailData.value.forEach(e => { context += `- ${e.from?.emailAddress?.name||'unknown'}: ${e.subject}${e.importance==='high'?' [HIGH]':''}\n`; });
+        context += '\n';
+      }
+    } catch(e) {}
 
-    // Refresh calendar data
+    const sysPrompt = type==='board'
+      ? `You are Cinderella, executive assistant to Kandia Du Bruyn (COO) of Risk 2 Solution. Write a complete professional COO board report for ${monthName} ${yr}. Use all data provided. Be specific. No placeholder text. Format with HTML headings and bullet lists. Write every section fully.`
+      : `You are Cinderella, executive assistant to Kandia Du Bruyn (COO) of Risk 2 Solution Group. Risk 2 Solution Group is Australia's most awarded integrated risk management company, providing professional services in:
+- Risk Management (Presilience® programs, Business Continuity, CRO-as-a-Service, Risk Assessments)
+- Security (SoCI compliance, OVA prevention, Security consulting, CSO-as-a-Service)
+- Technology & Cybersecurity (Maturity Assessments, vCISO, SOC monitoring, Vulnerability Remediation)
+- Training & Education (RTO #4785, Postgrad qualifications, R2S Academy eLearning, bespoke programs)
+- Emergency Planning Services (EMPs, Evacuation Diagrams, Warden Training, BCP, CIM)
+- Research & Events (ASRC, ISRM, PSG Conference, Presilience® Summits)
+ISO Certified: 9001:2015, 45001:2018, 14001:2015, 18788:2015
+20+ years | 800+ clients | 150,000+ people trained
+Head Office: Murrarie QLD | Operates Australia-wide and internationally
+NOTE: Medical division has been fully divested — never reference medical personnel or medical services.
 
-    try { await loadM365Data(); } catch(e) {}
+Generate a complete professional ${label||type} document for ${monthName} ${yr} using the data provided. Format with HTML structure. Be comprehensive.`;
 
-    addMsg('a', 'Done Kandia — the meeting has been added to your Outlook calendar. Diane will receive the invite.');
+    const userMsg = type==='board'
+      ? `Generate the full COO board report for ${monthName} ${yr}. Sections: 1. Executive Summary 2. People & Culture 3. Operations & Delivery 4. Client Update 5. Compliance & Risk 6. Platform & Technology 7. Next Month Priorities\n\nDATA:\n${context}`
+      : `Generate a complete ${label||type} document.\n\nDATA:\n${context}`;
 
-  } catch(e) {
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 8000, system: sysPrompt, messages: [{ role: 'user', content: userMsg }] })
+    });
+    const aiData = await aiRes.json();
+    const reportContent = aiData.content?.[0]?.text || 'Unable to generate report.';
 
-    btn.textContent = 'Failed — try again';
+    const docHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset="utf-8"><title>${label||type}</title>
+<style>
+body{font-family:Arial,sans-serif;font-size:11pt;margin:2cm 2.5cm;line-height:1.5}
+h1{font-size:18pt;color:#1F4E79;border-bottom:2pt solid #1F4E79;padding-bottom:4pt}
+h2{font-size:14pt;color:#2E75B6;margin-top:16pt}
+h3{font-size:12pt;color:#2E75B6}
+.cover{text-align:center;margin-bottom:40pt;padding:20pt;border:1pt solid #2E75B6}
+ul,ol{margin:4pt 0;padding-left:20pt}li{margin-bottom:3pt}
+table{border-collapse:collapse;width:100%}td,th{border:.5pt solid #CCC;padding:4pt 8pt}
+th{background:#EEF3F9;font-weight:bold}
+</style></head>
+<body>
+<div class="cover">
+<h1>${label||type}</h1>
+<p style="font-size:13pt;color:#555">Risk 2 Solution</p>
+<p style="font-size:10pt;color:#888">Prepared by Kandia Du Bruyn, COO &nbsp;|&nbsp; ${monthName} ${yr}</p>
+</div>
+${reportContent}
+</body></html>`;
 
-    btn.disabled = false;
+    const filename = `${(label||type).replace(/[^a-z0-9]/gi,'-')}-${monthName}-${yr}.doc`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/msword');
+    res.send(docHtml);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
-    btn.style.background = 'var(--r)';
 
-    addMsg('a', 'I could not create the calendar event: ' + e.message + '. You can create it manually in Outlook.');
+// ── OPEN ACTIONS TRACKER ──
+const ACTIONS_PATH = '/home/openactions.json';
+function loadActions() {
+  try { return JSON.parse(readFileSync(ACTIONS_PATH,'utf8')||'[]'); } catch(e) { return []; }
+}
+function saveActions(data) {
+  writeFileSync(ACTIONS_PATH, JSON.stringify(data, null, 2));
+}
 
+app.get('/openactions', requireAuth, (req, res) => {
+  res.json({ actions: loadActions() });
+});
+
+app.post('/openactions', requireAuth, (req, res) => {
+  try {
+    const actions = loadActions();
+    const action = {
+      id: Date.now(),
+      title: req.body.title || 'Untitled action',
+      source: req.body.source || '',
+      urgency: req.body.urgency || 'This week',
+      detail: req.body.detail || '',
+      deadline: req.body.deadline || null,
+      addedAt: new Date().toISOString(),
+      status: 'open',
+      type: req.body.type || 'manual',
+      emailFrom: req.body.emailFrom || null,
+      emailSubject: req.body.emailSubject || null
+    };
+    actions.unshift(action);
+    saveActions(actions);
+    console.log('[Actions] Added:', action.title);
+    res.json({ success: true, action });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/openactions/:id', requireAuth, (req, res) => {
+  try {
+    const actions = loadActions();
+    const idx = actions.findIndex(a => String(a.id) === String(req.params.id));
+    if (idx < 0) return res.status(404).json({ error: 'Not found' });
+    actions[idx] = { ...actions[idx], ...req.body, id: actions[idx].id };
+    if (req.body.status && req.body.status !== 'open') actions[idx].resolvedAt = new Date().toISOString();
+    saveActions(actions);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/openactions/:id', requireAuth, (req, res) => {
+  try {
+    const actions = loadActions().filter(a => String(a.id) !== String(req.params.id));
+    saveActions(actions);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ── BOARD REPORT SYSTEM ──
+const BOARD_STATE_PATH = '/home/board-report-state.json';
+// Kandia's email is pulled from the authenticated M365 account — no env var needed
+let KANDIA_EMAIL = null;
+async function getKandiaEmail() {
+  if (KANDIA_EMAIL) return KANDIA_EMAIL;
+  try {
+    const me = await graphGet('/me?$select=mail,userPrincipalName');
+    KANDIA_EMAIL = me.mail || me.userPrincipalName || 'kandia@risk2solution.com';
+    console.log('[Auth] Kandia email resolved:', KANDIA_EMAIL);
+  } catch(e) { KANDIA_EMAIL = 'kandia@risk2solution.com'; }
+  return KANDIA_EMAIL;
+}
+
+function loadBoardState() {
+  try { return JSON.parse(readFileSync(BOARD_STATE_PATH,'utf8')||'{}'); } catch(e) { return {}; }
+}
+function saveBoardState(s) {
+  try { writeFileSync(BOARD_STATE_PATH, JSON.stringify(s,null,2)); } catch(e) {}
+}
+
+async function checkBoardMeetingSchedule() {
+  if (!tokenStore.access_token) return;
+
+  const now = new Date();
+
+  // AUTO-CLEAR: if the last notified meeting has passed by more than 2 days, clear state
+  // so the display resets and next month's cycle can begin
+  const state = loadBoardState();
+  if (state.lastMeetingDate) {
+    const lastMeeting = new Date(state.lastMeetingDate);
+    const daysSinceMeeting = (now - lastMeeting) / (24*60*60*1000);
+    if (daysSinceMeeting > 2) {
+      console.log('[BoardReport] Last meeting was', Math.round(daysSinceMeeting), 'days ago — clearing state for next cycle');
+      state.notifiedMonth = null;
+      state.lastReportPath = null;
+      state.lastReportMeeting = null;
+      state.lastReportDate = null;
+      state.lastSentDate = null;
+      state.lastMeetingDate = null;
+      saveBoardState(state);
+    }
   }
 
-}
+  const dayOfWeek = now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
+  if (dayOfWeek !== 'Thursday') return;
 
-function setB(on){
+  // Reload state after potential clear above
+  const freshState = loadBoardState();
 
-  busy=on;document.getElementById('csend').disabled=on;
+  // Block only if sent successfully TODAY
+  const alreadySentToday = freshState.lastSentDate &&
+    new Date(freshState.lastSentDate).toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane'}) ===
+    now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane'});
+  if (alreadySentToday) { console.log('[BoardReport] Already sent successfully today, skipping'); return; }
 
-  const ex=document.getElementById('thinkEl');if(ex)ex.remove();
+  console.log('[BoardReport] Thursday — scanning calendar for board meetings...');
+  try {
+    // Look ahead 7 days only — Thursday trigger catches next week's meeting, NOT the week after
+    // e.g. Thursday 7 Aug catches Tuesday 11 Aug (4 days away). Thursday 31 Jul does NOT catch Tue 11 Aug (11 days away).
+    const from = now.toISOString();
+    const to = new Date(now.getTime() + 7*24*60*60*1000).toISOString();
+    const cal = await graphGet(`/me/calendarView?startDateTime=${from}&endDateTime=${to}&$select=subject,start,end&$top=20`);
+    const boardMeeting = (cal.value||[]).find(e => {
+      if (!e.subject) return false;
+      const s = e.subject.toLowerCase();
+      return s.includes('board');  // Simple: any calendar event with "board" in the title
+    });
+    if (!boardMeeting) { console.log('[BoardReport] No board meeting found in next 7 days (correct — will check again next Thursday)'); return; }
 
-  if(on){const el=document.getElementById('msgs');const d=document.createElement('div');d.id='thinkEl';d.className='msg a';d.innerHTML='<div class="sndr">Cinderella</div><div class="bub a"><div class="think"><span></span><span></span><span></span></div></div>';el.appendChild(d);el.scrollTop=el.scrollHeight;}
+    const meetingDate = new Date(boardMeeting.start.dateTime || boardMeeting.start.date);
+    const daysUntil = Math.round((meetingDate - now) / (24*60*60*1000));
+    const monthKey = meetingDate.toISOString().substring(0,7);
+    console.log('[BoardReport] Found:', boardMeeting.subject, '— in', daysUntil, 'days');
 
-}
-
-function qa(text){
-
-  const chatBtn=document.querySelector('[onclick*="chat"]');
-
-  show('chat',chatBtn);
-
-  setTimeout(()=>{const inp=document.getElementById('cinput');if(inp){inp.value=text;send();}},300);
-
-}
-
-function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
-
-function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,90)+'px';}
-
-function tick(){document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',weekday:'short',day:'numeric',month:'short'});}
-
-tick();setInterval(tick,1000);
-
-loadCfg();
-
-checkM365Connection();
-
-setInterval(loadM365Data,45*60*1000);
-
-try{renderStaff();}catch(e){console.warn('renderStaff:',e.message);}
-
-try{renderSkillMatch();}catch(e){console.warn('renderSkillMatch:',e.message);}
-
-try{renderHR();}catch(e){console.warn('renderHR:',e.message);}
-
-let DM={name:'',email:'',subject:'',context:'',mode:'email'};
-
-function openDraftModal(name,context,subject,defaultTab,emailAddress){
-
-  DM={name,email:emailAddress||'',subject:subject||`Following up — ${name}`,context,mode:defaultTab||'email'};
-
-  document.getElementById('draftModal').classList.add('open');
-
-  document.getElementById('dm-title').textContent=defaultTab==='meeting'?`Schedule a call with ${name}`:`Draft email to ${name}`;
-
-  document.getElementById('dm-sub').textContent=context;
-
-  document.getElementById('dm-icon').textContent=defaultTab==='meeting'?'📅':'✉️';
-
-  switchTab(defaultTab||'email');
-
-  if(!defaultTab||defaultTab==='email'){
-
-    // If context is a pre-written email body (starts with Hi/Dear), show it directly
-
-    if(context && (context.startsWith('Hi ') || context.startsWith('Dear '))) {
-
-      showDraftResult(context);
-
-    } else {
-
-      generateEmailDraft(name,context,subject);
-
+    // Safety check — meeting must be within 7 days (next week from Thursday)
+    if (daysUntil > 7) {
+      console.log('[BoardReport] Meeting is', daysUntil, 'days out — too far ahead. Will trigger on the Thursday closer to the meeting.');
+      return;
+    }
+    if (daysUntil < 1) {
+      console.log('[BoardReport] Meeting has already passed — skipping');
+      return;
     }
 
-  } else {
-
-    setupMeetingPane(name,subject);
-
-  }
-
-}
-
-function closeDraft(){document.getElementById('draftModal').classList.remove('open');}
-
-function switchTab(tab){
-
-  DM.mode=tab;
-
-  document.querySelectorAll('.dm-tab').forEach((t,i)=>t.classList.toggle('active',(tab==='email'&&i===0)||(tab==='meeting'&&i===1)));
-
-  document.getElementById('dm-email-pane').style.display=tab==='email'?'block':'none';
-
-  document.getElementById('dm-meeting-pane').style.display=tab==='meeting'?'block':'none';
-
-  if(tab==='meeting'&&!document.getElementById('ics-subject').textContent.includes(DM.name)){setupMeetingPane(DM.name,DM.subject);}
-
-}
-
-async function generateEmailDraft(name,context,subject){
-
-  document.getElementById('dm-loading').style.display='block';
-
-  document.getElementById('dm-draft-content').style.display='none';
-
-  document.getElementById('dm-email-actions').style.display='none';
-
-  document.getElementById('dm-email-note').style.display='none';
-
-  if(!C.api){showDraftResult('',subject,'Please add your API key in Setup & settings to generate email drafts.');return;}
-
-  const staffMember=SD.find(s=>s.name===name);
-
-  const staffCtx=staffMember?`Staff member context: ${staffMember.name}, ${staffMember.role||'staff'}, ${staffMember.capacity}% capacity, projects: ${staffMember.projects||'none'}, blockers: ${staffMember.blockers||'none'}`:'';
-
-  const prompt=`Draft a professional, warm and direct email from the COO of Risk 2 Solution to ${name}.\n\nPurpose: ${context}\n${staffCtx}\n\nFormat:\nSUBJECT: [subject line]\n\n[email body]\n\nKeep it concise (3-5 short paragraphs), professional but human. Sign off as "Kandia" or "Kandia, COO".`;
-
-  try{
-
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:600,messages:[{role:'user',content:prompt}]})});
-
-    const d=await r.json();
-
-    if(d.error)throw new Error(d.error.message);
-
-    const text=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('')||'';
-
-    const subMatch=text.match(/SUBJECT:\s*(.+)/);
-
-    const subj=subMatch?subMatch[1].trim():(subject||`Following up — ${name}`);
-
-    const body=text.replace(/SUBJECT:\s*.+\n?/,'').trim();
-
-    showDraftResult(name,subj,body);
-
-  }catch(e){showDraftResult(name,subject,`Could not generate draft: ${e.message}.`);}
-
-}
-
-function showDraftResult(name,subject,body){
-
-  document.getElementById('dm-loading').style.display='none';
-
-  document.getElementById('dm-draft-content').style.display='block';
-
-  document.getElementById('dm-email-actions').style.display='flex';
-
-  document.getElementById('dm-email-note').style.display='block';
-
-  document.getElementById('dm-to').value=DM.email?(name+' <'+DM.email+'>'):(name||'');
-
-  document.getElementById('dm-subject').value=subject||'';
-
-  document.getElementById('dm-body').value=body||'';
-
-  const ta=document.getElementById('dm-body');
-
-  ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,300)+'px';
-
-}
-
-async function openInOutlook(){
-  var to = document.getElementById('dm-to').value || '';
-  var subject = document.getElementById('dm-subject').value || '';
-  var body = document.getElementById('dm-body').value || '';
-
-  // Try Graph API draft first (cleaner than mailto)
-  try {
-    var toList = to.split(/[;,]/).map(function(e){ return e.trim(); }).filter(Boolean);
-    if (toList.length > 0) {
-      var r = await fetch('/graph/email/draft', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({subject: subject, body: body, to: toList})
-      });
-      var d = await r.json();
-      if (d.success) {
-        openOutlookDrafts();
+    // Don't re-send if already notified — UNLESS the last send was premature (sent >7 days before meeting)
+    if (freshState.notifiedMonth === monthKey) {
+      const lastSent = freshState.lastSentDate ? new Date(freshState.lastSentDate) : null;
+      const daysBetweenSendAndMeeting = lastSent ? (meetingDate - lastSent) / (24*60*60*1000) : 0;
+      if (daysBetweenSendAndMeeting > 7) {
+        console.log('[BoardReport] Previous send was premature (' + Math.round(daysBetweenSendAndMeeting) + ' days before meeting) — re-sending on correct Thursday');
+        // Allow re-send — fall through
+      } else {
+        console.log('[BoardReport] Already notified for', monthKey, '— skipping');
         return;
       }
     }
-  } catch(e) { console.warn('Draft creation failed, using compose URL'); }
 
-  // Fallback: Outlook compose URL — encode once only
-  var url = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(to) +
-    '&subject=' + encodeURIComponent(subject) +
-    '&body=' + encodeURIComponent(body);
-  window.open(url, '_blank');
-}
-
-function copyEmail(){
-
-  const subj=document.getElementById('dm-subject').value;
-
-  const body=document.getElementById('dm-body').value;
-
-  navigator.clipboard.writeText(`Subject: ${subj}\n\n${body}`).then(()=>{
-
-    const btn=document.getElementById('copyEmailBtn');
-
-    btn.textContent='Copied!';setTimeout(()=>btn.textContent='Copy email',2000);
-
-  });
-
-}
-
-async function refineEmail(){
-
-  const currentBody=document.getElementById('dm-body').value;
-
-  const instruction=prompt('How would you like Cinderella to refine this email?','Make it shorter and more direct');
-
-  if(!instruction)return;
-
-  document.getElementById('dm-loading').style.display='block';
-
-  document.getElementById('dm-draft-content').style.display='none';
-
-  document.getElementById('dm-email-actions').style.display='none';
-
-  document.getElementById('dm-email-note').style.display='none';
-
-  const prompt2=`Rewrite this email based on: "${instruction}"\n\nCurrent draft:\n${currentBody}\n\nReturn only the revised email body.`;
-
-  try{
-
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:500,messages:[{role:'user',content:prompt2}]})});
-
-    const d=await r.json();
-
-    const body=d.content?.filter(b=>b.type==='text').map(b=>b.text).join('')||currentBody;
-
-    showDraftResult(DM.name,document.getElementById('dm-subject').value,body.trim());
-
-  }catch(e){showDraftResult(DM.name,document.getElementById('dm-subject').value,currentBody);}
-
-}
-
-function setupMeetingPane(name,reason){
-
-  document.getElementById('ics-with').textContent=name;
-
-  document.getElementById('ics-subject').textContent=reason||`Meeting with ${name}`;
-
-  const d=new Date();d.setDate(d.getDate()+1);
-
-  if(d.getDay()===0)d.setDate(d.getDate()+1);
-
-  if(d.getDay()===6)d.setDate(d.getDate()+2);
-
-  d.setHours(10,0,0,0);
-
-  document.getElementById('ics-when').value=d.toISOString().slice(0,16);
-
-  document.getElementById('ics-notes').value=`Re: ${reason||'discussion'}\n\nAgenda to be shared before the meeting.`;
-
-}
-
-function downloadICS(){
-
-  const subject=document.getElementById('ics-subject').textContent;
-
-  const when=document.getElementById('ics-when').value;
-
-  const duration=parseInt(document.getElementById('ics-duration').value)||30;
-
-  const notes=document.getElementById('ics-notes').value;
-
-  const name=DM.name;
-
-  if(!when){alert('Please select a date and time.');return;}
-
-  const start=new Date(when);
-
-  const end=new Date(start.getTime()+duration*60000);
-
-  const pad=n=>String(n).padStart(2,'0');
-
-  const fmt=d=>`${d.getUTCFullYear()}${pad(d.getUTCMonth()+1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
-
-  const uid=`cin-${Date.now()}@risk2solution`;
-
-  const ics=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Cinderella//R2S//EN','CALSCALE:GREGORIAN','METHOD:REQUEST','BEGIN:VEVENT',`UID:${uid}`,`DTSTAMP:${fmt(new Date())}`,`DTSTART:${fmt(start)}`,`DTEND:${fmt(end)}`,`SUMMARY:${subject}`,`DESCRIPTION:${notes.replace(/\n/g,'\\n')}`,'ORGANIZER:COO',`ATTENDEE;CN=${name}:mailto:staff@risk2solution.com.au`,'BEGIN:VALARM','TRIGGER:-PT15M','ACTION:DISPLAY',`DESCRIPTION:Reminder: ${subject}`,'END:VALARM','END:VEVENT','END:VCALENDAR'].join('\r\n');
-
-  const blob=new Blob([ics],{type:'text/calendar;charset=utf-8'});
-
-  const url=URL.createObjectURL(blob);
-
-  const a=document.createElement('a');
-
-  a.href=url;a.download=`meeting-${name.replace(/\s+/g,'-').toLowerCase()}.ics`;
-
-  a.click();URL.revokeObjectURL(url);
-
-}
-
-function actionBlocker(staffName,blockerText){
-
-  openModal(`Resolve blocker — ${staffName}`,blockerText,
-
-    `<div class="alert-box warn"><div class="ab-title">Blocker reported by ${staffName}</div><div class="ab-text">${blockerText}</div></div>
-
-    <div class="mfield"><div class="mfl">Suggested actions</div><div class="mfv">1. Reach out to ${staffName} directly.<br>2. Identify who can unblock this.<br>3. Resolve and update ${staffName} by end of day.</div></div>
-
-    <hr class="m-divider">
-
-    <button class="m-btn" onclick="openDraftModal('${staffName}','I want to help resolve your blocker: ${blockerText.replace(/'/g,"\\'")}','Re: Removing your blocker','email')">✉ Email ${staffName}</button>
-
-    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${staffName}','Resolve blocker','Quick call to resolve your blocker','meeting')">📅 Schedule a call</button>
-
-    <button class="m-btn sec" onclick="qa('Help me resolve this blocker for ${staffName}: ${blockerText.replace(/'/g,"\\'")}')">Ask Cinderella</button>`
-
-  );
-
-}
-
-function actionCapacity(staffName,capacity,skills){
-
-  openModal(`Capacity support — ${staffName}`,`${capacity}% capacity — needs workload assistance`,
-
-    `<div class="alert-box"><div class="ab-title">${staffName} is at ${capacity}% — at risk of burnout</div><div class="ab-text">Immediate action recommended.</div></div>
-
-    <div class="mfield"><div class="mfl">Skills they need support with</div><div class="mfv">${skills||'See skill matching panel'}</div></div>
-
-    <hr class="m-divider">
-
-    <button class="m-btn" onclick="openDraftModal('${staffName}','Check in on their wellbeing — they are at ${capacity}% capacity','Checking in — how can I support you?','email')">✉ Wellbeing check-in</button>
-
-    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${staffName}','Workload review — at ${capacity}% capacity','1:1 — workload check-in','meeting')">📅 Schedule 1:1</button>
-
-    <button class="m-btn sec" onclick="show('skills',null);closeModal()">View skill matches</button>`
-
-  );
-
-}
-
-function actionSkillMatch(busyName,freeName,busyCap,freeCap,sharedSkills){
-
-  openModal(`Reallocation — ${busyName} → ${freeName}`,`Skill match · ${busyName} at ${busyCap}% · ${freeName} at ${freeCap}%`,
-
-    `<div class="alert-box ok"><div class="ab-title">Cinderella recommends: ask ${freeName} to support ${busyName}</div><div class="ab-text">Shared skills: ${sharedSkills}. ${freeName} has ${100-freeCap}% spare capacity.</div></div>
-
-    <hr class="m-divider">
-
-    <button class="m-btn" onclick="openDraftModal('${freeName}','Ask them to support ${busyName} who is at ${busyCap}% capacity. Shared skills: ${sharedSkills}','Support request — ${busyName} needs your help','email')">✉ Email ${freeName}</button>
-
-    <button class="m-btn" style="background:#217346" onclick="openDraftModal('${freeName}','Handover briefing with ${busyName}','Handover call','meeting')">📅 Schedule handover</button>
-
-    <button class="m-btn sec" onclick="openDraftModal('${busyName}','Let them know ${freeName} will be supporting them','Good news — support coming your way','email')">✉ Email ${busyName}</button>
-
-    <button class="m-btn sec" onclick="qa('What tasks from ${busyName} could ${freeName} take on given shared skills: ${sharedSkills}?')">Ask Cinderella for task suggestions</button>`
-
-  );
-
-}
-
-function actionEfficiency(title,detail,staffInvolved){
-
-  const staff=(staffInvolved||'').split(',').map(s=>s.trim()).filter(Boolean);
-
-  const emailBtns=staff.map(s=>`<button class="m-btn sec" onclick="openDraftModal('${s}','${detail.replace(/'/g,"\\'")}','Action required: ${title}','email')" style="margin-bottom:6px">✉ Email ${s}</button>`).join('');
-
-  openModal(title,detail,
-
-    `<div class="mfield"><div class="mfl">Opportunity detail</div><div class="mfv">${detail}</div></div>
-
-    <hr class="m-divider">
-
-    <button class="m-btn" onclick="qa('Create an implementation plan for: ${title}. Context: ${detail.replace(/'/g,"\\'")}')">Generate implementation plan</button>
-
-    ${emailBtns}`
-
-  );
-
-}
-
-function getMissingCheckIns() {
-
-  var checked = SD.map(function(s){ return s.name.toLowerCase(); });
-
-  var missing = ALL_STAFF.filter(function(s){
-
-    var first = s.name.split(' ')[0].toLowerCase();
-
-    return !checked.some(function(n){ return n.includes(first); });
-
-  });
-
-  if (missing.length === 0) {
-
-    return '<div class="alert-box ok"><div class="ab-title">All staff have submitted check-ins this week</div></div>';
-
-  }
-
-  window._missingStaff = {};
-
-  var rows = missing.map(function(s, i) {
-
-    window._missingStaff[i] = s;
-
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid rgba(162,45,45,0.2)">' +
-
-      '<span>' + s.name + '</span>' +
-
-      '<button onclick="sendCheckinReminder(' + i + ')" style="font-size:9px;padding:2px 8px;border-radius:8px;background:#A32D2D;color:#fff;border:none;cursor:pointer;font-family:var(--f)">Send reminder</button>' +
-
-    '</div>';
-
-  }).join('');
-
-  return '<div class="alert-box"><div class="ab-title">' + missing.length + ' staff have not submitted their check-in this week</div><div class="ab-text" style="margin-top:6px">' + rows + '</div></div>';
-
-}
-
-function sendCheckinReminder(idx) {
-
-  var s = window._missingStaff && window._missingStaff[idx];
-
-  if (!s) return;
-
-  openDraftModal(s.name, 'Weekly check-in reminder', 'Action required: weekly check-in this week', 'email', s.email);
-
-}
-
-// ── DELETE CHECK-IN ──
-
-async function deleteCheckIn(name, weekEnding) {
-
-  if (!confirm('Delete check-in for ' + name + ' (week ending ' + weekEnding + ')? This cannot be undone.')) return;
-
-  if (!C.bin || !C.key) { alert('JSONBin not configured'); return; }
-
-  try {
-
-    const r = await fetch('/checkins/latest');
-
-    const d = await r.json();
-
-    const existing = (Array.isArray(d.record) ? d.record : []).filter(function(e) {
-
-      return !(e.name && e.name.toLowerCase() === name.toLowerCase() && e.weekEnding === weekEnding);
-
-    });
-
-    const put = await fetch('/checkins/update', {
-
-      method: 'PUT',
-
-      headers: { 'Content-Type': 'application/json' },
-
-      body: JSON.stringify(existing)
-
-    });
-
-    if (!put.ok) throw new Error('Save failed');
-
-    closeModal();
-
-    await syncNow();
-
-    alert('Check-in deleted successfully.');
-
+    // Generate and send
+    console.log('[BoardReport] Generating report...');
+    const reportPath = await generateBoardReport(meetingDate, boardMeeting.subject);
+    await sendBoardReportNotification(boardMeeting.subject, meetingDate, daysUntil, reportPath);
+
+    // Only save state after successful send
+    const newState = loadBoardState();
+    newState.notifiedMonth = monthKey;
+    newState.lastReportPath = reportPath;
+    newState.lastReportMeeting = boardMeeting.subject;
+    newState.lastReportDate = now.toISOString();
+    newState.lastSentDate = now.toISOString();
+    newState.lastMeetingDate = meetingDate.toISOString(); // Save meeting date for auto-clear
+    saveBoardState(newState);
+    console.log('[BoardReport] ✅ Done — report generated and emailed to Kandia');
   } catch(e) {
-
-    alert('Could not delete: ' + e.message);
-
+    console.error('[BoardReport] Error (will retry next think loop):', e.message);
+    // Don't save state — let it retry next time the think loop runs
   }
-
 }
 
-// ── MONTH METRICS CLICK — show who is in each category ──
-
-function showMonthMetricDetail(type) {
-
-  var monthKey = window._currentMonthKey || '';
-
-  var data = window._allMonthData || {};
-
-  var subs = data[monthKey] || [];
-
-  var byWeek = groupByWeek(subs);
-
-  var weeks = Object.keys(byWeek).sort().reverse();
-
-  if (type === 'overloaded') {
-
-    var overWeeks = weeks.filter(function(w) { return calcWeekStats(byWeek[w]).overloaded > 0; });
-
-    var html = overWeeks.map(function(w) {
-
-      var over = byWeek[w].filter(function(s) { return s.capacity >= 85; });
-
-      return '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:500;color:var(--t3);margin-bottom:4px">Week ending ' + new Date(w).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) + '</div>' +
-
-        over.map(function(s) {
-
-          return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:0.5px solid var(--bl)"><span style="flex:1">' + cap(s.name) + ' (' + (s.role||'staff') + ')</span><span style="font-weight:500;color:var(--r)">' + s.capacity + '%</span></div>';
-
-        }).join('') + '</div>';
-
-    }).join('');
-
-    openModal('Overloaded staff — ' + getMonthLabel(monthKey), 'Weeks where capacity was above 85%', html || '<div style="color:var(--t3);padding:8px 0">No overloaded staff this month.</div>');
-
-  } else if (type === 'blockers') {
-
-    var html2 = weeks.map(function(w) {
-
-      var bl = byWeek[w].filter(function(s) { return hasBlocker(s.blockers); });
-
-      if (!bl.length) return '';
-
-      return '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:500;color:var(--t3);margin-bottom:4px">Week ending ' + new Date(w).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) + '</div>' +
-
-        bl.map(function(s) {
-
-          return '<div style="padding:6px 0;border-bottom:0.5px solid var(--bl)"><strong>' + cap(s.name) + '</strong><div style="font-size:11px;color:var(--a);margin-top:2px">' + s.blockers + '</div></div>';
-
-        }).join('') + '</div>';
-
-    }).join('');
-
-    openModal('Blockers — ' + getMonthLabel(monthKey), 'All blockers reported this month', html2 || '<div style="color:var(--t3);padding:8px 0">No blockers reported this month.</div>');
-
-  }
-
-}
-
-// ── FIXED: showMonth with clickable metrics and working week rows ──
-
-function renderMonthContent(monthKey) {
-
-  window._currentMonthKey = monthKey;
-
-  var data = window._allMonthData || {};
-
-  var submissions = data[monthKey] || [];
-
-  var byWeek = groupByWeek(submissions);
-
-  var weeks = Object.keys(byWeek).sort().reverse();
-
-  var el = document.getElementById('monthContent');
-
-  if (!el) return;
-
-  if (weeks.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:8px 0">No data for this month.</div>'; return; }
-
-  var allStats = calcWeekStats(submissions);
-
-  var overloadedWeeks = weeks.filter(function(w) { return calcWeekStats(byWeek[w]).overloaded > 0; }).length;
-
-  var html = '<div class="mrow" style="margin-bottom:16px">' +
-
-    '<div class="met" onclick="showMonthMetricDetail(&quot;overloaded&quot;)"><div class="ml">Month avg capacity</div><div class="mv" style="color:'+(allStats.avg>=80?'var(--a)':'var(--g)')+'">'+allStats.avg+'%</div><div class="ms">'+allStats.count+' submissions</div></div>'+
-
-    '<div class="met" onclick="showMonthMetricDetail(&quot;overloaded&quot;)"><div class="ml">Overloaded weeks</div><div class="mv" style="color:var(--r)">'+overloadedWeeks+'</div><div class="ms">click to see who</div></div>'+
-
-    '<div class="met" onclick="showMonthMetricDetail(&quot;blockers&quot;)"><div class="ml">Blockers raised</div><div class="mv" style="color:var(--a)">'+allStats.blockers+'</div><div class="ms">click to see details</div></div>'+
-
-    '<div class="met" onclick="generateMonthReport(window._currentMonthKey)"><div class="ml">AI analysis</div><div class="mv" style="font-size:14px;color:var(--b)">Ask</div><div class="ms">Cinderella</div></div>'+
-
-    '</div>';
-
-  // Week by week
-
-  html += '<div class="card"><div class="ct">Week by week — ' + getMonthLabel(monthKey) + '</div>';
-
-  weeks.forEach(function(wk) {
-
-    var ws = calcWeekStats(byWeek[wk]);
-
-    var wkLabel = 'Week ending ' + new Date(wk).toLocaleDateString('en-AU',{day:'numeric',month:'short'});
-
-    html += '<div style="padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer" data-wk="'+wk+'" onclick="showWeekDetailFromEl(this)">'+
-
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'+
-
-        '<span style="font-size:12px;font-weight:500;color:var(--t1)">'+wkLabel+'</span>'+
-
-        '<span style="font-size:11px;color:'+(ws.avg>=80?'var(--a)':'var(--g)')+'">'+ws.avg+'% avg · '+ws.count+' check-ins</span>'+
-
-      '</div>'+
-
-      '<div style="display:flex;gap:12px;font-size:10px;color:var(--t2)">'+
-
-        (ws.overloaded>0?'<span style="color:var(--r)">⚠ '+ws.overloaded+' overloaded — click to see who</span>':'')+
-
-        (ws.available>0?'<span style="color:var(--g)">✓ '+ws.available+' available</span>':'')+
-
-        (ws.blockers>0?'<span style="color:var(--a)">🚧 '+ws.blockers+' blockers</span>':'')+
-
-        (ws.overloaded===0&&ws.available===0&&ws.blockers===0?'<span>Team looking healthy</span>':'')+
-
-      '</div>'+
-
-    '</div>';
-
-  });
-
-  html += '</div>';
-
-  // Trends chart container + table
-
-  html += '<div class="card"><div class="ct">Staff capacity trends</div>'+
-
-    '<div style="position:relative;height:200px;margin-bottom:12px"><canvas id="trendChart"></canvas></div>'+
-
-    renderStaffTrends(byWeek, weeks)+'</div>';
-
-  el.innerHTML = html;
-
-  // Build trends chart after DOM renders
-
-  setTimeout(function(){ buildTrendChart(byWeek, weeks); }, 50);
-
-}
-
-function buildTrendChart(byWeek, weeks) {
-
-  var ctx = document.getElementById('trendChart');
-
-  if (!ctx) { console.warn('trendChart canvas not found'); return; }
-
-  if (window._trendChart) { try { window._trendChart.destroy(); } catch(e){} }
-
-  // Get unique staff names across all weeks
-
-  var staffNames = [];
-
-  weeks.forEach(function(w) {
-
-    (byWeek[w] || []).forEach(function(s) {
-
-      if (s.name && !staffNames.includes(s.name)) staffNames.push(s.name);
-
+async function generateBoardReport(meetingDate, meetingSubject) {
+  const reportMonth = new Date(meetingDate);
+  reportMonth.setMonth(reportMonth.getMonth() - 1);
+  const monthName = reportMonth.toLocaleString('en-AU',{month:'long'});
+  const yr = reportMonth.getFullYear();
+  const mm = reportMonth.getMonth();
+  const yy = reportMonth.getFullYear();
+
+  let context = 'BOARD REPORT CONTEXT\n===================\n\n';
+
+  // 1. ALL EMAILS — PRIORITY FIRST — broad fetch, rich content, prioritised first in context
+  try {
+    // Fetch from start of report month to now (catches Diane's month-end emails sent after month close)
+    const since = new Date(yy, mm, 1).toISOString();
+    const nowStr = new Date().toISOString();
+    // Use bodyPreview (clean 255-char text, no HTML stripping needed) + full body for key emails
+    const emailData = await graphGet(
+      `/me/messages?$top=150&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${nowStr}` +
+      `&$select=subject,from,bodyPreview,body,importance,receivedDateTime&$orderby=receivedDateTime desc`
+    );
+    const emails = emailData.value || [];
+    console.log('[BoardReport] Fetched', emails.length, 'emails from', monthName);
+
+    // CATEGORY 1 — Finance emails (Diane or finance keywords) — get full body content
+    const financeEmails = emails.filter(e => {
+      const from = (e.from?.emailAddress?.name||'').toLowerCase();
+      const subj = (e.subject||'').toLowerCase();
+      // Exclude Cinderella's own board report notification emails
+      if (subj.includes('board report ready')) return false;
+      // Prioritise emails FROM Diane/Kruger - she sends the monthly P&L
+      if (from.includes('diane') || from.includes('kruger')) return true;
+      // Tight subject keywords only - avoid noise like 'report' or 'monthly'
+      return !!subj.match(/payroll|month.?end|year.?end|p&l|profit.?loss|revenue|budget|reconcil|fy2|fy 2|year to date|ytd|cash flow|forecast/i);
     });
+    console.log('[BoardReport] Finance emails found:', financeEmails.length, financeEmails.map(e=>e.subject).join(' | '));
 
-  });
-
-  var colors = ['#1D9E75','#378ADD','#EF9F27','#E24B4A','#9B59B6','#E67E22','#16A085','#D35400'];
-
-  var sortedWeeks = sortWeeks(byWeek); // chronological order using proper date sort
-
-  var datasets = staffNames.map(function(name, i) {
-
-    var data = sortedWeeks.map(function(w) {
-
-      var entry = (byWeek[w] || []).find(function(s) { return s.name === name; });
-
-      return entry ? entry.capacity : null;
-
-    });
-
-    var col = colors[i % colors.length];
-
-    return {
-
-      label: cap(name).split(' ')[0],
-
-      data: data,
-
-      borderColor: col,
-
-      backgroundColor: col + '22',
-
-      borderWidth: 2,
-
-      tension: 0.3,
-
-      spanGaps: true,
-
-      pointRadius: 5,
-
-      pointHoverRadius: 7,
-
-      pointBackgroundColor: col
-
-    };
-
-  });
-
-  var labels = sortedWeeks.map(function(w) {
-
-    return new Date(w).toLocaleDateString('en-AU', { day:'numeric', month:'short' });
-
-  });
-
-  // Add 85% danger line
-
-  datasets.push({
-
-    label: '85% threshold',
-
-    data: sortedWeeks.map(function() { return 85; }),
-
-    borderColor: '#E24B4A',
-
-    borderWidth: 1,
-
-    borderDash: [4,4],
-
-    pointRadius: 0,
-
-    fill: false
-
-  });
-
-  window._trendChart = new Chart(ctx, {
-
-    type: 'line',
-
-    data: { labels: labels, datasets: datasets },
-
-    options: {
-
-      responsive: true,
-
-      maintainAspectRatio: false,
-
-      interaction: { mode: 'index', intersect: false },
-
-      plugins: {
-
-        legend: {
-
-          position: 'bottom',
-
-          labels: { boxWidth: 12, padding: 10, font: { size: 11 } }
-
-        },
-
-        tooltip: {
-
-          callbacks: {
-
-            label: function(ctx) {
-
-              return ctx.dataset.label + ': ' + (ctx.raw !== null ? ctx.raw + '%' : 'No data');
-
-            }
-
-          }
-
-        }
-
-      },
-
-      scales: {
-
-        y: {
-
-          min: 0, max: 100,
-
-          ticks: { callback: function(v) { return v + '%'; }, font: { size: 10 }, stepSize: 20 },
-
-          grid: { color: 'rgba(128,128,128,0.1)' }
-
-        },
-
-        x: { ticks: { font: { size: 10 } }, grid: { color: 'rgba(128,128,128,0.05)' } }
-
+    // Extract dollar figures from finance email previews as a quick-capture fallback
+    const financeFigures = [];
+    financeEmails.forEach(e => {
+      const text = (e.bodyPreview || '') + ' ' + (e.subject || '');
+      const dollarMatches = text.match(/\$[\d,]+\.?\d{0,2}/g) || [];
+      const positiveMatch = text.match(/positive[^$]*\$[\d,]+|closed.*\$[\d,]+|result.*\$[\d,]+/i);
+      if (dollarMatches.length > 0 || positiveMatch) {
+        financeFigures.push({
+          from: e.from?.emailAddress?.name,
+          subject: e.subject,
+          date: e.receivedDateTime?.substring(0,10),
+          figures: dollarMatches.slice(0,5),
+          preview: e.bodyPreview?.substring(0,300)
+        });
       }
-
+    });
+    if (financeFigures.length > 0) {
+      context += 'KEY FINANCIAL FIGURES EXTRACTED FROM EMAILS:\n';
+      financeFigures.forEach(f => {
+        context += `${f.date} — ${f.from}: "${f.subject}" | Figures: ${f.figures.join(', ')}\n`;
+        context += `  Preview: ${f.preview}\n\n`;
+      });
     }
 
-  });
+    if (financeEmails.length > 0) {
+      context += 'FINANCE EMAILS — ' + monthName + ' (primary source for financial overview):\n';
+      financeEmails.slice(0,15).forEach(e => {
+        // Use bodyPreview first (clean text), then fall back to stripping body HTML
+        const cleanPreview = e.bodyPreview || '';
+        const htmlBody = e.body?.content || '';
+        const bodyText = htmlBody
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+          .replace(/\s+/g, ' ').trim();
+        // Combine preview + body — preview is cleaner, body may have more detail
+        const combined = (cleanPreview + ' ' + bodyText.substring(0, 600)).trim().substring(0, 900);
+        const date = e.receivedDateTime ? new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) : '';
+        context += `FROM: ${e.from?.emailAddress?.name||'?'} (${date})\nSUBJECT: ${e.subject}\nCONTENT: ${combined}\n\n`;
+      });
+    }
 
-}
-
-async function renderSkillsMatrix(){
-
-  const el=document.getElementById('skillMatrix');
-
-  if(!el)return;
-
-  // Use already-fetched data — avoids double JSONBin call
-
-  let all=window._allCheckIns||[];
-
- if(all.length===0){
-
-    el.innerHTML='<div style="font-size:11px;color:var(--t3);padding:4px 0">Sync check-ins to see skills data.</div>';
-
-    return;
-
-  }
-
-  const reg={};
-
-  all.forEach(s=>{
-
-    if(!s.name||!s.skills)return;
-
-    const nm=s.name.split(' ').map(w=>w?w[0].toUpperCase()+w.slice(1):'').join(' ');
-
-    if(!reg[nm])reg[nm]=[];
-
-    s.skills.split(',').forEach(sk=>{
-
-      const t=sk.trim();
-
-      if(!t||t.length<2)return;
-
-      if(!reg[nm].some(e=>e.toLowerCase()===t.toLowerCase()))reg[nm].push(t);
-
+    // CATEGORY 2 — Strategic/operational emails (DISP, EMDG, grants, compliance, legal, staff events, conference, tenders)
+    const STRATEGIC_KEYWORDS = [
+      'disp','clearance','security clearance','emdg','grant','tender','conference','staff event',
+      'asqa','rto','accreditation','renewal','compliance','audit','legal','court','tribunal',
+      'auruba','immigration','visa','contract','partnership','proposal','onboarding',
+      'workers comp','payroll tax','bas','gst','annual leave','recruitment','hiring',
+      'resign','termination','performance','incident','injury','welfare',
+      'psg','pss','iop','eps','presilience','risk management','emergency planning'
+    ];
+    const strategicEmails = emails.filter(e => {
+      if (financeEmails.includes(e)) return false;
+      const subj = (e.subject||'').toLowerCase();
+      const preview = (e.bodyPreview||'').toLowerCase();
+      return STRATEGIC_KEYWORDS.some(k => subj.includes(k) || preview.includes(k)) || e.importance === 'high';
     });
+    if (strategicEmails.length > 0) {
+      context += 'STRATEGIC & OPERATIONAL EMAILS — ' + monthName + ':\n';
+      strategicEmails.slice(0,30).forEach(e => {
+        const htmlBody = e.body?.content || '';
+        const bodyText = htmlBody
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ').trim();
+        const bodyPreview = bodyText.substring(0, 400);
+        const date = e.receivedDateTime ? new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) : '';
+        context += `FROM: ${e.from?.emailAddress?.name||'?'} (${date}) — ${e.subject}\n${bodyPreview}\n\n`;
+      });
+    }
 
-  });
+    // CATEGORY 3 — All other emails (subjects only for breadth)
+    const otherEmails = emails.filter(e => !financeEmails.includes(e) && !strategicEmails.includes(e)).slice(0,30);
+    if (otherEmails.length > 0) {
+      context += 'OTHER EMAILS — ' + monthName + ' (subjects):\n';
+      otherEmails.forEach(e => {
+        context += `- ${e.from?.emailAddress?.name||'?'}: ${e.subject}${e.importance==='high'?' [HIGH]':''}\n`;
+      });
+      context += '\n';
+    }
+  } catch(e) { console.warn('[BoardReport] Email fetch:', e.message); }
 
-  const avStyles=['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
-
-  const ordered=ALL_STAFF.map(s=>s.name.split(' ').map(w=>w?w[0].toUpperCase()+w.slice(1):'').join(' '));
-
-  Object.keys(reg).forEach(n=>{if(!ordered.includes(n))ordered.push(n);});
-
-  let html='<div style="font-size:9px;color:var(--t3);margin-bottom:8px;letter-spacing:.04em">ALL HISTORICAL CHECK-INS · skills accumulate and never disappear</div>';
-
-  ordered.forEach((name,i)=>{
-
-    if(!reg[name]&&!ALL_STAFF.some(s=>s.name.toLowerCase().includes(name.split(' ')[0].toLowerCase())))return;
-
-    const skills=reg[name]||[];
-
-    const av=avStyles[i%avStyles.length];
-
-    const ini=name.split(' ').map(w=>w[0]||'').join('').substring(0,2).toUpperCase();
-
-
-      '<div style="display:flex;align-items:center;gap:6px;min-width:120px;flex-shrink:0;padding-top:2px">'+
-
-        '<div style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;'+av+'">'+ini+'</div>'+
-
-        '<span style="font-size:11px;font-weight:500;color:var(--t1)">'+name.split(' ')[0]+'</span>'+
-
-      '</div>'+
-
-      '<div style="flex:1;display:flex;flex-wrap:wrap">'+tags+'</div>'+
-
-    '</div>';
-
-  });
-
-  el.innerHTML=html;
-
-}
-
-// ── OPEN ACTIONS ──
-var _openActionsCache = null;
-var _openActionsTime = 0;
-var OPEN_ACTIONS_TTL = 30 * 60 * 1000; // 30 minutes
-
-async function loadOpenActions(force) {
-  var el = document.getElementById('openActionsList');
-  if (!el) return;
-
-  // Use cache if fresh (within 30 min) and not forced
-  var cacheAge = Date.now() - _openActionsTime;
-  if (_openActionsCache && !force && cacheAge < OPEN_ACTIONS_TTL) {
-    el.innerHTML = _openActionsCache;
-    return;
-  }
-
-  // Check if we have any data to scan
-  var hasEmails = M365.emails.length > 0 || (infoEmails||[]).length > 0;
-  var hasTeamsData = (M365.teams||[]).length > 0;
-  var hasDocs = docLibrary.length > 0;
-
-  if (!hasEmails && !hasTeamsData && !hasDocs) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">M365 emails are still loading. <button onclick="loadM365Data().then(function(){loadOpenActions(true);})" style="background:none;border:none;color:var(--b);cursor:pointer;font-family:var(--f);font-size:11px;padding:0;text-decoration:underline">Click here to reload and scan</button></div>';
-    return;
-  }
-
-  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Scanning ' + M365.emails.length + ' emails' + (hasTeamsData?' + Teams':'') + '...</div>';
-
+  // 2. Staff check-ins for the month
   try {
-    // Build context
-    var emailLines = M365.emails.slice(0,25).map(function(e){ return '- ' + (e.from||'?') + ': ' + (e.subject||'?'); }).join('\n') || 'No emails';
-    var infoLines = (infoEmails||[]).slice(0,10).map(function(e){ return '- [info@] ' + e.from + ': ' + e.subject; }).join('\n');
-    var teamsLines = (M365.teams||[]).filter(function(t){
-      var n = ['janita','reinette','diane','ross','dave','cherry','garima'];
-      var twoDays = Date.now() - 172800000;
-      if (t.time && new Date(t.time).getTime() < twoDays) return false;
-      var src = ((t.from||'') + ' ' + (t.topic||'')).toLowerCase();
-      return n.some(function(nm){ return src.includes(nm); });
-    }).slice(0,10).map(function(t){
-      return '- [Teams] ' + t.from + ': ' + (t.lastMessage||'').substring(0,100);
-    }).join('\n');
-    var docLines = docLibrary.map(function(d){ return '- ' + d.name; }).join('\n') || 'None';
-    var blockerLines = SD.filter(function(s){ return s.blockers && s.blockers.toLowerCase() !== 'none' && s.blockers.trim(); })
-      .map(function(s){ return '- ' + (s.name||'').split(' ')[0] + ': ' + s.blockers; }).join('\n') || 'None';
-
-    // Thursday board report context
-  var today = new Date();
-  var brisbaneDay = today.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
-  // Build Aurora context for open actions
-  var auroraActionsCtx = '';
-  if (window._auroraData && window._auroraData.projects) {
-    var overdueProjItems = [];
-    var unpaidProjItems = [];
-    window._auroraData.projects.forEach(function(p) {
-      if (p.overdueDeliverables && p.overdueDeliverables.length > 0)
-        overdueProjItems.push(p.client + ': ' + p.overdueDeliverables.length + ' overdue deliverable(s)');
-      if (p.totalOutstanding > 0)
-        unpaidProjItems.push(p.client + ': $' + Math.round(p.totalOutstanding).toLocaleString() + ' unpaid invoice(s)');
+    const raw = JSON.parse(readFileSync('/home/checkins.json','utf8')||'[]');
+    const monthly = raw.filter(c => {
+      if (!c.submitted) return false;
+      const d = new Date(c.submitted);
+      return d.getMonth()===mm && d.getFullYear()===yy;
     });
-    if (overdueProjItems.length > 0)
-      auroraActionsCtx += '\n\nAURORA OVERDUE DELIVERABLES (must be in open actions):\n' + overdueProjItems.join('\n');
-    if (unpaidProjItems.length > 0)
-      auroraActionsCtx += '\n\nAURORA UNPAID INVOICES (flag for follow-up):\n' + unpaidProjItems.join('\n');
+    if (monthly.length > 0) {
+      context += 'STAFF CHECK-INS ('+monthName+' — '+monthly.length+' submissions):\n';
+      monthly.forEach(c => {
+        context += '- '+c.name+' ('+c.role+'): capacity '+c.capacity+'%';
+        if (c.capacityNext) context += ', next week forecast '+c.capacityNext+'%';
+        if (c.trend) context += ', trend: '+c.trend;
+        if (c.projects) context += '\n  Projects: '+c.projects;
+        if (c.blockers && c.blockers.toLowerCase() !== 'none') context += '\n  Blockers: '+c.blockers;
+        if (c.skills) context += '\n  Skills applied: '+c.skills;
+        context += '\n';
+      });
+      context += '\n';
+    }
+  } catch(e) {}
+
+  // Known confirmed financial figures (hardcoded as ground truth)
+  context += 'CONFIRMED FINANCIAL FACTS (use these in the financial table):\n';
+  context += '- August 2026 FINAL ACTUAL: +$23,100 (closed, confirmed by Diane Kruger via P&L Update email Aug 2026)\n';
+  context += '- July 2026 FINAL ACTUAL: +$17,209.41 (closed, confirmed by Diane Kruger P&L July 2026 email, 3 Aug 2026)\n';
+  context += '- For a September 2026 board report: Row 1 = August 2026 Actual +$23,100, Row 2 = September 2026 actual/forecast, Row 3 = October 2026 forecast\n';
+  context += '- Do NOT include July 2026 in the financial table for a September report - it is 2 months ago\n\n';
+
+
+  // 3. Document library - read actual content of past board reports + list other docs
+  try {
+    const cc = await getBlobContainer();
+    if (cc) {
+      const docs = [];
+      const pastReports = [];
+
+      for await (const b of cc.listBlobsFlat()) {
+        if (b.name.toLowerCase().match(/board.?report|board.?pack/)) {
+          pastReports.push({ name: b.name, size: b.properties.contentLength });
+        } else {
+          docs.push(b.name);
+        }
+      }
+
+      // Read the actual content of up to 3 most recent past board reports
+      if (pastReports.length > 0) {
+        // Sort by name descending (filenames include year-month so newest sorts last alphabetically)
+        pastReports.sort((a, b) => b.name.localeCompare(a.name));
+        const reportsToRead = pastReports.slice(0, 3);
+        context += 'PREVIOUS BOARD REPORTS (content extracted for carry-forward review):\n';
+        context += 'Reports found: ' + pastReports.map(r => r.name).join(', ') + '\n\n';
+
+        for (const report of reportsToRead) {
+          // Skip the current month's report to avoid circular reference
+          const reportMonth = report.name.match(/(\d{4}-\d{2})/)?.[1];
+          const currentMonthKey = yr + '-' + String(mm+1).padStart(2,'0');
+          if (reportMonth === currentMonthKey) {
+            console.log('[BoardReport] Skipping current month report:', report.name);
+            continue;
+          }
+          try {
+            const bc = cc.getBlockBlobClient(report.name);
+            const buf = await bc.downloadToBuffer();
+            const raw = buf.toString('utf8');
+            let text = raw
+              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+              .replace(/\s+/g, ' ').trim();
+            // Extract only carry-forward sections — items for board, compliance, open actions
+            // Do NOT pass financial figures from old reports — they poison the current report
+            const carryForwardMarkers = [
+              'items for board', 'board decision', 'board awareness', 'carry forward',
+              'compliance', 'open action', 'outstanding', 'pending', 'follow up',
+              'disp', 'emdg', 'asqa', 'rto', 'workers comp', 'legal', 'tender'
+            ];
+            const sentences = text.split(/\.\s+/);
+            const relevant = sentences.filter(s => {
+              const sl = s.toLowerCase();
+              return carryForwardMarkers.some(m => sl.includes(m));
+            }).join('. ');
+            const carryText = (relevant || text).substring(0, 1500);
+            context += 'CARRY-FORWARD FROM ' + report.name + ' (open items only — do NOT reuse financial figures from this report):\n';
+            context += carryText + '\n\n';
+            console.log('[BoardReport] Read past report for carry-forward:', report.name, '(' + carryText.length + ' chars)');
+          } catch(readErr) {
+            console.warn('[BoardReport] Could not read', report.name, ':', readErr.message);
+          }
+        }
+      } else {
+        context += 'PAST BOARD REPORTS: None found in document library.\n\n';
+      }
+
+      if (docs.length > 0) context += 'OTHER DOCUMENTS IN LIBRARY: ' + docs.join(', ') + '\n\n';
+    }
+  } catch(e) { console.warn('[BoardReport] Doc library read error:', e.message); }
+
+  // 3b. Aurora project data
+  try {
+    const aurData = await callAurora('/api/projects');
+    const projects = aurData.projects || [];
+    const PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
+    // Include all phases 0-4 — Enquiry through Close-out — all are relevant for board report
+    const active = projects.filter(p => p.phase >= 0 && p.phase <= 4);
+    console.log('[BoardReport] Aurora projects found:', projects.length, '| Included in report:', active.length);
+    if (active.length > 0) {
+      context += 'ALL PROJECTS (from Aurora — include ALL in client delivery section):\n';
+      for (const p of active) {  // No slice — include every project
+        let invTotal = 0, invPaid = 0;
+        try {
+          const inv = await callAurora('/api/projects/' + p.id + '/invoices');
+          (inv.invoices||[]).forEach(i => { invTotal += parseFloat(i.amount||0); if(i.paid) invPaid += parseFloat(i.amount||0); });
+        } catch(e) {}
+        let overdueCount = 0;
+        try {
+          const del = await callAurora('/api/projects/' + p.id + '/deliverables');
+          overdueCount = (del.deliverables||[]).filter(d => d.status==='Overdue' || (d.dueDate && new Date(d.dueDate)<new Date() && d.status!=='Complete')).length;
+        } catch(e) {}
+        context += '- ' + p.clientName + ' | Phase: ' + (PHASES[p.phase]||'?') + ' | Consultant: ' + (p.consultant||'TBC');
+        if (invTotal > 0) context += ' | Invoiced: $' + invTotal.toFixed(2) + ' Paid: $' + invPaid.toFixed(2) + ' Outstanding: $' + (invTotal-invPaid).toFixed(2);
+        if (overdueCount > 0) context += ' | ⚠ ' + overdueCount + ' overdue deliverable(s)';
+        if (p.dueDate) context += ' | Due: ' + p.dueDate;
+        context += '\n';
+      }
+      context += '\n';
+    }
+  } catch(e) { console.warn('[BoardReport] Aurora data:', e.message); }
+
+
+  // Monday.com removed — Aurora + emails used instead
+
+  // 5. Open actions tracker
+  try {
+    const actions = loadActions();
+    const open = actions.filter(a => a.status === 'open');
+    if (open.length > 0) {
+      context += 'OPEN ACTION ITEMS (from tracker):\n';
+      open.forEach(a => context += '- ['+a.urgency+'] '+a.title+' (from: '+a.source+')'+'\n');
+      context += '\n';
+    }
+  } catch(e) {}
+
+  // 6. CALENDAR EVENTS — significant items from Kandia's calendar (past 45 days + upcoming 60 days)
+  try {
+    const calFrom = new Date(now.getFullYear(), now.getMonth()-1, 1).toISOString();
+    const calTo   = new Date(now.getFullYear(), now.getMonth()+2, 0).toISOString();
+    const calData = await graphGet(`/me/calendarView?startDateTime=${calFrom}&endDateTime=${calTo}&$select=subject,start,end,bodyPreview&$top=100&$orderby=start/dateTime`);
+    const SIG_KEYWORDS = ['ospa','asqa','disp','tender','board','submission','renewal','audit','review','accreditation','training','client','meeting','grant','emdg','compliance','certification','psg','payroll','clearance','hr','legal','court','tribunal','application','deadline','milestone'];
+    const significant = (calData.value||[]).filter(e => {
+      const s = (e.subject||'').toLowerCase();
+      return SIG_KEYWORDS.some(k => s.includes(k));
+    });
+    if (significant.length > 0) {
+      context += 'CALENDAR — SIGNIFICANT EVENTS (past month to next 2 months):\n';
+      significant.forEach(e => {
+        const d = new Date(e.start.dateTime||e.start.date);
+        const isPast = d < now;
+        context += (isPast ? '[PAST] ' : '[UPCOMING] ') + d.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ' — ' + e.subject + '\n';
+        if (e.bodyPreview && e.bodyPreview.length > 20) context += '  ' + e.bodyPreview.substring(0,120).replace(/\n/g,' ') + '\n';
+      });
+      context += '\n';
+    }
+  } catch(e) { console.warn('[BoardReport] Calendar fetch:', e.message); }
+
+  // 7. CLOCKIFY — staff hours vs capacity for the current month
+  try {
+    if (CLOCKIFY_API_KEY) {
+      const workspaces = await callClockify('/workspaces');
+      const ws = (workspaces||[]).find(w => w.name === 'Risk 2 Solution') || workspaces[0];
+      if (ws) {
+        const users = await callClockify('/workspaces/' + ws.id + '/users?page-size=50');
+        const monthStart = new Date(yy, mm, 1).toISOString();
+        const monthEndDt = new Date(yy, mm+1, 0, 23, 59, 59).toISOString();
+        let clockifyCtx = 'CLOCKIFY — TIME TRACKING VS CAPACITY ('+monthName+'):\n';
+        let hasData = false;
+
+        // Load check-ins for cross-reference
+        let allCheckIns = [];
+        try { allCheckIns = JSON.parse(readFileSync('/home/checkins.json','utf8')||'[]'); } catch(e) {}
+        const monthCheckIns = allCheckIns.filter(c => {
+          if (!c.submitted) return false;
+          const d = new Date(c.submitted);
+          return d.getFullYear() === yy && d.getMonth() === mm;
+        });
+
+        for (const user of users) {
+          const match = CLOCKIFY_STAFF_MAP.find(m => {
+            const name = (user.name||'').toLowerCase();
+            const email = (user.email||'').toLowerCase();
+            return name.includes(m.clockify.toLowerCase()) || email.includes(m.clockify.toLowerCase());
+          });
+          if (!match) continue;
+          try {
+            const entries = await callClockify('/workspaces/'+ws.id+'/user/'+user.id+'/time-entries?start='+encodeURIComponent(monthStart)+'&end='+encodeURIComponent(monthEndDt)+'&page-size=500');
+            let totalHrs = 0;
+            (entries||[]).forEach(e => {
+              if (e.timeInterval?.duration) totalHrs += parseDuration(e.timeInterval.duration);
+              else if (e.timeInterval?.start && e.timeInterval?.end)
+                totalHrs += (new Date(e.timeInterval.end) - new Date(e.timeInterval.start)) / 3600000;
+            });
+            totalHrs = Math.round(totalHrs * 10) / 10;
+            // Find their avg capacity from check-ins this month
+            const personCheckIns = monthCheckIns.filter(c => (c.name||'').toLowerCase().includes(match.checkIn.split(' ')[0].toLowerCase()));
+            const avgCap = personCheckIns.length > 0 ? Math.round(personCheckIns.reduce((s,c) => s + (c.capacity||0), 0) / personCheckIns.length) : null;
+            const impliedHrs = avgCap !== null ? Math.round((avgCap/100)*37.5*4.3*10)/10 : null; // monthly
+            clockifyCtx += '- ' + match.checkIn + ': ' + totalHrs + 'h logged this month';
+            if (avgCap !== null) clockifyCtx += ' | avg check-in capacity: ' + avgCap + '%' + (impliedHrs ? ' (~' + impliedHrs + 'h implied)' : '');
+            if (impliedHrs && totalHrs > 0) {
+              const gap = totalHrs - impliedHrs;
+              if (gap > 20) clockifyCtx += ' | ⚠ OVER capacity (possible burnout)';
+              else if (gap < -20 && avgCap > 50) clockifyCtx += ' | ⚠ Under hours vs reported capacity';
+            }
+            clockifyCtx += '\n';
+            hasData = true;
+          } catch(e) {}
+        }
+        if (hasData) { context += clockifyCtx + '\n'; }
+      }
+    }
+  } catch(e) { console.warn('[BoardReport] Clockify context:', e.message); }
+
+  // 8. TEAMS MESSAGES — recent significant discussions
+  try {
+    const chats = await graphGet('/me/chats?$top=20&$expand=members');
+    let teamsCtx = '';
+    let chatCount = 0;
+    for (const chat of (chats.value||[]).slice(0, 10)) {
+      try {
+        const msgs = await graphGet('/me/chats/'+chat.id+'/messages?$top=10&$orderby=createdDateTime desc');
+        const recent = (msgs.value||[]).filter(m => {
+          if (!m.createdDateTime) return false;
+          const d = new Date(m.createdDateTime);
+          const cutoff = new Date(now.getTime() - 45*24*60*60*1000);
+          return d >= cutoff;
+        });
+        if (recent.length > 0) {
+          const chatName = chat.topic || (chat.members||[]).filter(m => !(m.displayName||'').includes('Kandia')).map(m => m.displayName).join(', ');
+          recent.slice(0,3).forEach(m => {
+            const body = (m.body?.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().substring(0,150);
+            if (body.length > 20) teamsCtx += '- ['+chatName+'] '+(m.from?.user?.displayName||'?')+': '+body+'\n';
+          });
+          chatCount++;
+        }
+      } catch(e) {}
+      if (chatCount >= 5) break;
+    }
+    if (teamsCtx) context += 'TEAMS MESSAGES (recent):\n' + teamsCtx + '\n';
+  } catch(e) { console.warn('[BoardReport] Teams context:', e.message); }
+
+  // Generate comprehensive report — AI returns JSON, server builds HTML
+  const NAVY  = '#1B3A6B';
+  const GREEN = '#1E8449';
+  const RED   = '#C0392B';
+  const AMBER = '#D68910';
+
+  // Truncate context before building prompt to avoid token limit
+  const MAX_CTX = 40000;
+  if (context.length > MAX_CTX) {
+    console.warn('[BoardReport] Context truncated from', context.length, 'to', MAX_CTX, 'chars');
+    context = context.substring(0, MAX_CTX) + '\n[Context truncated]';
   }
 
-  var thursdayNote = brisbaneDay === 'Thursday'
-    ? '\n\nCRITICAL THURSDAY RULE: Today is Thursday. If there is a board meeting next week (any day Mon-Fri), the COO Board Report MUST be finalised and submitted TODAY — not next week. Flag this as URGENT regardless of when the meeting is. Kandia generates and reviews the board paper on the Thursday before every board meeting.'
-    : '';
 
-  var prompt = 'You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution. Review the data below and list 5-8 real open action items Kandia needs to act on. Format each as:\n\n[URGENCY] Action description — Source\n\nUrgency options: URGENT / THIS WEEK / NEXT WEEK\n\nRules:\n- URGENT = needs action today or is critically overdue\n- THIS WEEK = must happen before Friday\n- NEXT WEEK = can wait until next week\n- If today is Thursday and a board meeting is next week, the board paper is URGENT (due today)\n- Be specific: name people, subjects, deadlines\n- Always return at least 5 items' + thursdayNote + auroraActionsCtx + '\n\nEMAILS:\n' + emailLines + (infoLines ? '\n' + infoLines : '') + (teamsLines ? '\n\nTEAMS:\n' + teamsLines : '') + '\n\nDOCUMENTS:\n' + docLines + '\n\nSTAFF BLOCKERS:\n' + blockerLines;
+  const prevMonthName = new Date(yr, mm - 1, 1).toLocaleString('en-AU',{month:'long'});
+  const nextMonthName = new Date(yr, mm + 1, 1).toLocaleString('en-AU',{month:'long'});
+  const nextMonthYr   = new Date(yr, mm + 1, 1).getFullYear();
 
-    var r = await fetch('/proxy', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 800,
-        system: 'You are a COO executive assistant. Return only the action list, no preamble, no JSON, no markdown headers.',
-        messages: [{role:'user', content: prompt}]
+  const sysP = `You are Cinderella, executive assistant to Kandia Du Bruyn, COO at Risk 2 Solution Group.
+Generate a COO Board Paper for ${monthName} ${yr}. Output ONLY valid JSON - no markdown, no backticks, no extra text.
+
+JSON structure required:
+{"executiveSummary":"string","financialTableRows":[{"period":"","result":"","resultClass":"pos or neg","keyDriver":""}],"financeNote":"string","financialAnalysis":"string","peopleIntro":"string","peopleRows":[{"name":"","role":"","capacity":"","hours":"","status":"stable or monitor or at-limit or blocker","note":""}],"clientIntro":"string","clientRows":[{"client":"","status":""}],"newBusiness":["string"],"complianceItems":["string"],"boardItems":[{"item":"","type":"For Noting or For Awareness or For Decision","action":""}]}
+
+DEPTH AND SPECIFICITY - CRITICAL. Every field must contain specific facts, names, figures, and dates. Keep each field concise - 1-3 sentences max. Stay under 6000 tokens total.
+
+FINANCIAL TABLE - EXACTLY 3 ROWS, NO MORE, NO FEWER:
+Row 1: ${prevMonthName} ${yr} ACTUAL - the confirmed final closed result for last month. This is a CLOSED month - show the actual figure, NOT "in progress". Known confirmed figures: August 2026 = +$23,100, July 2026 = +$17,209.41.
+Row 2: ${monthName} ${yr} ACTUAL or FORECAST - the current month position from emails. Use figures from Diane's emails about this month.
+Row 3: ${nextMonthName} ${nextMonthYr} FORECAST - forward-looking projection from any email references.
+STRICT: Do NOT add rows for months 2+ months ago. A September report shows August/September/October only - NOT July.
+
+FINANCIAL ANALYSIS:
+- Comment on ${prevMonthName} final result vs expectations, what drove it
+- ${monthName} current position and key drivers
+- Forward risks or opportunities for ${nextMonthName}
+- Mini P&L per project framework: Dave Cohen requested Diane prepare project-level P&L - in progress
+
+EXECUTIVE SUMMARY - 3-4 sentences covering:
+- ${prevMonthName} final result (the closed figure)
+- ${monthName} current operational highlights and financial position
+- Primary strategic challenge or board decision required
+Do NOT lead with months from 2+ months ago.
+
+CLIENT DELIVERY:
+- clientRows MUST include EVERY project listed in the ALL PROJECTS Aurora context — do not omit any. List all clients by name.
+- For each client note the phase (Enquiry/Proposal/Active/Review/Close-out), key status, outstanding invoices, and any overdue deliverables
+- Also include project intelligence from emails — Macquarie Bank, Bairnsdale, Shepparton, BHP and any others mentioned in emails or Teams
+- Flag any overdue deliverables, unpaid invoices over 30 days, or at-risk engagements
+- clientIntro: 1 sentence summarising total active portfolio and any delivery risks
+
+PEOPLE:
+- Use actual staff names and project names from check-in and email context
+- Cross-reference capacity % with Clockify hours logged
+- Rionoch Goodwin has joined R2S replacing Dylan Finigan in the BD function
+- Do not write generic notes
+
+COMPLIANCE - include items found in emails and calendar context only. Do not repeat stale items unless email context confirms still active.
+
+BOARD ITEMS - genuinely board-level only. NOT routine payables or scheduling.
+
+No em dashes. Use hyphen (-) instead of dash.`;
+
+  const usrP = `Generate the board paper JSON for ${monthName} ${yr}. Meeting: ${meetingSubject} on ${meetingDate.toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}.
+
+DATA:
+${context}`;
+
+  console.log('[BoardReport] Calling Claude API — context:', context.length, 'chars');
+  const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:6000,system:sysP,messages:[{role:'user',content:usrP}]})
+  });
+  if (!aiRes.ok) {
+    const errText = await aiRes.text();
+    console.error('[BoardReport] API HTTP error', aiRes.status, ':', errText.substring(0,500));
+    throw new Error('Claude API returned ' + aiRes.status + ': ' + errText.substring(0,200));
+  }
+  const aiData = await aiRes.json();
+  console.log('[BoardReport] API response stop_reason:', aiData.stop_reason, '| usage:', JSON.stringify(aiData.usage));
+
+  let sections = {};
+  try {
+    let raw = (aiData.content||[]).map(c=>c.text||'').join('');
+    console.log('[BoardReport] Raw AI response length:', raw.length, '| stop_reason:', aiData.stop_reason);
+    raw = raw.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'').trim();
+    const jsonMatch = raw.match(/(\{[\s\S]*\})/);
+    if (jsonMatch) raw = jsonMatch[1];
+
+    // Try direct parse first
+    try {
+      sections = JSON.parse(raw);
+    } catch(parseErr) {
+      console.warn('[BoardReport] Direct parse failed:', parseErr.message, '— attempting repair');
+      // Repair truncated JSON by closing open brackets/braces
+      let repaired = raw;
+      try {
+        let openBrackets = 0, openBraces = 0, inString = false, escaped = false;
+        for (const ch of repaired) {
+          if (escaped) { escaped = false; continue; }
+          if (ch === '\\') { escaped = true; continue; }
+          if (ch === '"' && !escaped) { inString = !inString; continue; }
+          if (inString) continue;
+          if (ch === '[') openBrackets++;
+          else if (ch === ']') openBrackets = Math.max(0, openBrackets-1);
+          else if (ch === '{') openBraces++;
+          else if (ch === '}') openBraces = Math.max(0, openBraces-1);
+        }
+        if (inString) repaired += '"';
+        while (openBrackets > 0) { repaired += ']'; openBrackets--; }
+        while (openBraces > 0) { repaired += '}'; openBraces--; }
+        sections = JSON.parse(repaired);
+        console.log('[BoardReport] JSON repaired successfully');
+      } catch(repairErr) {
+        console.error('[BoardReport] Repair also failed:', repairErr.message);
+        console.error('[BoardReport] Raw (last 500):', raw.slice(-500));
+        // Return a minimal valid sections object so the report can still render
+        sections = {
+          executiveSummary: 'Report generation encountered an error — please regenerate. Raw AI response was truncated.',
+          financialTableRows: [{period: monthName + ' ' + yr, result: 'See finance emails', resultClass: '', keyDriver: 'Report generation error — please retry'}],
+          financeNote: '',
+          financialAnalysis: 'Report generation error. Please click Generate again.',
+          peopleIntro: '',
+          peopleRows: [],
+          clientIntro: '',
+          clientRows: [],
+          newBusiness: [],
+          complianceItems: [],
+          boardItems: []
+        };
+        console.warn('[BoardReport] Using fallback empty sections');
+      }
+    }
+    console.log('[BoardReport] Sections:', Object.keys(sections).join(', '));
+  } catch(e) {
+    const rawContent = (aiData.content||[]).map(c=>c.text||'').join('').substring(0,1500);
+    console.error('[BoardReport] JSON parse failed:', e.message, '\nRaw:', rawContent);
+    throw new Error('Board report JSON parse failed — check Azure logs. Error: ' + e.message);
+  }
+
+  // ── BUILD HTML SERVER-SIDE WITH CORRECT TEMPLATE COLORS ──
+  const STYLE = `<style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1A1A1A;background:#fff;line-height:1.5}
+    .page{max-width:800px;margin:0 auto;padding:28px 32px}
+    h2{color:${NAVY};font-size:13pt;margin:20px 0 10px;font-weight:600}
+    table{width:100%;border-collapse:collapse;font-size:9.5pt;margin-bottom:12px}
+    th{background:${NAVY};color:#fff;padding:7px 10px;text-align:left;font-weight:600}
+    td{padding:7px 10px;border:0.5px solid #d0d0d0;vertical-align:top}
+    tr.alt{background:#F5F8FC}
+    .pos{color:${GREEN};font-weight:700}
+    .neg{color:${RED};font-weight:700}
+    .amb{color:${AMBER};font-weight:700}
+    .coo-box{margin:10px 0 16px;font-size:9.5pt;line-height:1.6}
+    .badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:8.5pt;font-weight:600;white-space:nowrap}
+    .stable{background:#E8F5F1;color:#1E5C3A}
+    .monitor{background:#FFF3E0;color:#7A3D00}
+    .at-limit{background:#FFEBEE;color:#8F0000}
+    .blocker{background:#FFCDD2;color:#6B0000}
+    ul{padding-left:18px;font-size:9.5pt;line-height:1.8}
+    p{font-size:10pt;line-height:1.6;margin-bottom:10px}
+    .meta td{border:0.5px solid #C7D8E8;background:#F5F8FC;font-size:9.5pt;padding:6px 10px}
+    .kpi-row{display:flex;gap:12px;margin-bottom:16px}
+    .kpi{flex:1;border-radius:6px;padding:14px;text-align:center}
+    .kpi-p{border:1.5px solid #B2D4C0;background:#F4FBF7}
+    .kpi-n{border:1.5px solid #E8BBBB;background:#FDF4F4}
+    .kpi-label{font-size:9pt;color:#666;margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+    .kpi-val-p{font-size:22pt;font-weight:700;color:${GREEN};letter-spacing:-1px}
+    .kpi-val-n{font-size:22pt;font-weight:700;color:${RED};letter-spacing:-1px}
+    .kpi-sub{font-size:8pt;color:#888;margin-top:5px;line-height:1.4}
+  </style>`;
+
+  const meetDateStr = meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  // Cover
+  const COVER = `
+  <div style="border-bottom:2.5px solid ${NAVY};padding-bottom:16px;margin-bottom:18px">
+    <div style="font-size:22pt;font-weight:700;color:${NAVY}">COO Board Report</div>
+    <div style="font-size:13pt;color:#444;margin-top:4px">Risk 2 Solution</div>
+    <div style="font-size:11pt;color:#666;margin-top:2px">${monthName} ${yr}</div>
+    <div style="margin-top:10px;font-size:10pt;color:#444">Kandia Du Bruyn, COO<br>For: Board Meeting<br>Meeting date: ${meetDateStr}</div>
+  </div>
+  <table class="meta"><tr>
+    <td><strong>Period:</strong> ${monthName} ${yr}</td>
+    <td><strong>Prepared by:</strong> Kandia Du Bruyn, Chief Operating Officer</td>
+    <td><strong>Meeting:</strong> ${meetDateStr}</td>
+    <td><strong>Classification:</strong> Confidential - Board Only</td>
+  </tr></table>`;
+
+  // Section 1 — Executive Summary with KPI metric tiles
+  const kpiRows = (sections.financialTableRows||[]).slice(0,2);
+  const kpi1 = kpiRows[0]||{};
+  const kpi2 = kpiRows[1]||{};
+  const S1 = `<h2>1. Executive Summary</h2>
+  <div class="kpi-row">
+    <div class="kpi ${kpi1.resultClass==='neg'?'kpi-n':'kpi-p'}">
+      <div class="kpi-label">${kpi1.period||'Current Period'}</div>
+      <div class="${kpi1.resultClass==='neg'?'kpi-val-n':'kpi-val-p'}">${kpi1.result||'—'}</div>
+      <div class="kpi-sub">${kpi1.keyDriver||''}</div>
+    </div>
+    ${kpi2.period?`<div class="kpi ${kpi2.resultClass==='neg'?'kpi-n':'kpi-p'}">
+      <div class="kpi-label">${kpi2.period}</div>
+      <div class="${kpi2.resultClass==='neg'?'kpi-val-n':'kpi-val-p'}">${kpi2.result}</div>
+      <div class="kpi-sub">${kpi2.keyDriver||''}</div>
+    </div>`:''}
+  </div>
+  <p>${sections.executiveSummary||''}</p>`;
+
+  // Section 2 — Financial Overview
+  const finRows = (sections.financialTableRows||[]).map((r,i) =>
+    `<tr ${i%2?'class="alt"':''}><td>${r.period||''}</td><td class="${r.resultClass==='neg'?'neg':r.resultClass==='pos'?'pos':''}">${r.result||''}</td><td>${r.keyDriver||''}</td></tr>`
+  ).join('');
+  const S2 = `<h2>2. Financial Overview</h2>
+  <table><thead><tr><th>Period</th><th>Result</th><th>Key Driver</th></tr></thead>
+  <tbody>${finRows||'<tr><td colspan="3">No financial data available - check Diane\'s finance emails are in scope.</td></tr>'}</tbody></table>
+  ${sections.financeNote?`<p style="font-size:9pt;color:#555">Note: ${sections.financeNote}</p>`:''}
+  <p style="margin:12px 0 0;font-size:10pt;line-height:1.7"><strong>COO Assessment:</strong> ${sections.financialAnalysis||''}</p>`;
+
+  // Section 3 — People & Culture
+  const pRows = (sections.peopleRows||[]).map((p,i) => {
+    const badge = p.status==='at-limit'?'at-limit':p.status==='blocker'?'blocker':p.status==='monitor'?'monitor':'stable';
+    return `<tr ${i%2?'class="alt"':''}><td><strong>${p.name||''}</strong></td><td>${p.role||''}</td><td style="text-align:center">${p.capacity||'-'}</td><td style="text-align:center">${p.hours||'No data'}</td><td><span class="badge ${badge}">${(p.status||'stable').charAt(0).toUpperCase()+(p.status||'stable').slice(1).replace('-',' ')}</span></td><td>${p.note||''}</td></tr>`;
+  }).join('');
+  const S3 = `<h2>3. People and Culture</h2>
+  <p>${sections.peopleIntro||''}</p>
+  <table><thead><tr><th>Team Member</th><th>Role</th><th>Reported Capacity</th><th>Hrs Logged (Clockify)</th><th>Status</th><th>Key Note</th></tr></thead>
+  <tbody>${pRows||'<tr><td colspan="6">No check-in data available.</td></tr>'}</tbody></table>`;
+
+  // Section 4 — Client Delivery
+  const clRows = (sections.clientRows||[]).map((r,i) =>
+    `<tr ${i%2?'class="alt"':''}><td>${r.client||''}</td><td>${r.status||''}</td></tr>`
+  ).join('');
+  const nbItems = (sections.newBusiness||[]).map(b=>`<li>${b}</li>`).join('');
+  const S4 = `<h2>4. Client Delivery and Operations</h2>
+  <p>${sections.clientIntro||''}</p>
+  <p style="font-weight:600;margin-bottom:4px">Active and Ongoing Delivery</p>
+  <table><thead><tr><th>Client</th><th>Status</th></tr></thead>
+  <tbody>${clRows||'<tr><td colspan="2">No active project data.</td></tr>'}</tbody></table>
+  ${nbItems?`<p style="font-weight:600;margin:10px 0 4px">New Business Activity</p><ul>${nbItems}</ul>`:''}`
+
+  // Section 5 — Compliance
+  const compItems = (sections.complianceItems||[]).map(c=>`<li>${c}</li>`).join('');
+  const S5 = `<h2>5. Compliance and Risk</h2>
+  <p style="font-weight:600;margin-bottom:6px">Open Compliance Items</p>
+  <ul>${compItems||'<li>No open compliance items identified this period.</li>'}</ul>`;
+
+  // Section 6 — Board Items
+  const bRows = (sections.boardItems||[]).map((b,i) => {
+    const typeCol = b.type==='For Decision'?`color:${RED};font-weight:600`:b.type==='For Awareness'?`color:${AMBER};font-weight:600`:'';
+    return `<tr ${i%2?'class="alt"':''}><td>${b.item||''}</td><td style="${typeCol}">${b.type||''}</td><td>${b.action||''}</td></tr>`;
+  }).join('');
+  const S6 = `<h2>6. Items for Board Decision or Awareness</h2>
+  <table><thead><tr><th>Item</th><th>Type</th><th>Recommended Action</th></tr></thead>
+  <tbody>${bRows||'<tr><td colspan="3">No items for board this period.</td></tr>'}</tbody></table>`;
+
+  const reportHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset="utf-8"><title>COO Board Report - ${monthName} ${yr}</title>${STYLE}</head>
+<body><div class="page">${COVER}${S1}${S2}${S3}${S4}${S5}${S6}</div></body></html>`;
+
+  const docHtml = reportHtml; // built server-side above
+  const filename = 'board-report-'+yr+'-'+String(mm+1).padStart(2,'0')+'.doc';
+  try {
+    const cc = await getBlobContainer();
+    if (cc) {
+      const bc = cc.getBlockBlobClient('board-reports/' + filename);
+      await bc.upload(docHtml, Buffer.byteLength(docHtml), {blobHTTPHeaders:{blobContentType:'application/msword'}});
+      console.log('[BoardReport] Saved to blob:', filename);
+    }
+  } catch(e) { console.warn('[BoardReport] Blob save failed:', e.message); }
+
+  // Also save locally
+  try { writeFileSync('/home/'+filename, docHtml); } catch(e) {}
+  writeFileSync('/home/board-report-latest.json', JSON.stringify({filename, monthName, yr, generatedAt: new Date().toISOString(), meetingSubject, meetingDate: meetingDate.toISOString()}));
+  return filename;
+}
+
+async function sendBoardReportNotification(meetingSubject, meetingDate, daysUntil, filename) {
+  const monthDate = new Date(meetingDate);
+  monthDate.setMonth(monthDate.getMonth()-1);
+  const monthName = monthDate.toLocaleString('en-AU',{month:'long'});
+  const yr = monthDate.getFullYear();
+  const meetingDateStr = meetingDate.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Australia/Brisbane'});
+
+  const token = await getValidToken();
+  const recipientEmail = await getKandiaEmail();
+  const subject = '📋 Board Report Ready — ' + monthName + ' ' + yr + ' (Meeting in ' + daysUntil + ' day' + (daysUntil!==1?'s':'') + ')';
+
+  // Build Outlook-compatible HTML email body
+  const htmlBody = `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:20px;background:#F2F1EE;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:580px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;">
+  <tr><td style="background:linear-gradient(105deg,#07706B,#56D4CE 55%,#F0B8CC 82%,#F8D2DE);padding:24px 28px;">
+    <p style="margin:0;font-family:Georgia,serif;font-size:26px;font-style:italic;color:#ffffff;font-weight:bold;">Cinderella</p>
+    <p style="margin:4px 0 0;font-family:Arial,sans-serif;font-size:10px;color:rgba(255,255,255,0.8);letter-spacing:2px;text-transform:uppercase;">EXECUTIVE ASSISTANT &middot; RISK 2 SOLUTION</p>
+  </td></tr>
+  <tr><td style="padding:24px 28px 12px;border-bottom:2px solid #1B3A6B;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:17px;font-weight:bold;color:#111110;">📋 Board Report Ready &mdash; ${monthName} ${yr}</p>
+  </td></tr>
+  <tr><td style="padding:20px 28px;">
+    <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi Kandia,</p>
+    <p style="margin:0 0 20px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Your COO Board Paper for <strong>${monthName} ${yr}</strong> has been generated and is attached to this email. Please review before your board meeting.</p>
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#F2F1EE;border-radius:8px;margin-bottom:20px;">
+      <tr><td style="padding:16px 18px;">
+        <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Meeting details</p>
+        <table cellpadding="0" cellspacing="0">
+          <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#9A9693;padding:2px 0;min-width:80px;">Meeting</td><td style="font-family:Arial,sans-serif;font-size:12px;color:#111110;font-weight:600;padding:2px 8px;">${meetingSubject}</td></tr>
+          <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#9A9693;padding:2px 0;">Date</td><td style="font-family:Arial,sans-serif;font-size:12px;color:#111110;font-weight:600;padding:2px 8px;">${meetingDateStr}</td></tr>
+          <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#9A9693;padding:2px 0;">Days away</td><td style="font-family:Arial,sans-serif;font-size:12px;color:${daysUntil<=2?'#C8211E':'#0D8A62'};font-weight:700;padding:2px 8px;">${daysUntil} day${daysUntil!==1?'s':''}</td></tr>
+        </table>
+      </td></tr>
+    </table>
+    <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">This report was generated using</p>
+    <table cellpadding="0" cellspacing="0" style="margin-bottom:20px">
+      <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0;">&bull;&nbsp;&nbsp;Staff check-in and capacity data</td></tr>
+      <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0;">&bull;&nbsp;&nbsp;Key emails and Teams messages from the month</td></tr>
+      <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0;">&bull;&nbsp;&nbsp;Client project status from Aurora and inbox</td></tr>
+      <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0;">&bull;&nbsp;&nbsp;Open actions, compliance items and board carry-forwards</td></tr>
+    </table>
+    <p style="margin:0 0 20px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">The report is attached as a Word-compatible document. Please review and add any additional context before the meeting.</p>
+    <table cellpadding="0" cellspacing="0"><tr><td style="background:#0D8A62;border-radius:6px;padding:10px 20px;">
+      <a href="https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net" style="font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#ffffff;text-decoration:none;">Open Cinderella &rarr;</a>
+    </td></tr></table>
+  </td></tr>
+  <tr><td style="padding:16px 28px;background:#F2F1EE;border-top:1px solid #E8E6E1;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#9A9693;">Cinderella &nbsp;&middot;&nbsp; Executive Assistant to Kandia Du Bruyn, COO &nbsp;&middot;&nbsp; Risk 2 Solution</p>
+  </td></tr>
+</table></body></html>`;
+
+  // Read the report file to attach it
+  let attachments = [];
+  try {
+    const reportPath = '/home/' + filename;
+    const reportContent = readFileSync(reportPath);
+    const b64 = reportContent.toString('base64');
+    const attachName = filename.replace('board-report-', 'COO-Board-Paper-').replace('.doc', '.html');
+    attachments = [{
+      '@odata.type': '#microsoft.graph.fileAttachment',
+      name: attachName,
+      contentType: 'text/html',
+      contentBytes: b64
+    }];
+    console.log('[BoardReport] Report file attached:', attachName, '(' + Math.round(reportContent.length/1024) + 'KB)');
+  } catch(attachErr) {
+    console.warn('[BoardReport] Could not attach report file:', attachErr.message, '— email will be sent without attachment');
+  }
+
+  // Create draft with HTML body and attachment
+  const draftPayload = {
+    subject,
+    body: { contentType: 'HTML', content: htmlBody },
+    toRecipients: [{ emailAddress: { address: recipientEmail } }],
+    importance: 'high'
+  };
+  if (attachments.length > 0) draftPayload.attachments = attachments;
+
+  const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+    method:'POST',
+    headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+    body:JSON.stringify(draftPayload)
+  });
+  const draft = await draftRes.json();
+  if (!draft.id) throw new Error('Draft creation failed: ' + JSON.stringify(draft.error||draft).substring(0,200));
+  console.log('[BoardReport] ✅ Draft created:', draft.id.substring(0,30)+'...');
+
+  // Try to send
+  try {
+    const sendRes = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send',
+      {method:'POST', headers:{Authorization:'Bearer '+token}});
+    if (sendRes.status === 202) {
+      console.log('[BoardReport] ✅ Sent successfully');
+    } else {
+      const err = await sendRes.json().catch(()=>({}));
+      if ((err.error||{}).code === 'ErrorAccessDenied') {
+        console.log('[BoardReport] ℹ Saved to Drafts — Mail.Send not granted');
+      } else {
+        console.warn('[BoardReport] Send returned', sendRes.status, JSON.stringify(err).substring(0,100));
+      }
+    }
+  } catch(e) {
+    console.warn('[BoardReport] Send failed (draft still saved):', e.message);
+  }
+  return draft.id;
+}
+
+// Manual trigger endpoint
+// Force-send: bypass notifiedMonth and lastCheck guards — for manual Thursday trigger
+app.post('/board-report/force-send', requireAuth, async (req, res) => {
+  try {
+    // Clear the notifiedMonth guard so it can re-send
+    const state = loadBoardState();
+    const prevMonth = state.notifiedMonth;
+    state.notifiedMonth = null;
+    state.lastCheck = null;
+    saveBoardState(state);
+    console.log('[BoardReport] Force-send triggered — cleared notifiedMonth:', prevMonth);
+
+    // Find board meeting in next 14 days
+    const now = new Date();
+    const to = new Date(now.getTime() + 14*24*60*60*1000).toISOString();
+    let meetingDate = null;
+    let meetingSubject = 'Board Meeting';
+    try {
+      const cal = await graphGet(`/me/calendarView?startDateTime=${now.toISOString()}&endDateTime=${to}&$select=subject,start,end&$top=20`);
+      const boardMeeting = (cal.value||[]).find(e => {
+        if (!e.subject) return false;
+        const s = e.subject.toLowerCase();
+        return s.includes('board') || s.includes('directors meeting') || s.includes('board pack') || s.includes('board paper');
+      });
+      if (boardMeeting) {
+        meetingDate = new Date(boardMeeting.start.dateTime || boardMeeting.start.date);
+        meetingSubject = boardMeeting.subject;
+        console.log('[BoardReport] Found meeting:', meetingSubject, 'on', meetingDate.toLocaleDateString());
+      } else {
+        // No calendar match — use next Tuesday as default
+        meetingDate = new Date(now);
+        const daysTuesday = (2 - now.getDay() + 7) % 7 || 7;
+        meetingDate.setDate(now.getDate() + daysTuesday);
+        meetingSubject = 'Board Meeting';
+        console.log('[BoardReport] No calendar match — defaulting to next Tuesday:', meetingDate.toLocaleDateString());
+      }
+    } catch(calErr) {
+      meetingDate = new Date(now.getTime() + 5*24*60*60*1000);
+      console.warn('[BoardReport] Calendar fetch failed:', calErr.message);
+    }
+
+    const daysUntil = Math.round((meetingDate - now) / (24*60*60*1000));
+    const reportPath = await generateBoardReport(meetingDate, meetingSubject);
+    await sendBoardReportNotification(meetingSubject, meetingDate, daysUntil, reportPath);
+
+    // Save state
+    const newState = loadBoardState();
+    newState.notifiedMonth = meetingDate.toISOString().substring(0,7);
+    newState.lastReportPath = reportPath;
+    newState.lastReportMeeting = meetingSubject;
+    newState.lastReportDate = now.toISOString();
+    newState.lastSentDate = now.toISOString();
+    newState.lastMeetingDate = meetingDate.toISOString();
+    saveBoardState(newState);
+
+    res.json({ success: true, meeting: meetingSubject, daysUntil, reportPath, emailNote: 'Email sent — check your inbox. If not received within 2 minutes, check Outlook Drafts (re-authenticate at /auth/login if needed to grant Mail.Send permission).' });
+  } catch(e) {
+    console.error('[BoardReport] Force-send error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Reset state — clears notifiedMonth so Thursday trigger fires again
+app.post('/board-report/reset-state', requireAuth, (req, res) => {
+  const state = loadBoardState();
+  const prev = { notifiedMonth: state.notifiedMonth, lastSentDate: state.lastSentDate };
+  state.notifiedMonth = null;
+  state.lastSentDate = null;
+  state.lastMeetingDate = null;
+  saveBoardState(state);
+  console.log('[BoardReport] State reset manually. Previous:', JSON.stringify(prev));
+  res.json({ success: true, cleared: prev, message: 'State cleared — Thursday scheduler will now run and generate the report' });
+});
+
+// Financial intelligence debug — shows what emails are found without updating state
+app.get('/proactive/finance-debug', requireAuth, async (req, res) => {
+  try {
+    const now = new Date();
+    const since = new Date(now.getTime()-60*24*60*60*1000).toISOString();
+    const emails = await graphGet(
+      `/me/messages?$top=80&$filter=receivedDateTime ge ${since}&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc`
+    );
+    const all = emails.value||[];
+    // Get all Diane emails using direct OData filter (no encoding)
+    let finEmails = [];
+    try {
+      const dr = await graphGet("/me/messages?$filter=from/emailAddress/address eq 'diane.k@risk2solution.com'&$top=50&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc");
+      finEmails = dr.value||[];
+    } catch(e) {}
+    // Also fetch recent emails and look for P&L by subject
+    try {
+      const allR = await graphGet('/me/messages?$top=500&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc');
+      (allR.value||[]).forEach(e => {
+        const subj = (e.subject||'').toLowerCase();
+        const fromAddr = (e.from?.emailAddress?.address||'').toLowerCase();
+        if (!finEmails.find(x=>x.id===e.id) && fromAddr.includes('risk2solution.com') &&
+            (subj.includes('p&l') || subj.includes('actuals') || subj.includes('forecast') ||
+             subj.includes('profit') || subj.includes('month end') || subj.includes('financial'))) {
+          finEmails.push(e);
+        }
+      });
+    } catch(e) {}
+    const state = loadProactiveState();
+    res.json({
+      totalEmails: all.length,
+      financeEmailsFound: finEmails.length,
+      financeEmails: finEmails.map(e => ({
+        from: e.from?.emailAddress?.name,
+        subject: e.subject,
+        date: e.receivedDateTime?.substring(0,10),
+        preview: (e.bodyPreview||'').substring(0,200)
+      })),
+      currentSnapshot: state.financialSnapshot||null,
+      financeCheckMonth: state.financeCheckMonth||null
+    });
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+// Debug: show current board state
+app.get('/board-report/debug', requireAuth, (req, res) => {
+  const state = loadBoardState();
+  const now = new Date();
+  const dayOfWeek = now.toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane',weekday:'long'});
+  res.json({ state, dayOfWeek, serverTime: now.toISOString(), brisbaneTime: now.toLocaleString('en-AU',{timeZone:'Australia/Brisbane'}) });
+});
+
+// Debug emails — shows exactly what emails the board report would capture
+app.get('/board-report/debug-emails', requireAuth, async (req, res) => {
+  try {
+    // Default to current report month (last month)
+    const now = new Date();
+    const reportDate = new Date(now); reportDate.setMonth(reportDate.getMonth() - 1);
+    const mm = reportDate.getMonth();
+    const yy = reportDate.getFullYear();
+    const monthName = reportDate.toLocaleString('en-AU',{month:'long'});
+
+    const since = new Date(yy, mm, 1).toISOString();
+    const nowStr = now.toISOString();
+
+    const emailData = await graphGet(
+      `/me/messages?$top=150&$filter=receivedDateTime ge ${since} and receivedDateTime lt ${nowStr}` +
+      `&$select=subject,from,bodyPreview,importance,receivedDateTime&$orderby=receivedDateTime desc`
+    );
+    const emails = emailData.value || [];
+
+    const financeEmails = emails.filter(e => {
+      const from = (e.from?.emailAddress?.name||'').toLowerCase();
+      const subj = (e.subject||'').toLowerCase();
+      // Exclude Cinderella's own board report notification emails
+      if (subj.includes('board report ready')) return false;
+      // Prioritise emails FROM Diane/Kruger - she sends the monthly P&L
+      if (from.includes('diane') || from.includes('kruger')) return true;
+      // Tight subject keywords only - avoid noise like 'report' or 'monthly'
+      return !!subj.match(/payroll|month.?end|year.?end|p&l|profit.?loss|revenue|budget|reconcil|fy2|fy 2|year to date|ytd|cash flow|forecast/i);
+    });
+
+    res.json({
+      period: monthName + ' ' + yy,
+      since, nowStr,
+      totalEmails: emails.length,
+      financeEmails: financeEmails.map(e => ({
+        from: e.from?.emailAddress?.name,
+        subject: e.subject,
+        date: e.receivedDateTime,
+        preview: e.bodyPreview?.substring(0,200)
+      })),
+      allSubjects: emails.map(e => ({
+        from: e.from?.emailAddress?.name,
+        subject: e.subject,
+        date: e.receivedDateTime?.substring(0,10)
+      }))
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Test email — sends a simple test to Kandia and returns the exact API response
+app.get('/board-report/test-email', requireAuth, async (req, res) => {
+  try {
+    const token = await getValidToken();
+    const recipientEmail = await getKandiaEmail();
+    const results = {};
+
+    // Test 1: sendMail
+    try {
+      const r1 = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+        method:'POST',
+        headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+        body:JSON.stringify({
+          message:{subject:'Cinderella test email',body:{contentType:'Text',content:'Test from Cinderella'},toRecipients:[{emailAddress:{address:recipientEmail}}]},
+          saveToSentItems:true
+        })
+      });
+      const body1 = r1.status === 202 ? 'SUCCESS (202)' : await r1.text();
+      results.sendMail = { status: r1.status, body: body1.substring(0,300) };
+    } catch(e) { results.sendMail = { error: e.message }; }
+
+    // Test 2: Create draft
+    try {
+      const r2 = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+        method:'POST',
+        headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+        body:JSON.stringify({subject:'Cinderella draft test',body:{contentType:'Text',content:'Draft test'},toRecipients:[{emailAddress:{address:recipientEmail}}]})
+      });
+      const d2 = await r2.json();
+      results.createDraft = { status: r2.status, id: d2.id, error: d2.error };
+
+      // Test 3: Send the draft
+      if (d2.id) {
+        const r3 = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${d2.id}/send`, {
+          method:'POST', headers:{Authorization:'Bearer '+token}
+        });
+        const body3 = r3.status === 202 ? 'SUCCESS (202)' : await r3.text();
+        results.sendDraft = { status: r3.status, body: body3.substring(0,300) };
+      }
+    } catch(e) { results.createDraft = { error: e.message }; }
+
+    res.json({ recipientEmail, tokenExpiry: new Date(tokenStore.expires_at).toLocaleString('en-AU'), results });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/board-report/generate', requireAuth, async (req, res) => {
+  // Set a header immediately so the connection doesn't time out silently
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const now = new Date();
+    const meetingDate = req.body.meetingDate ? new Date(req.body.meetingDate) : new Date(now.getTime() + 14*24*60*60*1000);
+    const meetingSubject = req.body.meetingSubject || 'Board Meeting';
+    console.log('[BoardReport] Generate request for', meetingDate.toDateString(), meetingSubject);
+    const filename = await generateBoardReport(meetingDate, meetingSubject);
+    res.json({ success: true, filename });
+  } catch(e) {
+    console.error('[BoardReport] Generate endpoint error:', e.message, e.stack?.substring(0,500));
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message || 'Unknown error generating board report' });
+    }
+  }
+});
+
+app.get('/board-report/latest', requireAuth, (req, res) => {
+  try {
+    const state = JSON.parse(readFileSync('/home/board-report-latest.json','utf8')||'{}');
+    res.json(state);
+  } catch(e) { res.json({}); }
+});
+
+app.get('/board-report/download', requireAuth, async (req, res) => {
+  try {
+    const state = JSON.parse(readFileSync('/home/board-report-latest.json','utf8')||'{}');
+    if (!state.filename) return res.status(404).json({error:'No report generated yet'});
+    const content = readFileSync('/home/'+state.filename,'utf8');
+    res.setHeader('Content-Disposition','attachment; filename="'+state.filename+'"');
+    res.setHeader('Content-Type','application/msword');
+    res.send(content);
+  } catch(e) { res.status(404).json({error:e.message}); }
+});
+
+// ── AURORA PROXY ROUTES ──
+
+// Debug: show exactly what Aurora returns — all projects, all phases
+app.get('/aurora/debug-all', requireAuth, async (req, res) => {
+  try {
+    const data = await callAurora('/api/projects');
+    const projects = data.projects || data || [];
+    const PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
+    res.json({
+      total: projects.length,
+      projects: projects.map(p => ({
+        id: p.id,
+        clientName: p.clientName,
+        phase: p.phase,
+        phaseName: PHASES[p.phase] || 'Unknown('+p.phase+')',
+        consultant: p.consultant,
+        dueDate: p.dueDate,
+        status: p.status
+      }))
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Summary: all projects + invoice totals + overdue deliverables
+app.get('/aurora/summary', requireAuth, async (req, res) => {
+  try {
+    const { projects } = await callAurora('/api/projects');
+    const PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
+
+    const summary = await Promise.all((projects || []).map(async p => {
+      let invoices = [], deliverables = [];
+      try { ({ invoices } = await callAurora('/api/projects/' + p.id + '/invoices')); } catch(e) {}
+      try { ({ deliverables } = await callAurora('/api/projects/' + p.id + '/deliverables')); } catch(e) {}
+
+      const totalInvoiced  = invoices.reduce((s, i) => s + parseFloat(i.amount||0), 0);
+      const totalPaid      = invoices.filter(i => i.paid).reduce((s, i) => s + parseFloat(i.amount||0), 0);
+      const totalOutstanding = totalInvoiced - totalPaid;
+      const overdueDelivs  = deliverables.filter(d => d.status === 'Overdue' || (d.dueDate && new Date(d.dueDate) < new Date() && d.status !== 'Complete'));
+      const inProgressDelivs = deliverables.filter(d => d.status === 'In Progress');
+      // Log first deliverable structure for debugging field names
+      if (deliverables.length > 0 && !global._auroraDelivLogged) {
+        console.log('[Aurora] Deliverable fields:', Object.keys(deliverables[0]).join(', '));
+        console.log('[Aurora] Deliverable sample:', JSON.stringify(deliverables[0]).substring(0, 200));
+        global._auroraDelivLogged = true;
+      }
+
+      return {
+        id: p.id,
+        client: p.clientName,
+        project: p.projectName || p.clientName,
+        phase: PHASES[p.phase] || 'Unknown',
+        phaseNum: p.phase,
+        status: p.status || 'Active',
+        consultant: p.consultant,
+        dueDate: p.dueDate,
+        totalInvoiced,
+        totalPaid,
+        totalOutstanding,
+        unpaidInvoices: invoices.filter(i => !i.paid),
+        overdueDeliverables: overdueDelivs,
+        inProgressDeliverables: inProgressDelivs,
+        deliverableCount: deliverables.length
+      };
+    }));
+
+    const totalOutstandingAll = summary.reduce((s, p) => s + p.totalOutstanding, 0);
+    const totalOverdue        = summary.reduce((s, p) => s + p.overdueDeliverables.length, 0);
+    const activeProjects      = summary.filter(p => p.phaseNum >= 1 && p.phaseNum <= 3);
+
+    res.json({ projects: summary, totalOutstandingAll, totalOverdue, activeProjects: activeProjects.length });
+  } catch(e) {
+    console.error('[Aurora] Summary error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Raw projects list
+app.get('/aurora/projects', requireAuth, async (req, res) => {
+  try {
+    const data = await callAurora('/api/projects');
+    res.json(data);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Single project detail with invoices + deliverables
+app.get('/aurora/projects/:id', requireAuth, async (req, res) => {
+  try {
+    const [proj, inv, del] = await Promise.all([
+      callAurora('/api/projects/' + req.params.id),
+      callAurora('/api/projects/' + req.params.id + '/invoices').catch(() => ({ invoices: [] })),
+      callAurora('/api/projects/' + req.params.id + '/deliverables').catch(() => ({ deliverables: [] }))
+    ]);
+    res.json({ project: proj.project || proj, invoices: inv.invoices, deliverables: del.deliverables });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ── CLOCKIFY INTEGRATION ──
+const CLOCKIFY_API_KEY = process.env.CLOCKIFY_API_KEY || '';
+const CLOCKIFY_BASE    = 'https://api.clockify.me/api/v1';
+const FULL_WEEK_HOURS  = 37.5; // Standard Australian working week
+
+// Map Clockify display names → check-in names
+const CLOCKIFY_STAFF_MAP = [
+  { clockify: 'Janita',      checkIn: 'Janita Zhang'     },
+  { clockify: 'diane.k',     checkIn: 'Diane Kruger'     },
+  { clockify: 'garima.a',    checkIn: 'Garima Arora'     },
+  { clockify: 'reinette.k',  checkIn: 'Reinette Kruger'  },
+  { clockify: 'dani.s',      checkIn: 'Dani Stevenson'   },
+  { clockify: 'ross.m',      checkIn: 'Ross Mackenzie'   },
+  { clockify: 'cherry.a',    checkIn: 'Cherry Abadeza'   },
+  { clockify: 'rionoch.g',   checkIn: 'Rionoch Goodwin'  },
+  // Paul Johnston not in Clockify
+];
+
+async function callClockify(path) {
+  if (!CLOCKIFY_API_KEY) throw new Error('CLOCKIFY_API_KEY not set in environment variables');
+  const res = await fetch(CLOCKIFY_BASE + path, {
+    headers: { 'X-Api-Key': CLOCKIFY_API_KEY, 'Content-Type': 'application/json' }
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    throw new Error('Clockify ' + res.status + ': ' + err.substring(0, 200));
+  }
+  return res.json();
+}
+
+// Get the current week Mon-Sun in Brisbane time (UTC+10, no DST)
+function getBrisbaneWeekRange() {
+  const OFFSET_MS = 10 * 60 * 60 * 1000; // UTC+10
+  const nowUTC = new Date();
+  const brisbaneNow = new Date(nowUTC.getTime() + OFFSET_MS);
+  const dow = brisbaneNow.getUTCDay(); // 0=Sun,1=Mon,...,6=Sat
+  const daysFromMon = dow === 0 ? 6 : dow - 1;
+
+  // Monday 00:00 Brisbane
+  const monday = new Date(brisbaneNow);
+  monday.setUTCDate(brisbaneNow.getUTCDate() - daysFromMon);
+  monday.setUTCHours(0, 0, 0, 0);
+
+  // Sunday 23:59:59 Brisbane
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  sunday.setUTCHours(23, 59, 59, 999);
+
+  // Convert Brisbane local → UTC for Clockify API
+  return {
+    start: new Date(monday.getTime() - OFFSET_MS).toISOString(),
+    end:   new Date(sunday.getTime() - OFFSET_MS).toISOString(),
+    weekLabel: monday.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'Australia/Brisbane' })
+      + ' – ' + sunday.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'Australia/Brisbane' })
+  };
+}
+
+// Parse ISO 8601 duration (PT8H30M15S) → decimal hours
+function parseDuration(iso) {
+  if (!iso) return 0;
+  const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return 0;
+  return (parseInt(match[1] || 0)) + (parseInt(match[2] || 0) / 60) + (parseInt(match[3] || 0) / 3600);
+}
+
+// Match Clockify user to our staff map
+function matchClockifyUser(user) {
+  const name = (user.name || '').toLowerCase();
+  const email = (user.email || '').toLowerCase();
+  return CLOCKIFY_STAFF_MAP.find(m => {
+    const c = m.clockify.toLowerCase();
+    return name.includes(c) || email.includes(c) || email.startsWith(c);
+  });
+}
+
+// Generate intelligence flags comparing Clockify hours to check-in capacity
+function generateFlags(staffName, actualHours, checkIn) {
+  const flags = [];
+
+  if (!checkIn) {
+    if (actualHours > 0) {
+      flags.push({
+        message: actualHours.toFixed(1) + 'h logged in Clockify but no check-in submitted — ask them to complete their weekly check-in',
+        severity: 'medium'
+      });
+    }
+    return flags;
+  }
+
+  const capacity = checkIn.capacity || 0;
+  const impliedHours = (capacity / 100) * FULL_WEEK_HOURS;
+  const diff = actualHours - impliedHours;
+  const pctVariance = impliedHours > 0 ? Math.abs(diff) / impliedHours : 0;
+
+  if (actualHours === 0 && capacity > 30) {
+    flags.push({
+      message: 'Reported ' + capacity + '% capacity but zero hours logged in Clockify — time tracking missing or not using Clockify this week',
+      severity: 'high'
+    });
+  } else if (diff > FULL_WEEK_HOURS * 0.25) {
+    // Logging significantly more than capacity implies → burnout underreporting
+    flags.push({
+      message: 'Logged ' + actualHours.toFixed(1) + 'h but check-in says ' + capacity + '% (' + impliedHours.toFixed(1) + 'h implied) — working more than they reported. Burnout risk.',
+      severity: 'high'
+    });
+  } else if (pctVariance > 0.35 && diff < 0 && capacity > 50) {
+    // Significantly fewer hours than capacity implies → overreporting capacity
+    flags.push({
+      message: 'Reported ' + capacity + '% capacity (' + impliedHours.toFixed(1) + 'h implied) but only logged ' + actualHours.toFixed(1) + 'h — overstating capacity or not tracking all time',
+      severity: 'medium'
+    });
+  } else if (pctVariance > 0.2 && diff < 0) {
+    flags.push({
+      message: actualHours.toFixed(1) + 'h logged vs ' + impliedHours.toFixed(1) + 'h implied (' + capacity + '% capacity) — ' + Math.round(pctVariance * 100) + '% gap. Check time is being tracked fully.',
+      severity: 'low'
+    });
+  }
+
+  return flags;
+}
+
+// ── CLOCKIFY STATUS ──
+app.get('/clockify/status', requireAuth, async (req, res) => {
+  if (!CLOCKIFY_API_KEY) return res.json({ connected: false, reason: 'CLOCKIFY_API_KEY not set' });
+  try {
+    const workspaces = await callClockify('/workspaces');
+    const ws = (workspaces || []).find(w => w.name === 'Risk 2 Solution') || workspaces[0];
+    if (!ws) return res.json({ connected: false, reason: 'Workspace "Risk 2 Solution" not found' });
+    res.json({ connected: true, workspace: ws.name, workspaceId: ws.id });
+  } catch(e) {
+    res.json({ connected: false, reason: e.message });
+  }
+});
+
+// ── CLOCKIFY SUMMARY — cross-reference hours vs check-in capacity ──
+app.get('/clockify/summary', requireAuth, async (req, res) => {
+  try {
+    // 1. Get workspace
+    const workspaces = await callClockify('/workspaces');
+    const ws = (workspaces || []).find(w => w.name === 'Risk 2 Solution') || workspaces[0];
+    if (!ws) throw new Error('Workspace "Risk 2 Solution" not found in your Clockify account');
+    const wsId = ws.id;
+
+    // 2. Get all workspace users
+    const users = await callClockify('/workspaces/' + wsId + '/users?page-size=50');
+
+    // 3. Get this week's date range (Brisbane time)
+    const { start, end, weekLabel } = getBrisbaneWeekRange();
+
+    // 4. Load this week's check-in data for cross-reference
+    let checkIns = [];
+    try {
+      const raw = JSON.parse(readFileSync('/home/checkins.json', 'utf8') || '[]');
+      const weekStart = new Date(start);
+      const weekEnd   = new Date(end);
+      // Get most recent check-in per person this week
+      const byName = {};
+      raw.forEach(c => {
+        if (!c.submitted) return;
+        const d = new Date(c.submitted);
+        if (d >= weekStart && d <= weekEnd) {
+          const key = (c.name || '').toLowerCase();
+          if (!byName[key] || new Date(c.submitted) > new Date(byName[key].submitted)) {
+            byName[key] = c;
+          }
+        }
+      });
+      checkIns = Object.values(byName);
+    } catch(e) { console.warn('[Clockify] Could not load check-ins:', e.message); }
+
+    function findCheckIn(staffName) {
+      if (!staffName) return null;
+      const target = staffName.toLowerCase();
+      return checkIns.find(c => {
+        const name = (c.name || '').toLowerCase();
+        return name === target || name.includes(target.split(' ')[0]) || target.includes(name.split(' ')[0]);
+      }) || null;
+    }
+
+    // 5. For each matched user, get their time entries for the week
+    const summary = [];
+    for (const user of users) {
+      const match = matchClockifyUser(user);
+      if (!match) continue; // Skip unrecognised users
+
+      let totalHours = 0;
+      const projectBreakdown = {};
+
+      try {
+        const entries = await callClockify(
+          '/workspaces/' + wsId + '/user/' + user.id +
+          '/time-entries?start=' + encodeURIComponent(start) + '&end=' + encodeURIComponent(end) + '&page-size=500'
+        );
+        (entries || []).forEach(entry => {
+          let hrs = 0;
+          if (entry.timeInterval) {
+            if (entry.timeInterval.duration) {
+              hrs = parseDuration(entry.timeInterval.duration);
+            } else if (entry.timeInterval.start && entry.timeInterval.end) {
+              hrs = (new Date(entry.timeInterval.end) - new Date(entry.timeInterval.start)) / 3600000;
+            }
+          }
+          totalHours += hrs;
+          const proj = entry.projectName || 'No project';
+          projectBreakdown[proj] = (projectBreakdown[proj] || 0) + hrs;
+        });
+      } catch(e) {
+        console.warn('[Clockify] Could not get entries for', user.name, ':', e.message);
+      }
+
+      totalHours = Math.round(totalHours * 10) / 10;
+
+      // Round project hours
+      Object.keys(projectBreakdown).forEach(k => {
+        projectBreakdown[k] = Math.round(projectBreakdown[k] * 10) / 10;
+      });
+
+      const checkIn = findCheckIn(match.checkIn);
+      const capacity = checkIn ? (checkIn.capacity || 0) : null;
+      const impliedHours = capacity !== null ? Math.round((capacity / 100) * FULL_WEEK_HOURS * 10) / 10 : null;
+      const flags = generateFlags(match.checkIn, totalHours, checkIn);
+
+      summary.push({
+        name: match.checkIn,
+        clockifyName: user.name,
+        totalHours,
+        impliedHours,
+        capacity,
+        variance: impliedHours !== null ? Math.round((totalHours - impliedHours) * 10) / 10 : null,
+        projects: projectBreakdown,
+        flags,
+        checkIn: checkIn ? { capacity, projects: checkIn.projects, blockers: checkIn.blockers } : null
+      });
+    }
+
+    // Sort: highest flags first, then by variance
+    summary.sort((a, b) => b.flags.length - a.flags.length || Math.abs(b.variance||0) - Math.abs(a.variance||0));
+
+    const totalFlags = summary.reduce((n, s) => n + s.flags.length, 0);
+    const totalHoursLogged = Math.round(summary.reduce((n, s) => n + s.totalHours, 0) * 10) / 10;
+
+    res.json({ summary, totalFlags, totalHoursLogged, weekLabel, weekStart: start, weekEnd: end });
+
+  } catch(e) {
+    console.error('[Clockify] Summary error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── SERVE DASHBOARD ──
+app.use(express.static('.'));
+
+
+// ════════════════════════════════════════════════════════════════
+// ── CINDERELLA PROACTIVE INTELLIGENCE SYSTEM ──
+// ════════════════════════════════════════════════════════════════
+
+const PROACTIVE_STATE_PATH = '/home/proactive-state.json';
+
+function loadProactiveState() {
+  try { return JSON.parse(readFileSync(PROACTIVE_STATE_PATH,'utf8')||'{}'); } catch(e) { return {}; }
+}
+function saveProactiveState(s) {
+  try { writeFileSync(PROACTIVE_STATE_PATH, JSON.stringify(s,null,2)); } catch(e) {} 
+}
+
+function getBrisbaneNow() {
+  const now = new Date();
+  const bris = new Date(now.toLocaleString('en-US', {timeZone:'Australia/Brisbane'}));
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const pad = n => String(n).padStart(2,'0');
+  const weekKey = `${bris.getFullYear()}-W${pad(Math.ceil((bris.getDate()-bris.getDay()+6)/7))}`;
+  const dateStr = `${bris.getFullYear()}-${pad(bris.getMonth()+1)}-${pad(bris.getDate())}`;
+  return {
+    hour: bris.getHours(), minute: bris.getMinutes(),
+    dayOfWeek: days[bris.getDay()], dateStr, weekKey,
+    monthKey: `${bris.getFullYear()}-${pad(bris.getMonth()+1)}`,
+    isWeekday: bris.getDay() >= 1 && bris.getDay() <= 5
+  };
+}
+
+// Build Outlook-safe HTML from plain text sections
+// Outlook Classic uses Word rendering — no flexbox, no grid, no modern CSS
+function buildOutlookEmail(subject, sections) {
+  // sections = [{type:'header'|'metric'|'text'|'list'|'divider', ...data}]
+  const TEAL = '#07706B';
+  const PINK = '#D4699A';
+  const GREY = '#6A6660';
+  const LIGHT = '#F2F1EE';
+
+  let rows = '';
+
+  // Header row
+  rows += `<tr><td style="background:linear-gradient(105deg,#07706B,#56D4CE 55%,#F0B8CC 85%,#F8D2DE);padding:20px 28px;">
+    <p style="margin:0;font-family:Georgia,serif;font-size:26px;font-style:italic;color:#ffffff;font-weight:bold;">Cinderella</p>
+    <p style="margin:4px 0 0;font-family:Arial,sans-serif;font-size:10px;color:rgba(255,255,255,0.8);letter-spacing:2px;text-transform:uppercase;">EXECUTIVE ASSISTANT · RISK 2 SOLUTION</p>
+  </td></tr>`;
+
+  // Subject row
+  rows += `<tr><td style="padding:20px 28px 12px;border-bottom:2px solid ${TEAL};">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:16px;font-weight:bold;color:#111110;">${subject}</p>
+  </td></tr>`;
+
+  // Content rows
+  sections.forEach(s => {
+    if (s.type === 'heading') {
+      rows += `<tr><td style="padding:18px 28px 6px;"><p style="margin:0;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:${GREY};text-transform:uppercase;letter-spacing:1.5px;">${s.text}</p></td></tr>`;
+    } else if (s.type === 'divider') {
+      rows += `<tr><td style="padding:0 28px;"><hr style="border:none;border-top:1px solid #E8E6E1;margin:4px 0;"></td></tr>`;
+    } else if (s.type === 'text') {
+      rows += `<tr><td style="padding:6px 28px;"><p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">${s.text}</p></td></tr>`;
+    } else if (s.type === 'metric') {
+      rows += `<tr><td style="padding:10px 28px;">
+        <table width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td width="50%" style="padding:12px 14px;background:${LIGHT};border-radius:8px;vertical-align:top;">
+            <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:9px;color:${GREY};text-transform:uppercase;letter-spacing:1px;">${s.label}</p>
+            <p style="margin:0;font-family:Arial,sans-serif;font-size:22px;font-weight:bold;color:${s.color||'#111110'};">${s.value}</p>
+          </td>
+          ${s.label2?`<td width="4%"></td><td width="46%" style="padding:12px 14px;background:${LIGHT};border-radius:8px;vertical-align:top;"><p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:9px;color:${GREY};text-transform:uppercase;letter-spacing:1px;">${s.label2}</p><p style="margin:0;font-family:Arial,sans-serif;font-size:22px;font-weight:bold;color:${s.color2||'#111110'};">${s.value2}</p></td>`:''}
+        </tr></table>
+      </td></tr>`;
+    } else if (s.type === 'list') {
+      const items = (s.items||[]).map(i =>
+        `<tr><td style="padding:4px 0;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.5;">${s.bullet||'&#8226;'}&nbsp;&nbsp;${i}</td></tr>`
+      ).join('');
+      rows += `<tr><td style="padding:6px 28px 10px;"><table width="100%" cellpadding="0" cellspacing="0">${items}</table></td></tr>`;
+    } else if (s.type === 'callout') {
+      rows += `<tr><td style="padding:8px 28px;">
+        <table width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td style="padding:12px 16px;background:${s.bg||LIGHT};border-left:4px solid ${s.accent||TEAL};border-radius:0 6px 6px 0;">
+            <p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">${s.text}</p>
+          </td>
+        </tr></table>
+      </td></tr>`;
+    }
+  });
+
+  // Footer
+  rows += `<tr><td style="padding:20px 28px;background:${LIGHT};border-top:1px solid #E8E6E1;">
+    <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:${GREY};">Cinderella &nbsp;&#183;&nbsp; Executive Assistant to Kandia Du Bruyn, COO &nbsp;&#183;&nbsp; Risk 2 Solution</p>
+  </td></tr>`;
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="X-UA-Compatible" content="IE=edge"></head>
+<body style="margin:0;padding:20px;background:#F2F1EE;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+${rows}
+</table></body></html>`;
+}
+
+async function draftToKandia(subject, body, highPriority) {
+  try {
+    const token = await getValidToken();
+    const recipientEmail = await getKandiaEmail();
+    const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        subject, body:{contentType:'Text',content:body},
+        toRecipients:[{emailAddress:{address:recipientEmail}}],
+        importance: highPriority ? 'high' : 'normal'
       })
     });
-    var d = await r.json();
-
-    // Show actual API error if present
-    if (d.error || d.type === 'error') {
-      var errMsg = (d.error && d.error.message) || JSON.stringify(d.error || d).substring(0, 120);
-      var isSessionErr = errMsg.toLowerCase().includes('session') || errMsg.toLowerCase().includes('expired') || errMsg.includes('401');
-      if (isSessionErr) {
-        el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Session expired. <a href="/auth/login" style="color:var(--b)">Click here to log in again</a> — your data is safe.</div>';
-      } else {
-        el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Error: ' + errMsg + ' <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
-      }
-      return;
-    }
-
-    var text = (d.content && d.content[0] && d.content[0].text) ? d.content[0].text.trim() : '';
-
-    if (!text) {
-      var raw = JSON.stringify(d).substring(0, 200);
-      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Empty AI response. Raw: ' + raw + ' <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
-      return;
-    }
-
-    // Render as styled action items — no JSON needed
-    var lines = text.split('\n').filter(function(l){ return l.trim(); });
-    var html_out = lines.map(function(line) {
-      var cls = 'pl'; var label = 'Next week';
-      if (line.match(/^\[?URGENT/i))   { cls = 'ph'; label = 'Urgent'; }
-      if (line.match(/^\[?THIS WEEK/i)) { cls = 'pm'; label = 'This week'; }
-      // Clean up the prefix
-      var clean = line.replace(/^\[?(URGENT|THIS WEEK|NEXT WEEK)\]?\s*/i, '').trim();
-      if (!clean) return '';
-      var parts = clean.split(' — ');
-      var task = parts[0] || clean;
-      var source = parts[1] ? '<span style="font-size:9px;color:var(--t3);margin-left:4px">· ' + parts[1] + '</span>' : '';
-      window._cooActions = window._cooActions || [];
-      var ai = window._cooActions.length;
-      var src = parts[1] || '';
-      window._cooActions.push({task: task, source: src || 'COO Duties', urgency: label});
-      var q = 'Help me with: ' + task.replace(/"/g, "'");
-      return '<div class="pri" style="display:flex;align-items:center;gap:4px">' +
-        '<div onclick="qa(this.parentElement.dataset.q)" data-q="' + q.replace(/"/g,'&quot;') + '" style="flex:1;display:flex;align-items:center;gap:6px;cursor:pointer">' +
-          '<span class="pp ' + cls + '">' + label + '</span>' +
-          '<span class="pt">' + task + source + '</span>' +
-        '</div>' +
-        '<button onclick="cooTrack(' + ai + ',this)" title="Track" style="flex-shrink:0;background:none;border:1px solid var(--bl);border-radius:6px;padding:1px 6px;font-size:10px;color:var(--t3);cursor:pointer;font-family:var(--f)">+</button>' +
-        '<button onclick="dismissCOOAction(this.parentElement)" title="Dismiss" style="flex-shrink:0;background:none;border:none;font-size:14px;color:var(--t3);cursor:pointer;line-height:1;padding:0 2px">×</button>' +
-      '</div>';
-    }).filter(Boolean).join('');
-
-    if (!html_out) {
-      el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Could not parse actions. <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
-      return;
-    }
-
-    // Cache the rendered HTML
-    _openActionsCache = html_out;
-    _openActionsTime = Date.now();
-    el.innerHTML = html_out;
-
-  } catch(e) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:8px 0">Error: ' + e.message + ' <span style="color:var(--b);cursor:pointer" onclick="loadOpenActions(true)">Retry</span></div>';
-  }
-}
-
-
-function renderOpenActions(actions) {
-  var el = document.getElementById('openActionsList');
-  if (!el) return;
-  if (!actions||actions.length===0) { el.innerHTML='<div style="font-size:11px;color:var(--t3);padding:8px 0">No open actions identified. Connect M365 or upload documents for live scanning.</div>'; return; }
-  el.innerHTML = actions.map(function(a) {
-    var cls = a.urgency==='Urgent'?'ph':a.urgency==='This week'?'pm':'pl';
-    var src = a.source?'<span style="font-size:9px;color:var(--t3);margin-left:4px">· '+a.source+'</span>':'';
-    var prompt = (a.prompt||'Help me with: '+a.task).replace(/'/g,"&#39;");
-    return '<div class="pri" onclick="qa(\''+prompt+'\')"><span class="pp '+cls+'">'+a.urgency+'</span><span class="pt">'+a.task+src+'</span></div>';
-  }).join('');
-}
-
-// ── R2S METRICS ──
-// ── AURORA INTEGRATION ──
-var _auroraData   = null;
-var _auroraTime   = 0;
-var AURORA_TTL    = 10 * 60 * 1000; // 10 min cache
-var _auroraFilter = 'all';
-
-async function loadAuroraFull(force) {
-  if (_auroraData && !force && (Date.now() - _auroraTime) < AURORA_TTL) {
-    renderAuroraTab(_auroraData);
-    return;
-  }
-  // Set loading state on all elements
-  var els = ['auroraFullProjectList','auroraInvoiceList','auroraDeliverableList'];
-  els.forEach(function(id){ var el=document.getElementById(id); if(el) el.innerHTML='<div style="font-size:11px;color:var(--t2);padding:8px 0">Loading from Aurora...</div>'; });
-
-  try {
-    var r = await fetch('/aurora/summary');
-    if (!r.ok) {
-      var err = await r.json().catch(function(){return {};});
-      throw new Error(err.error || 'Aurora returned ' + r.status);
-    }
-    var d = await r.json();
-    _auroraData = d;
-    _auroraTime = Date.now();
-    renderAuroraTab(d);
-  } catch(e) {
-    var msg = e.message.includes('AURORA_PASSWORD')
-      ? '⚠ Add AURORA_PASSWORD to Cinderella Azure environment variables to connect Aurora.'
-      : 'Aurora error: ' + e.message;
-    els.forEach(function(id){ var el=document.getElementById(id); if(el) el.innerHTML='<div style="font-size:11px;color:var(--r);padding:8px 0">'+msg+'</div>'; });
-  }
-}
-
-function renderAuroraTab(d) {
-  var projects = d.projects || [];
-  var PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
-  var PHASE_COLS = ['var(--t3)','var(--a)','var(--b)','var(--g)','var(--t3)'];
-
-  // Update summary metrics
-  var activeProjs = projects.filter(function(p){ return p.phaseNum >= 1 && p.phaseNum <= 3; });
-  var el_active = document.getElementById('aur-active');
-  var el_out = document.getElementById('aur-outstanding');
-  var el_over = document.getElementById('aur-overdue');
-  if (el_active) el_active.textContent = activeProjs.length;
-  if (el_out) el_out.textContent = '$' + Math.round(d.totalOutstandingAll||0).toLocaleString();
-  if (el_over) el_over.textContent = d.totalOverdue || 0;
-
-  // Update badge
-  var badge = document.getElementById('auroraBadge');
-  var issues = (d.totalOverdue||0) + projects.filter(function(p){return p.totalOutstanding>0;}).length;
-  if (badge) { badge.textContent = issues; badge.style.display = issues > 0 ? 'inline-block' : 'none'; }
-
-  // Project list
-  var filtered = _auroraFilter === 'active'
-    ? projects.filter(function(p){ return p.phaseNum >= 1 && p.phaseNum <= 3; })
-    : _auroraFilter === 'overdue'
-    ? projects.filter(function(p){ return p.overdueDeliverables.length > 0 || p.totalOutstanding > 0; })
-    : projects;
-
-  var projEl = document.getElementById('auroraFullProjectList');
-  if (projEl) {
-    if (filtered.length === 0) {
-      projEl.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:12px 0;text-align:center">No projects match this filter.</div>';
-    } else {
-      projEl.innerHTML = filtered.map(function(p) {
-        var phaseCol = PHASE_COLS[p.phaseNum] || 'var(--t3)';
-        var overdueTag = p.overdueDeliverables.length > 0
-          ? '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--rl);color:#A32D2D;margin-left:4px">⚠ '+p.overdueDeliverables.length+' overdue</span>' : '';
-        var invTag = p.totalOutstanding > 0
-          ? '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--al);color:#854F0B;margin-left:4px">$'+Math.round(p.totalOutstanding).toLocaleString()+' unpaid</span>' : '';
-        var dueTag = p.dueDate
-          ? '<span style="font-size:9px;color:var(--t3);margin-left:6px">Due '+new Date(p.dueDate).toLocaleDateString('en-AU',{day:"numeric",month:"short"})+'</span>' : '';
-        var delivPct = p.deliverableCount > 0
-          ? Math.round((p.deliverableCount - p.overdueDeliverables.length - p.inProgressDeliverables.length) / p.deliverableCount * 100) : 0;
-        return '<div class="sc" data-pid="'+p.id+'" data-pclient="'+p.client.replace(/"/g,'')+'" onclick="openAuroraProject(this.dataset.pid, this.dataset.pclient)" style="margin-bottom:8px;padding:10px 12px">' +
-          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
-            '<span style="font-size:9px;padding:2px 8px;border-radius:8px;font-weight:600;background:var(--bg2);color:'+phaseCol+'">'+p.phase+'</span>' +
-            '<span style="font-size:12px;font-weight:500;color:var(--t1);flex:1">'+p.client+'</span>' +
-            overdueTag + invTag + dueTag +
-          '</div>' +
-          (p.project !== p.client ? '<div style="font-size:10px;color:var(--t2);margin-bottom:4px">'+p.project+'</div>' : '') +
-          '<div style="font-size:10px;color:var(--t3);display:flex;gap:12px">' +
-            (p.consultant ? '<span>'+p.consultant+'</span>' : '') +
-            (p.deliverableCount > 0 ? '<span>'+p.deliverableCount+' deliverables</span>' : '') +
-            (p.inProgressDeliverables.length > 0 ? '<span style="color:var(--b)">'+p.inProgressDeliverables.length+' in progress</span>' : '') +
-          '</div>' +
-        '</div>';
-      }).join('');
-    }
-  }
-
-  // Unpaid invoices panel
-  var invEl = document.getElementById('auroraInvoiceList');
-  if (invEl) {
-    var withInv = projects.filter(function(p){ return p.unpaidInvoices && p.unpaidInvoices.length > 0; });
-    if (withInv.length === 0) {
-      invEl.innerHTML = '<div style="font-size:11px;color:var(--g);padding:4px 0">✓ No unpaid invoices</div>';
-    } else {
-      var totalUnpaid = 0;
-      var rows = '';
-      withInv.forEach(function(p) {
-        p.unpaidInvoices.forEach(function(inv) {
-          var amt = parseFloat(inv.amount||0);
-          totalUnpaid += amt;
-          rows += '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:0.5px solid var(--bl)">' +
-            '<div style="flex:1">' +
-              '<div style="font-size:11px;font-weight:500;color:var(--t1)">'+p.client+'</div>' +
-              '<div style="font-size:10px;color:var(--t3)">'+(inv.invoiceNumber ? '#'+inv.invoiceNumber : 'No number')+(inv.createdAt ? ' · '+new Date(inv.createdAt).toLocaleDateString('en-AU',{day:"numeric",month:"short"}) : '')+'</div>' +
-            '</div>' +
-            '<span style="font-size:12px;font-weight:500;color:var(--a)">$'+amt.toLocaleString()+'</span>' +
-            '<button data-client="'+p.client.replace(/"/g,'')+'" data-inv="'+(inv.invoiceNumber||'')+'" data-amt="'+amt+'" onclick="chaseinvoice(this)" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--g);color:#fff;border:none;cursor:pointer;font-family:var(--f)">Chase</button>' +
-          '</div>';
-        });
-      });
-      invEl.innerHTML = '<div style="font-size:11px;font-weight:600;color:var(--a);margin-bottom:6px">Total outstanding: $'+totalUnpaid.toLocaleString()+'</div>' + rows;
-    }
-  }
-
-  // Overdue deliverables panel
-  var delEl = document.getElementById('auroraDeliverableList');
-  if (delEl) {
-    var allOverdue = [];
-    projects.forEach(function(p) {
-      (p.overdueDeliverables||[]).forEach(function(d) {
-        var dname = d.deliverable || d.Deliverable || d.name || d.title || d.description || d.task || (typeof d === 'string' ? d : 'Deliverable');
-        allOverdue.push({ client: p.client, deliverable: dname, dueDate: d.dueDate || d.due_date || d['Due Date'], assignedTo: d.assignedTo || d.assigned_to || d['Assigned To'] });
-      });
+    const draft = await draftRes.json();
+    if (!draft.id) throw new Error('Draft failed: ' + JSON.stringify(draft.error||draft).substring(0,100));
+    // Try to send it
+    const sendRes = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send', {
+      method:'POST', headers:{Authorization:'Bearer '+token}
     });
-    if (allOverdue.length === 0) {
-      delEl.innerHTML = '<div style="font-size:11px;color:var(--g);padding:4px 0">✓ No overdue deliverables</div>';
+    if (sendRes.status === 202) {
+      console.log('[Proactive] ✅ Sent to Kandia:', subject);
     } else {
-      delEl.innerHTML = allOverdue.map(function(d) {
-        return '<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:0.5px solid var(--bl)">' +
-          '<span style="font-size:9px;padding:2px 6px;border-radius:8px;background:var(--rl);color:#A32D2D;flex-shrink:0;margin-top:1px">Overdue</span>' +
-          '<div style="flex:1">' +
-            '<div style="font-size:11px;font-weight:500;color:var(--t1)">'+(d.deliverable||'Deliverable')+'</div>' +
-            '<div style="font-size:10px;color:var(--t3)">'+d.client+(d.assignedTo?' · '+d.assignedTo:'')+(d.dueDate?' · Due '+new Date(d.dueDate).toLocaleDateString('en-AU',{day:"numeric",month:"short"}):'')+'</div>' +
-          '</div>' +
-        '</div>';
-      }).join('');
+      console.log('[Proactive] ℹ Saved to Drafts:', subject);
     }
+    return draft.id;
+  } catch(e) {
+    console.error('[Proactive] Email error:', e.message);
   }
 }
 
-function filterAuroraProjects(filter) {
-  _auroraFilter = filter;
-  if (_auroraData) renderAuroraTab(_auroraData);
-}
-
-async function generateAuroraInsights() {
-  var el = document.getElementById('auroraInsightsList');
-  if (!el) return;
-  el.innerHTML = '<div style="font-size:11px;color:var(--t2)">Cinderella is analysing your Aurora portfolio...</div>';
-  if (!_auroraData) { el.innerHTML = '<div style="font-size:11px;color:var(--t3)">Load Aurora data first.</div>'; return; }
-  var d = _auroraData;
-  var projects = d.projects || [];
-  var ctx = 'AURORA PORTFOLIO SUMMARY:\n';
-  ctx += 'Active projects: ' + projects.filter(function(p){return p.phaseNum>=1&&p.phaseNum<=3;}).length + '\n';
-  ctx += 'Total outstanding invoices: $' + Math.round(d.totalOutstandingAll||0).toLocaleString() + '\n';
-  ctx += 'Total overdue deliverables: ' + (d.totalOverdue||0) + '\n\n';
-  projects.forEach(function(p) {
-    ctx += p.client + ' [' + p.phase + ']';
-    if (p.totalOutstanding > 0) ctx += ' | $' + Math.round(p.totalOutstanding).toLocaleString() + ' unpaid';
-    if (p.overdueDeliverables.length > 0) ctx += ' | ' + p.overdueDeliverables.length + ' overdue deliverables';
-    if (p.consultant) ctx += ' | ' + p.consultant;
-    ctx += '\n';
-  });
+async function createOutlookDraftOnly(subject, body, toEmail, ccEmail) {
+  // Creates a DRAFT ONLY - does not send (for CEO brief etc)
   try {
-    var r = await fetch('/proxy', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:600, system: SYS,
-        messages:[{role:'user',content:'Analyse this Aurora project portfolio and give me 4-5 specific, actionable insights for Kandia as COO. Flag revenue risks, delivery risks, and what needs immediate action.\n\n'+ctx}]})});
-    var resp = await r.json();
-    var text = resp.content && resp.content[0] ? resp.content[0].text : '';
-    if (text) {
-      var lines = text.split('\n').filter(function(l){return l.trim();});
-      el.innerHTML = lines.map(function(l){
-        return '<div class="ins"><div class="it">'+l+'</div></div>';
-      }).join('');
-    }
-  } catch(e) { el.innerHTML = '<div style="font-size:11px;color:var(--r)">Error: '+e.message+'</div>'; }
+    const token = await getValidToken();
+    const toRecipients = [{emailAddress:{address:toEmail}}];
+    const ccRecipients = ccEmail ? [{emailAddress:{address:ccEmail}}] : [];
+    const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        subject, body:{contentType:'Text',content:body},
+        toRecipients, ccRecipients, importance:'high'
+      })
+    });
+    const draft = await draftRes.json();
+    console.log('[Proactive] Draft created (NOT sent):', subject, '| ID:', (draft.id||'').substring(0,20));
+    return draft.id;
+  } catch(e) {
+    console.error('[Proactive] Draft creation error:', e.message);
+  }
 }
 
-// Keep loadAuroraProjects as alias for backward compat
-async function loadAuroraProjects(force) { return loadAuroraFull(force); }
+// ── 1. MORNING BRIEF ──────────────────────────────────────────
+async function sendMorningBrief() {
+  if (!tokenStore.access_token) return;
+  const { dateStr, dayOfWeek } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.morningBriefDate === dateStr) { console.log('[MorningBrief] Already sent today'); return; }
 
-function chaseinvoice(btn) {
-  var client = btn.dataset.client;
-  var inv = btn.dataset.inv;
-  var amt = btn.dataset.amt;
-  qa('Draft a professional payment follow-up email to ' + client + ' for invoice ' + (inv||'') + ' of $' + amt + '. Be polite but firm.');
-}
-
-async function loadR2SMetrics() {
-  var el = document.getElementById('r2sMetricsList');
-  if (!el) return;
-  el.innerHTML = '<div style="font-size:11px;color:var(--t2);padding:8px 0">Loading live data...</div>';
-  var html = '';
+  console.log('[MorningBrief] Generating morning brief for', dateStr);
   try {
-    var now = new Date();
-    var thisMonth = now.getMonth();
-    var thisYear = now.getFullYear();
+    const now = new Date();
+    const BRIS_MS = 10*60*60*1000;
+    const bris = new Date(now.getTime()+BRIS_MS);
+    const y=bris.getUTCFullYear(), m=bris.getUTCMonth(), d=bris.getUTCDate();
+    const startOfDay = new Date(Date.UTC(y,m,d,0,0,0)-BRIS_MS).toISOString();
+    const endOfDay   = new Date(Date.UTC(y,m,d,23,59,59)-BRIS_MS).toISOString();
 
-    function col(cols,id){ var c=cols.find(function(cv){return cv.id===id;}); return c?(c.text||''):''; }
-    function parseDate(str){
-      if(!str||str.trim()==='') return null;
-      var d=new Date(str); if(isNaN(d)) return null;
-      return {label:d.toLocaleDateString('en-AU',{day:'numeric',month:'short'}),isDueThisMonth:d.getMonth()===thisMonth&&d.getFullYear()===thisYear,isOverdue:d<now&&!(d.getMonth()===thisMonth&&d.getFullYear()===thisYear)};
-    }
-    function statusPct(s){ s=(s||'').toLowerCase(); if(s.match(/done|complet|deliver/)) return 100; if(s.match(/review|final|sign off/)) return 80; if(s.match(/progress|active|ongoing/)) return 55; if(s.includes('hold')) return 30; if(s.match(/plan|brief|scop|kick/)) return 15; return 40; }
-    function pctColour(p){ return p>=80?'var(--g)':p>=40?'var(--b)':p>=20?'var(--a)':'var(--r)'; }
-    function dateTag(d,label){
-      if(!d) return '';
-      if(d.isOverdue) return '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--rl);color:#A32D2D;margin-right:3px">⚠ '+label+' overdue '+d.label+'</span>';
-      if(d.isDueThisMonth) return '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--al);color:#854F0B;margin-right:3px">⚡ '+label+' '+d.label+'</span>';
-      return '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--bg3);color:var(--t3);margin-right:3px">'+label+' '+d.label+'</span>';
-    }
-
-    // Client feedback from Monday.com — only actionable items
+    // Today's calendar
+    let meetings = [];
     try {
-      var fr = await fetch('/monday/feedback');
-      if (fr.ok) {
-        var fd = await fr.json();
-        var boards = fd.boards || [];
-        var actionableItems = [];
-        boards.forEach(function(board) {
-          (board.items || []).forEach(function(item) {
-            var cols = item.column_values || [];
-            function fcol(id){ var c=cols.find(function(cv){return cv.id===id;}); return c?(c.text||''):''; }
-            var sentiment = fcol('color__1') || fcol('status__1') || fcol('status') || '';
-            var notes = fcol('long_text__1') || fcol('text__1') || fcol('notes__1') || '';
-            var clientName = fcol('text8__1') || item.name || '';
-            var needsAction = sentiment.toLowerCase().match(/negative|concern|issue|dissatisf|unhappy|problem|escalat/) ||
-              notes.toLowerCase().match(/request|more info|need|when|follow.?up|waiting|no response|haven.?t heard|question|clarif/);
-            if (needsAction) {
-              actionableItems.push({ client: clientName, note: notes.substring(0,120), sentiment: sentiment });
+      const cal = await graphGet(`/me/calendarView?startDateTime=${startOfDay}&endDateTime=${endOfDay}&$select=subject,start,end,attendees&$orderby=start/dateTime`);
+      meetings = (cal.value||[]).map(e => ({
+        time: new Date(e.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'}),
+        subject: e.subject,
+        attendees: (e.attendees||[]).map(a=>a.emailAddress?.name).filter(Boolean).slice(0,4).join(', ')
+      }));
+    } catch(e) {}
+
+    // Open actions (urgent)
+    const actions = loadActions().filter(a=>a.status==='open');
+    const urgent = actions.filter(a=>a.urgency==='Urgent' || a.urgency==='URGENT');
+    const thisWeek = actions.filter(a=>(a.urgency||'').toLowerCase().includes('week') && !urgent.includes(a));
+
+    // Aurora snapshot
+    let auroraOverdue = 0, auroraOutstanding = 0;
+    try {
+      const aur = await callAurora('/api/projects');
+      for (const p of (aur.projects||[]).slice(0,10)) {
+        try {
+          const del = await callAurora('/api/projects/'+p.id+'/deliverables');
+          auroraOverdue += (del.deliverables||[]).filter(d=>d.status==='Overdue'||(d.dueDate&&new Date(d.dueDate)<now&&d.status!=='Complete')).length;
+          const inv = await callAurora('/api/projects/'+p.id+'/invoices');
+          (inv.invoices||[]).filter(i=>!i.paid).forEach(i=>auroraOutstanding+=parseFloat(i.amount||0));
+        } catch(e) {}
+      }
+    } catch(e) {}
+
+    // Unanswered emails (48h+)
+    let unanswered = [];
+    try {
+      const cutoff = new Date(now.getTime()-48*60*60*1000).toISOString();
+      const inbox = await graphGet(`/me/mailFolders/inbox/messages?$filter=isRead eq false and receivedDateTime le ${cutoff}&$top=10&$select=subject,from,receivedDateTime`);
+      const sent = await graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${cutoff}&$select=conversationId&$top=50`);
+      const repliedConvs = new Set((sent.value||[]).map(m=>m.conversationId));
+      unanswered = (inbox.value||[]).filter(m=>!repliedConvs.has(m.conversationId) && !(m.from?.emailAddress?.address||'').includes('noreply'));
+    } catch(e) {}
+
+    // Check-ins this week
+    let checkInCount = 0;
+    try {
+      const raw = JSON.parse(readFileSync('/home/checkins.json','utf8')||'[]');
+      const weekAgo = new Date(now.getTime()-7*24*60*60*1000);
+      checkInCount = raw.filter(c=>c.submitted && new Date(c.submitted)>=weekAgo).length;
+    } catch(e) {}
+
+    // Compliance alerts (7 days)
+    const proState = loadProactiveState();
+    const compItems = (proState.complianceItems||[]).filter(c => {
+      if (!c.dueDate) return false;
+      const days = Math.ceil((new Date(c.dueDate)-now)/(24*60*60*1000));
+      return days >= 0 && days <= 7;
+    });
+
+    // Financial snapshot
+    const finSnap = proState.financialSnapshot||{};
+
+    // Build email
+    const d2 = n => String(n).padStart(2,'0');
+    const todayStr = `${dayOfWeek} ${d} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m]} ${y}`;
+
+    let body = `Good morning Kandia,\n\nHere is your briefing for ${todayStr}.\n\n`;
+
+    body += `TODAY'S CALENDAR (${meetings.length} meetings)\n${'─'.repeat(40)}\n`;
+    if (meetings.length === 0) body += 'No meetings scheduled today.\n';
+    else meetings.forEach(m => body += `  ${m.time}  ${m.subject}${m.attendees?' | '+m.attendees:''}\n`);
+
+    body += `\nPRIORITY ACTIONS\n${'─'.repeat(40)}\n`;
+    if (urgent.length > 0) {
+      body += `URGENT (${urgent.length}):\n`;
+      urgent.slice(0,5).forEach(a => body += `  ⚠ ${a.title}${a.source?' ('+a.source+')':''}\n`);
+    }
+    if (thisWeek.length > 0) {
+      body += `THIS WEEK (${thisWeek.length}):\n`;
+      thisWeek.slice(0,5).forEach(a => body += `  • ${a.title}\n`);
+    }
+    if (urgent.length===0&&thisWeek.length===0) body += '  No urgent items.\n';
+
+    body += `\nAURORA PROJECTS\n${'─'.repeat(40)}\n`;
+    body += `  Overdue deliverables: ${auroraOverdue}\n`;
+    body += `  Outstanding invoices: $${Math.round(auroraOutstanding).toLocaleString()}\n`;
+
+    body += `\nEMAILS NEEDING REPLY (48h+ unanswered)\n${'─'.repeat(40)}\n`;
+    if (unanswered.length === 0) body += '  Inbox clear — no unanswered emails over 48 hours.\n';
+    else unanswered.slice(0,5).forEach(e => body += `  • ${e.from?.emailAddress?.name||'?'}: ${e.subject}\n`);
+
+    body += `\nSTAFF CHECK-INS\n${'─'.repeat(40)}\n`;
+    body += `  ${checkInCount} check-ins received this week.\n`;
+
+    if (finSnap.lastResult) {
+      body += `\nFINANCIAL SNAPSHOT\n${'─'.repeat(40)}\n`;
+      body += `  Last P&L: ${finSnap.period} — ${finSnap.lastResult}\n`;
+      if (finSnap.outstanding) body += `  Outstanding receivables: $${finSnap.outstanding.toLocaleString()}\n`;
+    }
+
+    if (compItems.length > 0) {
+      body += `\nCOMPLIANCE ALERTS (due within 7 days)\n${'─'.repeat(40)}\n`;
+      compItems.forEach(c => body += `  ⚠ ${c.title} — due ${c.dueDate}\n`);
+    }
+
+    body += `\n${'─'.repeat(40)}\nCinderella — Executive Assistant to Kandia Du Bruyn, COO\nRisk 2 Solution`;
+
+    // Build Outlook-compatible HTML version
+    const morningHtml = buildOutlookEmail(`Morning Brief — ${todayStr}`, [
+      {type:'text', text:`Good morning Kandia. Here is your briefing for <strong>${todayStr}</strong>.`},
+      {type:'heading', text:'Today\'s Calendar'},
+      meetings.length === 0
+        ? {type:'text', text:'No meetings scheduled today.'}
+        : {type:'list', bullet:'&#128197;', items: meetings.map(m => `<strong>${m.time}</strong> &nbsp; ${m.subject}${m.attendees?' &nbsp;&#183;&nbsp; '+m.attendees:''}`)},
+      {type:'heading', text:`Priority Actions (${urgent.length} Urgent, ${thisWeek.length} This Week)`},
+      ...(urgent.length > 0 ? [{type:'list', bullet:'&#9888;', items: urgent.slice(0,5).map(a => `<strong>${a.title}</strong>${a.source?' &mdash; '+a.source:''}`)}] : []),
+      ...(thisWeek.length > 0 ? [{type:'list', bullet:'&#8226;', items: thisWeek.slice(0,5).map(a => a.title)}] : []),
+      ...(urgent.length===0&&thisWeek.length===0 ? [{type:'callout', text:'No urgent items today.', accent:'#0D8A62', bg:'#DCEEE6'}] : []),
+      {type:'heading', text:'Aurora Projects'},
+      {type:'metric', label:'Overdue Deliverables', value:String(auroraOverdue), color: auroraOverdue>0?'#C8211E':'#0D8A62',
+        label2:'Outstanding Invoices', value2:'$'+Math.round(auroraOutstanding).toLocaleString(), color2: auroraOutstanding>0?'#C4720A':'#0D8A62'},
+      {type:'heading', text:'Unanswered Emails (48h+)'},
+      unanswered.length === 0
+        ? {type:'callout', text:'Inbox clear — no unanswered emails over 48 hours.', accent:'#0D8A62', bg:'#DCEEE6'}
+        : {type:'list', bullet:'&#9993;', items: unanswered.slice(0,5).map(e => `<strong>${e.from?.emailAddress?.name||'?'}</strong> &mdash; ${e.subject}`)},
+      {type:'heading', text:`Staff Check-ins — ${checkInCount} received this week`},
+      {type:'divider'},
+      ...(compItems.length > 0 ? [{type:'heading', text:'Compliance Alerts (Due Within 7 Days)'}, {type:'list', bullet:'&#9888;', items: compItems.map(c => `<strong>${c.title}</strong> &mdash; due ${c.dueDate}`)}] : []),
+      ...(finSnap.lastResult ? [{type:'heading', text:'Financial Snapshot'}, {type:'metric', label:finSnap.period||'Last Period', value:finSnap.lastResult, color:finSnap.lastResult.startsWith('-')?'#C8211E':'#0D8A62'}] : [])
+    ]);
+
+    // Send as HTML email for Outlook compatibility
+    const token = await getValidToken();
+    const recipientEmail = await getKandiaEmail();
+    const draftRes = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        subject: `🌅 Morning Brief — ${todayStr}`,
+        body:{contentType:'HTML', content:morningHtml},
+        toRecipients:[{emailAddress:{address:recipientEmail}}],
+        importance:'normal'
+      })
+    });
+    const draft = await draftRes.json();
+    if (draft.id) {
+      const sendRes = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draft.id+'/send', {
+        method:'POST', headers:{Authorization:'Bearer '+token}
+      });
+      if (sendRes.status === 202) console.log('[MorningBrief] ✅ HTML email sent');
+      else console.log('[MorningBrief] Saved to Drafts (HTML)');
+    }
+
+    state.morningBriefDate = dateStr;
+    saveProactiveState(state);
+    console.log('[MorningBrief] ✅ Sent');
+  } catch(e) {
+    console.error('[MorningBrief] Error:', e.message);
+  }
+}
+
+// ── 2. PRE-MEETING BRIEF ──────────────────────────────────────
+async function checkPreMeetingBriefs() {
+  if (!tokenStore.access_token) return;
+  try {
+    const now = new Date();
+    const in35 = new Date(now.getTime()+35*60*1000).toISOString();
+    const in25 = new Date(now.getTime()+25*60*1000).toISOString();
+    const cal = await graphGet(`/me/calendarView?startDateTime=${in25}&endDateTime=${in35}&$select=subject,start,end,attendees,bodyPreview&$top=5`);
+    const meetings = cal.value||[];
+    if (meetings.length === 0) return;
+
+    const state = loadProactiveState();
+    if (!state.preMeetingBriefsSent) state.preMeetingBriefsSent = {};
+
+    for (const meeting of meetings) {
+      const meetId = meeting.id || meeting.subject+meeting.start?.dateTime;
+      if (state.preMeetingBriefsSent[meetId]) continue;
+
+      console.log('[PreMeeting] Generating brief for:', meeting.subject);
+      const attendeeNames = (meeting.attendees||[]).map(a=>a.emailAddress?.name||a.emailAddress?.address||'').filter(Boolean).join(', ');
+      const attendeeEmails = (meeting.attendees||[]).map(a=>a.emailAddress?.address||'').filter(Boolean);
+      const meetTime = new Date(meeting.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'});
+
+      // Search emails AND Teams for context about this meeting
+      let emailContext = '';
+      let teamsContext = '';
+
+      // Email search — search for ALL attendees (internal AND external)
+      // Get last 200 emails and filter locally to find any related to attendees
+      try {
+        const allMsgs = await graphGet('/me/messages?$top=200&$select=subject,from,bodyPreview,body,receivedDateTime,toRecipients,ccRecipients&$orderby=receivedDateTime desc');
+        const msgs = allMsgs.value||[];
+
+        // Build a list of terms to match against: attendee names, emails, meeting subject words
+        const matchTerms = [];
+        attendeeEmails.forEach(e => matchTerms.push(e.toLowerCase()));
+        attendeeNames.split(',').forEach(n => {
+          const parts = n.trim().split(' ');
+          parts.forEach(p => { if (p.length > 2) matchTerms.push(p.toLowerCase()); });
+        });
+        // Add meeting subject keywords
+        (meeting.subject||'').split(/\s+/).forEach(w => { if (w.length > 4) matchTerms.push(w.toLowerCase()); });
+
+        const relevant = msgs.filter(m => {
+          const subj = (m.subject||'').toLowerCase();
+          const from = (m.from?.emailAddress?.name||'').toLowerCase() + ' ' + (m.from?.emailAddress?.address||'').toLowerCase();
+          const preview = (m.bodyPreview||'').toLowerCase();
+          const toList = (m.toRecipients||[]).map(r=>(r.emailAddress?.address||'').toLowerCase()).join(' ');
+          const text = subj + ' ' + from + ' ' + preview + ' ' + toList;
+          return matchTerms.some(term => text.includes(term));
+        }).slice(0, 15);
+
+        relevant.forEach(m => {
+          const bodyText = (m.body?.content||m.bodyPreview||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').substring(0,400);
+          const date = new Date(m.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short',timeZone:'Australia/Brisbane'});
+          emailContext += `[${date}] FROM: ${m.from?.emailAddress?.name} | SUBJECT: ${m.subject}\n${bodyText}\n\n`;
+        });
+        console.log('[PreMeeting] Found', relevant.length, 'relevant emails from', msgs.length, 'fetched');
+      } catch(e) { console.warn('[PreMeeting] Email search error:', e.message); }
+
+      // Teams chat search — critical for internal meetings
+      try {
+        const chats = await graphGet('/me/chats?$top=30&$expand=members');
+        let foundChats = 0;
+        for (const chat of (chats.value||[])) {
+          if (foundChats >= 4) break;
+          const members = (chat.members||[]).map(m=>m.displayName||'');
+          const relevant = attendeeNames.split(',').some(name => {
+            const n = name.trim().toLowerCase();
+            return members.some(m => m.toLowerCase().includes(n.split(' ')[0]) && n.split(' ')[0].length > 2);
+          });
+          if (!relevant) continue;
+          try {
+            const msgs = await graphGet(`/me/chats/${chat.id}/messages?$top=20&$orderby=createdDateTime desc`);
+            const recent = (msgs.value||[]).filter(m => {
+              if (!m.createdDateTime) return false;
+              return new Date(m.createdDateTime) >= new Date(Date.now()-14*24*60*60*1000);
+            });
+            if (recent.length > 0) {
+              const chatName = chat.topic || members.filter(m=>!m.includes('Kandia')).join(', ');
+              teamsContext += `Teams: "${chatName}"\n`;
+              recent.slice(0,8).forEach(m => {
+                const body = (m.body?.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim().substring(0,200);
+                if (body.length > 15) {
+                  const sender = m.from?.user?.displayName||'?';
+                  const time = new Date(m.createdDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'});
+                  teamsContext += `  [${time}] ${sender}: ${body}\n`;
+                }
+              });
+              teamsContext += '\n';
+              foundChats++;
+            }
+          } catch(e) {}
+        }
+      } catch(e) { console.warn('[PreMeeting] Teams search error:', e.message); }
+
+      // Check Aurora for matching projects
+      let auroraContext = '';
+      try {
+        const aur = await callAurora('/api/projects');
+        const matchName = attendeeNames.toLowerCase();
+        const related = (aur.projects||[]).filter(p => {
+          const client = (p.clientName||'').toLowerCase();
+          return attendeeNames.split(',').some(n => client.includes(n.trim().toLowerCase().split(' ')[0]));
+        });
+        if (related.length > 0) {
+          auroraContext = 'Aurora projects: ' + related.map(p=>p.clientName+' ['+(['Enquiry','Proposal','Active','Review','Close-out'][p.phase]||'?')+']').join(', ');
+        }
+      } catch(e) {}
+
+      // Check open actions mentioning attendees
+      const actions = loadActions().filter(a => {
+        const title = (a.title||'').toLowerCase();
+        return attendeeNames.split(',').some(n => title.includes(n.trim().toLowerCase().split(' ')[0]));
+      });
+
+      // Generate brief with AI
+      const briefPrompt = `You are Cinderella, the COO assistant for Kandia Du Bruyn at Risk 2 Solution. Generate a sharp, useful pre-meeting brief. Kandia has a meeting starting in 30 minutes.
+
+MEETING: ${meeting.subject}
+TIME: ${meetTime}
+ATTENDEES: ${attendeeNames||'Unknown'}
+MEETING DESCRIPTION: ${meeting.bodyPreview||'Not provided'}
+
+RECENT EMAILS (last 14 days):
+${emailContext||'No recent email context found.'}
+
+TEAMS CONVERSATIONS (last 14 days):
+${teamsContext||'No recent Teams messages found.'}
+
+${auroraContext ? 'AURORA PROJECT STATUS:\n'+auroraContext : ''}
+${actions.length > 0 ? 'OPEN ACTIONS:\n'+actions.map(a=>a.title).join('\n') : ''}
+
+Write a brief that covers:
+1. CONTEXT (2-3 sentences) — who is this person/group, what is the relationship with R2S, what has been discussed recently
+2. KEY BACKGROUND — pull specific details from the emails and Teams messages above. What decisions were made, what was promised, what issues exist
+3. TALKING POINTS (3-4 bullet points) — specific agenda items to raise based on actual conversation history, not generic suggestions
+4. WATCH POINTS — anything sensitive, unresolved, or that needs careful handling
+5. OPEN ACTIONS — any pending items involving these people
+
+Be specific. Pull real names, numbers, and topics from the context. No filler phrases.`;
+
+      try {
+        const ai = await fetch('https://api.anthropic.com/v1/messages', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+          body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:400,messages:[{role:'user',content:briefPrompt}]})
+        });
+        const aiData = await ai.json();
+        const briefText = (aiData.content||[]).map(c=>c.text||'').join('');
+
+        // Build Outlook-compatible HTML brief
+        const briefLines = briefText.split('\n').filter(l=>l.trim());
+        const briefHtml = buildOutlookEmail(`Pre-Meeting Brief: ${meeting.subject}`, [
+          {type:'metric', label:'Meeting', value:meeting.subject.substring(0,30), color:'#07706B',
+            label2:'Time', value2:meetTime, color2:'#07706B'},
+          {type:'text', text:`<strong>Attendees:</strong> ${attendeeNames||'Not specified'}`},
+          {type:'divider'},
+          ...briefLines.map(line => {
+            if (line.match(/^\d\.|^[A-Z\s]+:$|CONTEXT|BACKGROUND|TALKING|WATCH|OPEN/)) {
+              return {type:'heading', text:line.replace(/\*\*/g,'')};
+            } else if (line.startsWith('-') || line.startsWith('•')) {
+              return {type:'list', items:[line.replace(/^[-•]\s*/,'')]};
+            } else {
+              return {type:'text', text:line.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')};
+            }
+          })
+        ]);
+
+        const token2 = await getValidToken();
+        const recip2 = await getKandiaEmail();
+        const dr2 = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+          method:'POST', headers:{Authorization:'Bearer '+token2,'Content-Type':'application/json'},
+          body:JSON.stringify({subject:`📅 Pre-meeting brief: ${meeting.subject} (${meetTime})`,body:{contentType:'HTML',content:briefHtml},toRecipients:[{emailAddress:{address:recip2}}],importance:'high'})
+        });
+        const draftObj = await dr2.json();
+        if (draftObj.id) {
+          const snd = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+draftObj.id+'/send',{method:'POST',headers:{Authorization:'Bearer '+token2}});
+          console.log('[PreMeeting] Email status:', snd.status === 202 ? 'Sent' : 'Draft saved');
+        }
+        state.preMeetingBriefsSent[meetId] = new Date().toISOString();
+        saveProactiveState(state);
+        console.log('[PreMeeting] ✅ Brief sent for:', meeting.subject);
+      } catch(e) {
+        console.error('[PreMeeting] AI error:', e.message);
+      }
+    }
+  } catch(e) {
+    console.error('[PreMeeting] Error:', e.message);
+  }
+}
+
+// ── 3. AURORA PROJECT ALERT (Monday weekly) ───────────────────
+async function sendAuroraProjectAlert() {
+  if (!tokenStore.access_token) return;
+  const { weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.auroraAlertWeek === weekKey) { console.log('[AuroraAlert] Already sent this week'); return; }
+
+  console.log('[AuroraAlert] Generating weekly Aurora project alert');
+  try {
+    const now = new Date();
+    const aur = await callAurora('/api/projects');
+    const projects = aur.projects||[];
+    const PHASES = ['Enquiry','Proposal','Active','Review','Close-out'];
+
+    const overdueProjects = [], invoiceAlerts = [], stuckProjects = [];
+
+    for (const p of projects.filter(proj=>proj.phase>=1&&proj.phase<=3).slice(0,15)) {
+      try {
+        const del = await callAurora('/api/projects/'+p.id+'/deliverables');
+        const overdue = (del.deliverables||[]).filter(d=>d.status==='Overdue'||(d.dueDate&&new Date(d.dueDate)<now&&d.status!=='Complete'));
+        if (overdue.length > 0) {
+          overdueProjects.push({
+            client: p.clientName, phase: PHASES[p.phase]||'?', consultant: p.consultant,
+            overdue: overdue.map(d=>d.deliverable||'Deliverable').slice(0,3),
+            overdueCount: overdue.length
+          });
+        }
+      } catch(e) {}
+
+      try {
+        const inv = await callAurora('/api/projects/'+p.id+'/invoices');
+        const oldUnpaid = (inv.invoices||[]).filter(i=>{
+          if (i.paid) return false;
+          const age = (now - new Date(i.createdAt||i.date||now)) / (24*60*60*1000);
+          return age > 30;
+        });
+        if (oldUnpaid.length > 0) {
+          const total = oldUnpaid.reduce((s,i)=>s+parseFloat(i.amount||0),0);
+          invoiceAlerts.push({client:p.clientName, count:oldUnpaid.length, total});
+        }
+      } catch(e) {}
+    }
+
+    if (overdueProjects.length === 0 && invoiceAlerts.length === 0) {
+      console.log('[AuroraAlert] No issues to report — skipping email');
+      state.auroraAlertWeek = weekKey;
+      saveProactiveState(state);
+      return;
+    }
+
+    let body = `Hi Kandia,\n\nHere is your weekly Aurora project status alert.\n\n`;
+
+    if (overdueProjects.length > 0) {
+      body += `OVERDUE DELIVERABLES (${overdueProjects.length} project${overdueProjects.length>1?'s':''})\n${'─'.repeat(50)}\n`;
+      overdueProjects.forEach(p => {
+        body += `\n  ${p.client} [${p.phase}]${p.consultant?' — '+p.consultant:''}\n`;
+        p.overdue.forEach(d => body += `    ⚠ ${d}\n`);
+        if (p.overdueCount > 3) body += `    ... and ${p.overdueCount-3} more overdue items\n`;
+      });
+    }
+
+    if (invoiceAlerts.length > 0) {
+      body += `\nOUTSTANDING INVOICES 30+ DAYS OVERDUE (${invoiceAlerts.length} client${invoiceAlerts.length>1?'s':''})\n${'─'.repeat(50)}\n`;
+      invoiceAlerts.forEach(i => {
+        body += `  • ${i.client} — ${i.count} invoice${i.count>1?'s':''} totalling $${Math.round(i.total).toLocaleString()}\n`;
+      });
+    }
+
+    body += `\nPlease review each project in Aurora and follow up with the relevant consultants.\nYou can also use Cinderella's Chase button in the Aurora tab to draft follow-up emails.\n\n─────────────────\nCinderella — Weekly Project Alert`;
+
+    await draftToKandia(`⚠ Aurora project alert — ${overdueProjects.length} overdue, ${invoiceAlerts.length} invoice${invoiceAlerts.length!==1?'s':''} outstanding`, body, true);
+
+    state.auroraAlertWeek = weekKey;
+    saveProactiveState(state);
+    console.log('[AuroraAlert] ✅ Sent');
+  } catch(e) {
+    console.error('[AuroraAlert] Error:', e.message);
+  }
+}
+
+// ── 4. CEO WEEKLY BRIEF DRAFT (Monday — draft only) ───────────
+async function draftCEOWeeklyBrief() {
+  if (!tokenStore.access_token) return;
+  const { weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.ceoWeeklyBriefWeek === weekKey) { console.log('[CEOBrief] Already drafted this week'); return; }
+
+  console.log('[CEOBrief] Drafting weekly CEO brief');
+  try {
+    const now = new Date();
+    // Gather operational snapshot
+    const actions = loadActions().filter(a=>a.status==='open');
+    const proState = loadProactiveState();
+    const finSnap = proState.financialSnapshot||{};
+
+    let auroraLines = '';
+    try {
+      const aur = await callAurora('/api/projects');
+      const active = (aur.projects||[]).filter(p=>p.phase>=1&&p.phase<=3);
+      auroraLines = `Active delivery projects: ${active.length}\n` + active.slice(0,5).map(p=>`- ${p.clientName}`).join('\n');
+    } catch(e) {}
+
+    const briefPrompt = `Draft a concise weekly CEO operational brief from Kandia Du Bruyn (COO) to Dave Cohen (CEO) at Risk 2 Solution. This is a DRAFT for Kandia to review before sending.
+
+Data available:
+- Open actions: ${actions.length} total, ${actions.filter(a=>a.urgency==='Urgent').length} urgent
+- Most urgent: ${actions.filter(a=>a.urgency==='Urgent').slice(0,3).map(a=>a.title).join(', ')||'None'}
+${finSnap.lastResult ? '- Last financial result: '+finSnap.period+' — '+finSnap.lastResult : ''}
+- Aurora: ${auroraLines}
+
+Write in first person as Kandia. Tone: professional, concise, confident. Cover: 1) Operational highlights this week, 2) Key items needing CEO awareness or decision, 3) Financial position if known, 4) Next week focus areas. Max 300 words. Leave [PLACEHOLDER] where Kandia should add specific details she knows.`;
+
+    const ai = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+      body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:500,messages:[{role:'user',content:briefPrompt}]})
+    });
+    const aiData = await ai.json();
+    const briefText = (aiData.content||[]).map(c=>c.text||'').join('');
+
+    // Draft to Dave, CC Kandia — BUT DO NOT SEND
+    const kanEmail = await getKandiaEmail();
+    const draftId = await createOutlookDraftOnly(
+      `R2S Weekly Operational Update — Week of ${new Date().toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})}`,
+      `Hi Dave,\n\n${briefText}\n\nKind regards,\nKandia Du Bruyn\nCOO — Risk 2 Solution`,
+      'dave.c@risk2solution.com',
+      kanEmail
+    );
+
+    // Alert Kandia that it's ready for review
+    if (draftId) {
+      await draftToKandia(
+        '📝 CEO weekly brief is in your Drafts — please review and send',
+        `Hi Kandia,\n\nI've drafted this week's CEO operational update to Dave. It's in your Outlook Drafts ready for your review.\n\nPlease:\n1. Open the draft in Outlook Drafts\n2. Review and amend as needed — I've added [PLACEHOLDER] where you should add specifics\n3. Send when ready\n\nCinderella`,
+        true
+      );
+    }
+
+    state.ceoWeeklyBriefWeek = weekKey;
+    saveProactiveState(state);
+    console.log('[CEOBrief] ✅ Draft created, Kandia alerted');
+  } catch(e) {
+    console.error('[CEOBrief] Error:', e.message);
+  }
+}
+
+// ── 5. CAPACITY BURNOUT TREND CHECK ──────────────────────────
+async function checkCapacityTrends() {
+  const { dateStr, weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.capacityCheckWeek === weekKey) return;
+
+  try {
+    const now = new Date();
+    const raw = JSON.parse(readFileSync('/home/checkins.json','utf8')||'[]');
+    const threeWeeksAgo = new Date(now.getTime()-21*24*60*60*1000);
+
+    // Group by person, last 3 weeks
+    const byPerson = {};
+    raw.filter(c=>c.submitted && new Date(c.submitted)>=threeWeeksAgo).forEach(c=>{
+      if (!c.name) return;
+      if (!byPerson[c.name]) byPerson[c.name] = [];
+      byPerson[c.name].push({capacity:c.capacity||0, submitted:c.submitted});
+    });
+
+    const atRisk = [], missingCheckIns = [];
+
+    // Check staff that should be checking in
+    const EXPECTED_STAFF = ['Janita Zhang','Diane Kruger','Garima Arora','Reinette Kruger','Dani Stevenson','Ross Mackenzie','Cherry Abadeza','Paul Johnston','Rionoch Goodwin'];
+    EXPECTED_STAFF.forEach(name => {
+      const entries = byPerson[name]||[];
+      if (entries.length === 0) {
+        missingCheckIns.push(name);
+      } else {
+        const avg = Math.round(entries.reduce((s,e)=>s+e.capacity,0)/entries.length);
+        const recent = entries.slice(-3);
+        const allHigh = recent.length >= 2 && recent.every(e=>e.capacity>=88);
+        if (allHigh) atRisk.push({name, avg, weeks: recent.length, entries: recent});
+      }
+    });
+
+    if (atRisk.length === 0 && missingCheckIns.length === 0) {
+      state.capacityCheckWeek = weekKey;
+      saveProactiveState(state);
+      return;
+    }
+
+    let body = `Hi Kandia,\n\nWeekly staff capacity and wellbeing alert.\n\n`;
+
+    if (atRisk.length > 0) {
+      body += `BURNOUT RISK — consistently high capacity (3 weeks)\n${'─'.repeat(50)}\n`;
+      atRisk.forEach(p => {
+        body += `\n  ${p.name} — avg ${p.avg}% capacity\n`;
+        p.entries.forEach(e => body += `    Week of ${new Date(e.submitted).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}: ${e.capacity}%\n`);
+        body += `  Suggested action: Have a check-in conversation with ${p.name.split(' ')[0]} about workload and support needed.\n`;
+      });
+    }
+
+    if (missingCheckIns.length > 0) {
+      body += `\nMISSING CHECK-INS (3+ weeks)\n${'─'.repeat(50)}\n`;
+      missingCheckIns.forEach(n => body += `  • ${n}\n`);
+      body += `\nPlease remind these team members to complete their weekly check-in.\n`;
+    }
+
+    body += `\n─────────────────\nCinderella — Weekly Capacity Alert`;
+    await draftToKandia(`👥 Staff capacity alert — ${atRisk.length} at burnout risk, ${missingCheckIns.length} missing check-ins`, body, atRisk.length>0);
+
+    // Update trend history for dashboard
+    state.capacityTrends = byPerson;
+    state.capacityCheckWeek = weekKey;
+    state.burnoutRisk = atRisk.map(p=>p.name);
+    saveProactiveState(state);
+    console.log('[CapacityTrend] ✅ Alert sent');
+  } catch(e) {
+    console.error('[CapacityTrend] Error:', e.message);
+  }
+}
+
+// ── 6. FINANCIAL INTELLIGENCE ─────────────────────────────────
+async function checkFinancialAlerts(forceRun) {
+  if (!tokenStore.access_token) return { found: false, error: 'Not authenticated' };
+  const { monthKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  // Only skip if we have a GOOD result already saved (not null) AND it's not forced
+  const hasGoodResult = state.financialSnapshot?.result && state.financialSnapshot.result !== 'null';
+  if (!forceRun && state.financeCheckMonth === monthKey && hasGoodResult) {
+    console.log('[FinanceAlert] Good result already saved for', monthKey, '— skipping. Force to re-run.');
+    return { found: true, skipped: true };
+  }
+  console.log('[FinanceAlert] Running check. forceRun:', !!forceRun, '| monthKey:', monthKey, '| hasGoodResult:', !!hasGoodResult);
+
+  try {
+    const now = new Date();
+    const since = new Date(now.getTime()-90*24*60*60*1000).toISOString(); // 90 days back
+
+    // TWO-TRACK SEARCH:
+    // Track 1: Diane's emails specifically (using $filter WITHOUT encodeURIComponent — 
+    //           OData needs raw /  @  '  characters in the query string)
+    let finEmails = [];
+    try {
+      const dianeRes = await graphGet(
+        "/me/messages?$filter=from/emailAddress/address eq 'diane.k@risk2solution.com'&$top=50&$select=id,subject,from,bodyPreview,body,receivedDateTime&$orderby=receivedDateTime desc"
+      );
+      finEmails = dianeRes.value||[];
+      console.log('[FinanceAlert] Diane filter found:', finEmails.length, 'emails');
+    } catch(e) {
+      console.warn('[FinanceAlert] Diane $filter error:', e.message);
+    }
+
+    // Track 2: If Track 1 returned nothing, fallback to fetching 500 and filtering locally
+    if (finEmails.length === 0) {
+      console.log('[FinanceAlert] Falling back to local filter on 500 emails');
+      try {
+        const allRes = await graphGet(
+          '/me/messages?$top=500&$select=id,subject,from,bodyPreview,body,receivedDateTime&$orderby=receivedDateTime desc'
+        );
+        const allEmails = allRes.value||[];
+        console.log('[FinanceAlert] Fetched', allEmails.length, 'emails for local filter');
+        // STRICT finance filter — avoid false matches like "Application" matching p.l
+        finEmails = allEmails.filter(e => {
+          const fromAddr = (e.from?.emailAddress?.address||'').toLowerCase();
+          const subj = (e.subject||'').toLowerCase();
+          if (subj.includes('board report ready') || subj.includes('morning brief') || subj.includes('disp')) return false;
+          const isDiane = fromAddr === 'diane.k@risk2solution.com';
+          // SPECIFIC finance keywords — NOT p.l (matches "application"!) 
+          const isFinance = subj.includes('p&l') || subj.includes('profit') || subj.includes('loss') ||
+                            subj.includes('actuals') || subj.includes('forecast') || subj.includes('month end') ||
+                            subj.includes('financial') || subj.includes('revenue') || subj.includes('budget') ||
+                            subj.includes('cash flow') || subj.includes('p/l') || subj.includes('pl update') ||
+                            (isDiane && subj.match(/result|update|report/i));
+          return isDiane || (fromAddr.includes('risk2solution.com') && isFinance);
+        });
+        console.log('[FinanceAlert] Local filter found:', finEmails.length, 'finance emails');
+      } catch(e) {
+        console.error('[FinanceAlert] Fallback fetch error:', e.message);
+        return { found: false, error: e.message };
+      }
+    }
+
+    finEmails.sort((a,b) => new Date(b.receivedDateTime)-new Date(a.receivedDateTime));
+
+    console.log('[FinanceAlert] Finance emails found:', finEmails.length,
+      finEmails.slice(0,5).map(e => new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) + ' ' + e.from?.emailAddress?.name + ': ' + e.subject).join(' | '));
+
+    if (finEmails.length === 0) {
+      console.warn('[FinanceAlert] No Diane finance emails found');
+      return { found: false, message: 'No P&L emails from Diane found. Ensure she sends to kandia@risk2solution.com.' };
+    }
+
+    // Build context from all finance emails for AI to analyse
+    const emailContext = finEmails.slice(0,8).map(e => {
+      const htmlBody = e.body?.content || '';
+      const bodyText = htmlBody
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+        .replace(/\s+/g, ' ').trim();
+      const fullContent = ((e.bodyPreview||'') + ' ' + bodyText).substring(0, 3000);
+      return `FROM: ${e.from?.emailAddress?.name||'?'} | DATE: ${new Date(e.receivedDateTime).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})}
+SUBJECT: ${e.subject}
+CONTENT: ${fullContent}`;
+    }).join('\n\n---\n\n');
+
+    // Get Aurora outstanding invoices
+    let auroraOutstanding = 0;
+    let auroraActiveCount = 0;
+    try {
+      const aur = await callAurora('/api/projects');
+      const active = (aur.projects||[]).filter(p=>p.phase>=1&&p.phase<=3);
+      auroraActiveCount = active.length;
+      for (const p of active.slice(0,12)) {
+        try {
+          const inv = await callAurora('/api/projects/'+p.id+'/invoices');
+          (inv.invoices||[]).filter(i=>!i.paid).forEach(i=>auroraOutstanding+=parseFloat(i.amount||0));
+        } catch(e) {}
+      }
+    } catch(e) {}
+
+    // Use AI to extract and analyse the financial data
+    const analysisPrompt = `You are Cinderella, COO intelligence assistant for Kandia Du Bruyn at Risk 2 Solution Group.
+
+Analyse these internal finance emails and extract Risk 2 Solution's own financial performance data.
+
+CRITICAL: You are looking for R2S's OWN profit/loss results - NOT vendor invoices, NOT bills R2S needs to pay, NOT supplier statements.
+- Diane Kruger is R2S's Corporate Operations Lead. Her emails contain R2S's monthly P&L results.
+- Ignore any email that is a bill or invoice R2S needs to pay (e.g. from Jewell Moore, suppliers, vendors)
+- Ignore any EOI, tender, or opportunity emails
+- Only extract figures from R2S's internal financial reporting
+
+EMAILS TO ANALYSE:
+${emailContext}
+
+Aurora context: ${auroraActiveCount} active projects, $${Math.round(auroraOutstanding).toLocaleString()} in outstanding client invoices (money owed TO R2S).
+
+Look specifically for phrases like:
+- "negative of $X" or "in a negative" = negative result
+- "positive of $X" or "closed positive" = positive result  
+- "currently X" in context of monthly P&L = current month position
+- Dollar amounts preceded by context about revenue, wages, expenses = financial figures
+
+Return ONLY a JSON object with no markdown:
+{
+  "period": "The reporting period, e.g. August 2026 or July 2026",
+  "result": "R2S net result as +$X,XXX.XX or -$X,XXX.XX. Look for 'negative of $X' or 'positive of $X' in the email. Do NOT return null if figures are present — extract them.",
+  "resultClass": "pos or neg",
+  "keyDriver": "1 sentence on what drove the result, naming specific items and amounts from the email",
+  "ytd": "YTD figure if mentioned, else null",
+  "forecast": "Forward forecast figure if mentioned, else null",
+  "analysis": "3-4 sentences of sharp COO-level analysis. Name specific cost items and amounts. Flag risks. Comment on what this means for cash flow and whether any items are one-off vs recurring. Be analytical and specific.",
+  "actions": ["specific action with dollar amount or deadline if known", "second specific action"],
+  "outstanding": ${Math.round(auroraOutstanding)},
+  "dataFound": true
+}`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+      body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:600,messages:[{role:'user',content:analysisPrompt}]})
+    });
+    const aiData = await aiRes.json();
+    const rawText = (aiData.content||[]).map(c=>c.text||'').join('').trim();
+
+    let snapshot = {};
+    try {
+      const cleaned = rawText.replace(/^```json\s*/,'').replace(/```$/,'').trim();
+      const parsed = JSON.parse(cleaned);
+      // Only use AI result if it actually found data
+      if (parsed.dataFound === false || !parsed.result) {
+        throw new Error('AI returned no financial data — using regex fallback');
+      }
+      snapshot = parsed;
+      console.log('[FinanceAlert] AI extracted:', snapshot.period, snapshot.result);
+    } catch(parseErr) {
+      console.warn('[FinanceAlert] AI fallback:', parseErr.message);
+      // REGEX FALLBACK: extract directly from email text
+      const allText = finEmails.map(e => {
+        const body = (e.body?.content||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ');
+        return (e.bodyPreview||'') + ' ' + body;
+      }).join(' ');
+
+      // Look for "closed on a positive/negative of $X" pattern
+      const closedPos = allText.match(/closed[^$\n]{0,30}positive[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      const closedNeg = allText.match(/closed[^$\n]{0,30}negative[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      // "ending on a positive/negative of $X"
+      const endPos = allText.match(/(?:ending|ended|closing|close)[^$\n]{0,40}positive[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      const endNeg = allText.match(/(?:ending|ended|closing|close)[^$\n]{0,40}negative[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      // "in a negative of $X" or "negative of $X"
+      const inNeg = allText.match(/in a negative[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      const inPos = allText.match(/in a positive[^$\n]{0,20}\$([\d,]+\.?\d{0,2})/i);
+      // "positive of $X" standalone
+      const posOf = allText.match(/positive of \$([\d,]+\.?\d{0,2})/i);
+      const negOf = allText.match(/negative of \$([\d,]+\.?\d{0,2})/i);
+
+      const posMatch = closedPos || endPos || inPos || posOf;
+      const negMatch = closedNeg || endNeg || inNeg || negOf;
+      const isPositive = !!posMatch && !negMatch;
+      const matchedFigure = (posMatch || negMatch || ['','0'])[1] || null;
+
+      // Extract key figures mentioned
+      const allFigures = allText.match(/\$[\d,]+\.?\d{0,2}/g)||[];
+      const uniqueFigures = [...new Set(allFigures)].slice(0,8).join(', ');
+
+      // Determine period from most recent email date
+      const latestDate = new Date(finEmails[0].receivedDateTime);
+      const reportMonth = latestDate.toLocaleString('en-AU',{month:'long',year:'numeric'});
+
+      snapshot = {
+        period: reportMonth,
+        result: matchedFigure ? (isPositive ? '+$' : '-$') + matchedFigure : null,
+        resultClass: matchedFigure ? (isPositive ? 'pos' : 'neg') : 'unknown',
+        keyDriver: matchedFigure
+          ? (isPositive ? 'Month closed positive' : 'Month closed negative') + ' — see Diane Kruger P&L Update for full detail'
+          : 'Review Diane Kruger\'s P&L Update and shared Excel file for figures',
+        ytd: null,
+        forecast: null,
+        analysis: matchedFigure
+          ? 'Regex extraction from email: ' + (isPositive ? '+' : '-') + '$' + matchedFigure + '. Key figures mentioned in emails: ' + uniqueFigures + '. Review Diane\'s P&L Excel (shared 13 Aug) for full breakdown including project-level profitability.'
+          : 'P&L emails found but dollar amounts not automatically extracted. Review: ' + finEmails.map(e=>e.subject).join(', '),
+        actions: [
+          'Open Diane\'s shared P&L Excel file to review full actuals and forecast',
+          'Confirm August forecast figures with Diane given PSG timing changes'
+        ],
+        outstanding: Math.round(auroraOutstanding),
+        dataFound: !!matchedFigure
+      };
+      console.log('[FinanceAlert] Regex extracted:', snapshot.result, '| Figures found:', uniqueFigures);
+    }
+
+    // Save to state
+    if (!state.financialSnapshot) state.financialSnapshot = {};
+    Object.assign(state.financialSnapshot, snapshot, {
+      outstanding: Math.round(auroraOutstanding),
+      auroraActiveCount,
+      updatedAt: now.toISOString(),
+      emailsAnalysed: finEmails.length
+    });
+    // Only mark month as done if we got a real result (not null)
+    if (snapshot.result && snapshot.result !== 'null') {
+      state.financeCheckMonth = monthKey;
+    } else {
+      console.warn('[FinanceAlert] Result is null — NOT setting financeCheckMonth so next trigger will retry');
+    }
+    saveProactiveState(state);
+
+    console.log('[FinanceAlert] ✅ Snapshot saved:', snapshot.period, snapshot.result);
+    return { found: !!snapshot.result, snapshot };
+  } catch(e) {
+    console.error('[FinanceAlert] Error:', e.message);
+    return { found: false, error: e.message };
+  }
+}
+
+// ── 7. COMPLIANCE DEADLINE MONITORING ────────────────────────
+async function checkComplianceDeadlines(silentMode) {
+  if (!tokenStore.access_token) return;
+  const { dateStr } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.complianceCheckDate === dateStr && silentMode) return;
+
+  try {
+    const now = new Date();
+    const in60 = new Date(now.getTime()+60*24*60*60*1000).toISOString();
+    const COMP_KEYWORDS = ['asqa','rto','iso','disp','emdg','renewal','certification','accreditation','compliance','inspection','deadline','submission','tender','insurance','clearance','application','registration','audit','licence','license','workers comp','payroll tax','bas'];
+
+    // ── SOURCE 1: Calendar events ──
+    const cal = await graphGet(`/me/calendarView?startDateTime=${now.toISOString()}&endDateTime=${in60}&$select=subject,start&$top=50`);
+    const compEvents = (cal.value||[]).filter(e => {
+      const s = (e.subject||'').toLowerCase();
+      return COMP_KEYWORDS.some(k=>s.includes(k));
+    }).map(e => ({
+      id: 'cal-'+e.subject+e.start?.dateTime,
+      title: e.subject,
+      dueDate: (e.start.dateTime||e.start.date||'').substring(0,10),
+      daysOut: Math.ceil((new Date(e.start.dateTime||e.start.date)-now)/(24*60*60*1000)),
+      source: 'calendar',
+      category: 'Compliance'
+    }));
+
+    // ── SOURCE 2: Extract compliance items from emails using AI ──
+    const emailCompItems = [];
+    try {
+      const since30 = new Date(now.getTime()-30*24*60*60*1000).toISOString();
+      const emails = await graphGet(
+        `/me/messages?$top=80&$filter=receivedDateTime ge ${since30}&$select=subject,from,bodyPreview,receivedDateTime&$orderby=receivedDateTime desc`
+      );
+
+      // Filter for emails that are likely compliance-related
+      const compEmails = (emails.value||[]).filter(e => {
+        const subj = (e.subject||'').toLowerCase();
+        const prev = (e.bodyPreview||'').toLowerCase();
+        return COMP_KEYWORDS.some(k => subj.includes(k) || prev.includes(k));
+      });
+
+      if (compEmails.length > 0) {
+        console.log('[Compliance] Found', compEmails.length, 'compliance-related emails to analyse');
+
+        // Build a summary for AI to extract structured items from
+        const emailSummary = compEmails.slice(0,20).map(e => {
+          const date = e.receivedDateTime?.substring(0,10)||'';
+          return `FROM: ${e.from?.emailAddress?.name||'?'} (${date})\nSUBJECT: ${e.subject}\nPREVIEW: ${(e.bodyPreview||'').substring(0,200)}`;
+        }).join('\n---\n');
+
+        const extractPrompt = `You are analysing emails received by Kandia Du Bruyn (COO, Risk 2 Solution) to extract compliance deadlines and regulatory obligations.
+
+Today's date: ${dateStr}
+
+EMAILS TO ANALYSE:
+${emailSummary}
+
+Extract any compliance items that have a specific deadline or due date mentioned. Return ONLY a JSON array. Each item must have a real date extracted from the email content.
+
+[
+  {
+    "title": "Brief descriptive title of the compliance item",
+    "dueDate": "YYYY-MM-DD",
+    "category": "one of: Accreditation|Certification|Compliance|Government|Insurance|Legal|Tender|Other",
+    "source_email": "Subject of the email it came from",
+    "notes": "Brief note about what action is needed"
+  }
+]
+
+Rules:
+- Only include items with a specific date mentioned in the email
+- Only include genuinely compliance/regulatory/legal/deadline items (not routine meetings)
+- If no items found, return []
+- Return ONLY the JSON array, no other text`;
+
+        const ai = await fetch('https://api.anthropic.com/v1/messages', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+          body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:800,messages:[{role:'user',content:extractPrompt}]})
+        });
+        const aiData = await ai.json();
+        const rawText = (aiData.content||[]).map(c=>c.text||'').join('').trim();
+
+        try {
+          const extracted = JSON.parse(rawText.replace(/^```json\s*/,'').replace(/```$/,'').trim());
+          if (Array.isArray(extracted)) {
+            extracted.forEach(item => {
+              if (item.title && item.dueDate && item.dueDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                const dueDate = new Date(item.dueDate);
+                if (dueDate >= new Date(dateStr)) { // Only future items
+                  emailCompItems.push({
+                    id: 'email-'+item.title.replace(/\s+/g,'-').toLowerCase()+'-'+item.dueDate,
+                    title: item.title,
+                    dueDate: item.dueDate,
+                    daysOut: Math.ceil((dueDate-now)/(24*60*60*1000)),
+                    source: 'email',
+                    sourceEmail: item.source_email,
+                    notes: item.notes,
+                    category: item.category||'Compliance',
+                    extractedAt: now.toISOString()
+                  });
+                }
+              }
+            });
+            console.log('[Compliance] AI extracted', emailCompItems.length, 'items from emails');
+          }
+        } catch(parseErr) {
+          console.warn('[Compliance] Could not parse AI email extraction:', parseErr.message);
+        }
+      }
+    } catch(emailErr) {
+      console.warn('[Compliance] Email scan error:', emailErr.message);
+    }
+
+    // ── MERGE ALL SOURCES ──
+    const existingItems = state.complianceItems||[];
+    const merged = [...existingItems];
+
+    // Add calendar events not already in list
+    compEvents.forEach(ev => {
+      if (!merged.find(m => m.title===ev.title || (m.dueDate===ev.dueDate && m.source==='calendar'))) {
+        merged.push(ev);
+      }
+    });
+
+    // Add email-extracted items not already in list
+    emailCompItems.forEach(ev => {
+      const isDuplicate = merged.find(m =>
+        m.id === ev.id ||
+        (m.title.toLowerCase() === ev.title.toLowerCase() && m.dueDate === ev.dueDate)
+      );
+      if (!isDuplicate) {
+        merged.push({...ev, id: ev.id || Date.now()+Math.random()});
+        console.log('[Compliance] New item from email:', ev.title, ev.dueDate);
+      }
+    });
+
+    // Recalculate daysOut and remove past items
+    const active = merged
+      .filter(c => c.dueDate && new Date(c.dueDate) >= new Date(dateStr))
+      .map(c => ({...c, daysOut: Math.ceil((new Date(c.dueDate)-now)/(24*60*60*1000))}));
+
+    state.complianceItems = active;
+
+    // Alert for items due at 60/30/14/7 day milestones
+    const alertThresholds = [7,14,30,60];
+    const alertItems = active.filter(c => alertThresholds.some(t => c.daysOut >= t-1 && c.daysOut <= t+1));
+
+    if (alertItems.length > 0) {
+      let body = `Hi Kandia,\n\nCompliance deadline reminders:\n\n`;
+      alertItems.sort((a,b)=>a.daysOut-b.daysOut).forEach(c => {
+        const urgency = c.daysOut<=7?'URGENT':c.daysOut<=14?'14 DAYS':c.daysOut<=30?'30 DAYS':'60 DAYS';
+        body += `[${urgency}] ${c.title}\n  Due: ${c.dueDate}`;
+        if (c.source === 'email' && c.sourceEmail) body += `\n  Source: ${c.sourceEmail}`;
+        if (c.notes) body += `\n  Action: ${c.notes}`;
+        body += `\n\n`;
+      });
+      body += `View the full compliance calendar in Cinderella under the Compliance tab.\n\n─────────────────\nCinderella — Compliance Alert`;
+      await draftToKandia(
+        `⚠ Compliance deadline alert — ${alertItems.length} item${alertItems.length>1?'s':''} due soon`,
+        body,
+        alertItems.some(c=>c.daysOut<=7)
+      );
+    }
+
+    // Log newly extracted items from email as a summary notification
+    const newEmailItems = emailCompItems.filter(ev =>
+      !existingItems.find(m => m.id===ev.id || (m.title.toLowerCase()===ev.title.toLowerCase()&&m.dueDate===ev.dueDate))
+    );
+    if (newEmailItems.length > 0) {
+      let body = `Hi Kandia,\n\nI found ${newEmailItems.length} new compliance item${newEmailItems.length>1?'s':''} in your recent emails:\n\n`;
+      newEmailItems.forEach(c => {
+        body += `• ${c.title}\n  Due: ${c.dueDate} (${c.daysOut} days)\n  From email: ${c.sourceEmail||'?'}\n`;
+        if (c.notes) body += `  Action needed: ${c.notes}\n`;
+        body += `\n`;
+      });
+      body += `These have been added to your Compliance calendar in Cinderella.\n\n─────────────────\nCinderella — Compliance Intelligence`;
+      await draftToKandia(
+        `📋 ${newEmailItems.length} new compliance item${newEmailItems.length>1?'s':''} found in your emails`,
+        body,
+        newEmailItems.some(c=>c.daysOut<=14)
+      );
+    }
+
+    state.complianceCheckDate = dateStr;
+    saveProactiveState(state);
+    console.log('[Compliance] ✅ Active items:', active.length, '| Email extractions:', emailCompItems.length, '| Alerts:', alertItems.length);
+  } catch(e) {
+    console.error('[Compliance] Error:', e.message);
+  }
+}
+
+// ── 8. ONBOARDING WORKFLOW GENERATOR ─────────────────────────
+async function checkOnboardingTriggers() {
+  if (!tokenStore.access_token) return;
+  const state = loadProactiveState();
+  if (!state.onboardingProcessed) state.onboardingProcessed = {};
+
+  try {
+    const since = new Date(Date.now()-3*24*60*60*1000).toISOString();
+    const emails = await graphGet(`/me/messages?$top=30&$filter=receivedDateTime ge ${since}&$select=subject,from,bodyPreview,conversationId`);
+
+    const HIRE_KEYWORDS = ['offer of employment','accepted the position','welcome aboard','new team member','onboarding','start date','employment contract'];
+    const hireEmails = (emails.value||[]).filter(e => {
+      const subj = (e.subject||'').toLowerCase();
+      const prev = (e.bodyPreview||'').toLowerCase();
+      return HIRE_KEYWORDS.some(k=>subj.includes(k)||prev.includes(k));
+    });
+
+    for (const email of hireEmails) {
+      const convId = email.conversationId||email.subject;
+      if (state.onboardingProcessed[convId]) continue;
+
+      console.log('[Onboarding] New hire detected:', email.subject);
+
+      // Extract name from subject/preview
+      const nameMatch = email.subject.match(/- ([A-Z][a-z]+ [A-Z][a-z]+)/);
+      const newHireName = nameMatch ? nameMatch[1] : 'New team member';
+
+      const prompt = `Generate a comprehensive onboarding checklist for a new hire at Risk 2 Solution Group (integrated risk management company). New hire: ${newHireName}.
+
+Format as a list of specific tasks with the assigned person in brackets. Include:
+- HR tasks (Diane Kruger — contract, superannuation, tax file, payroll setup, leave)
+- IT/Systems tasks (Janita Zhang — email, Teams, laptop, systems access, R2S Academy)
+- Compliance tasks (policy documents, WHS induction, privacy training)
+- Operations tasks (Kandia — buddy assigned, 30/60/90 day check-ins planned)
+- Week 1 schedule (team introductions, system orientation, role briefing with CEO)
+
+Output ONLY the checklist, no preamble. Each line: [ ] Task description (Assigned to: Name)`;
+
+      try {
+        const ai = await fetch('https://api.anthropic.com/v1/messages', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+          body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:600,messages:[{role:'user',content:prompt}]})
+        });
+        const aiData = await ai.json();
+        const checklist = (aiData.content||[]).map(c=>c.text||'').join('');
+
+        // Create as open actions
+        const tasks = checklist.split('\n').filter(t=>t.trim().startsWith('[ ]')).slice(0,12);
+        const actions = loadActions();
+        tasks.forEach(task => {
+          actions.unshift({
+            id: Date.now()+Math.random(),
+            title: task.replace('[ ]','').trim(),
+            source: `Onboarding: ${newHireName}`,
+            urgency: 'This week',
+            addedAt: new Date().toISOString(),
+            status: 'open',
+            type: 'onboarding'
+          });
+        });
+        saveActions(actions);
+
+        const body = `Hi Kandia,\n\nI've detected a new hire: ${newHireName}.\n\nI've created an onboarding checklist as open actions in your tracker. Here's the full list:\n\n${checklist}\n\nAll items have been added to your Open Actions tab for tracking.\n\n─────────────────\nCinderella — Onboarding Workflow`;
+        await draftToKandia(`🆕 Onboarding workflow created — ${newHireName}`, body, true);
+
+        state.onboardingProcessed[convId] = {name:newHireName, date:new Date().toISOString()};
+        saveProactiveState(state);
+        console.log('[Onboarding] ✅ Workflow created for', newHireName);
+      } catch(e) {
+        console.error('[Onboarding] AI error:', e.message);
+      }
+    }
+  } catch(e) {
+    console.error('[Onboarding] Error:', e.message);
+  }
+}
+
+// ── 9. RECEIVABLES CHASER ─────────────────────────────────────
+async function checkReceivables() {
+  const { weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.receivablesWeek === weekKey) return;
+
+  try {
+    const now = new Date();
+    let chaseDrafts = 0;
+
+    const aur = await callAurora('/api/projects');
+    for (const p of (aur.projects||[]).filter(proj=>proj.phase>=1&&proj.phase<=4).slice(0,15)) {
+      try {
+        const inv = await callAurora('/api/projects/'+p.id+'/invoices');
+        const overdue30 = (inv.invoices||[]).filter(i => {
+          if (i.paid) return false;
+          const age = (now - new Date(i.createdAt||now))/(24*60*60*1000);
+          return age > 30;
+        });
+        if (overdue30.length === 0) continue;
+
+        const total = overdue30.reduce((s,i)=>s+parseFloat(i.amount||0),0);
+        const oldest = Math.round(Math.max(...overdue30.map(i=>(now-new Date(i.createdAt||now))/(24*60*60*1000))));
+
+        const prompt = `Draft a professional but firm payment follow-up email from Risk 2 Solution to ${p.clientName}. 
+Outstanding: ${overdue30.length} invoice${overdue30.length>1?'s':''} totalling $${Math.round(total).toLocaleString()}, ${oldest} days overdue.
+Tone: polite but clear about urgency. Mention payment terms. Request ETA on payment. Max 150 words. Sign off as Accounts Receivable, Risk 2 Solution.`;
+
+        const ai = await fetch('https://api.anthropic.com/v1/messages', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+          body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:250,messages:[{role:'user',content:prompt}]})
+        });
+        const aiData = await ai.json();
+        const draftBody = (aiData.content||[]).map(c=>c.text||'').join('');
+
+        // Save as draft for Kandia to review and send
+        await createOutlookDraftOnly(
+          `Payment follow-up: ${p.clientName} — $${Math.round(total).toLocaleString()} outstanding`,
+          draftBody,
+          await getKandiaEmail() // placeholder — Kandia reviews before sending to client
+        );
+        chaseDrafts++;
+      } catch(e) {}
+    }
+
+    if (chaseDrafts > 0) {
+      await draftToKandia(
+        `💰 ${chaseDrafts} payment follow-up draft${chaseDrafts>1?'s':''} ready in Outlook Drafts`,
+        `Hi Kandia,\n\nI've drafted ${chaseDrafts} payment follow-up email${chaseDrafts>1?'s':''} for invoices outstanding 30+ days.\n\nThey're in your Outlook Drafts — please update the client email address and review before sending.\n\n─────────────────\nCinderella — Receivables`,
+        false
+      );
+    }
+
+    state.receivablesWeek = weekKey;
+    saveProactiveState(state);
+    console.log('[Receivables] ✅ Created', chaseDrafts, 'chase drafts');
+  } catch(e) {
+    console.error('[Receivables] Error:', e.message);
+  }
+}
+
+// ── COMPLIANCE CALENDAR STATE API ─────────────────────────────
+app.get('/proactive/state', requireAuth, (req, res) => {
+  res.json(loadProactiveState());
+});
+
+// Returns pre-built HTML for the financial intelligence card
+app.get('/proactive/finance-html', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  const fin = state.financialSnapshot;
+  const result = fin && (fin.result || fin.lastResult);
+
+  if (!fin || !result || result === 'null') {
+    return res.send(`<div style="display:flex;align-items:center;gap:10px;padding:4px 0">
+      <div style="font-size:11px;color:#9A9693">No P&L snapshot yet. Click Check now to scan finance emails.</div>
+      <button onclick="rescanFinance()" style="flex-shrink:0;font-size:10px;padding:3px 10px;border-radius:6px;background:#0D8A62;color:#fff;border:none;cursor:pointer;font-weight:600">Check now</button>
+    </div>`);
+  }
+
+  const isPos = !result.toString().trim().startsWith('-');
+  const col   = isPos ? '#0D8A62' : '#C8211E';
+  const bg    = isPos ? '#DCEEE6' : '#FEE2E2';
+  const outstanding = fin.outstanding ? Number(fin.outstanding).toLocaleString() : null;
+  const updatedAt   = fin.updatedAt  ? new Date(fin.updatedAt).toLocaleDateString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+  const emailCount  = fin.emailsAnalysed ? fin.emailsAnalysed + ' emails analysed' : '';
+
+  const ytdHtml = (fin.ytd && fin.ytd !== 'null') ? `
+    <div style="background:#F2F1EE;border-radius:8px;padding:12px 16px;min-width:100px">
+      <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">YTD FY26/27</div>
+      <div style="font-size:18px;font-weight:700;color:#111110">${fin.ytd}</div>
+    </div>` : '';
+
+  const forecastHtml = (fin.forecast && fin.forecast !== 'null') ? `
+    <div style="background:#F2F1EE;border-radius:8px;padding:12px 16px;min-width:100px">
+      <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Forecast</div>
+      <div style="font-size:18px;font-weight:700;color:${fin.forecast.startsWith('-') ? '#C8211E' : '#0D8A62'}">${fin.forecast}</div>
+    </div>` : '';
+
+  const outstandingHtml = outstanding ? `
+    <div style="background:#FEF3C7;border-radius:8px;padding:12px 16px;min-width:100px">
+      <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Aurora Outstanding</div>
+      <div style="font-size:18px;font-weight:700;color:#D97706">$${outstanding}</div>
+      ${fin.auroraActiveCount ? `<div style="font-size:10px;color:#4A4844;margin-top:2px">${fin.auroraActiveCount} projects</div>` : ''}
+    </div>` : '';
+
+  const analysisHtml = (fin.analysis && fin.analysis !== 'null') ? `
+    <div style="background:#F2F1EE;border-radius:8px;padding:11px 14px;margin-bottom:10px;border-left:3px solid #2358D4">
+      <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">COO Analysis</div>
+      <div style="font-size:12px;color:#111110;line-height:1.6">${fin.analysis}</div>
+    </div>` : '';
+
+  const actions = Array.isArray(fin.actions) ? fin.actions.filter(a => a && a !== 'null') : [];
+  const actionsHtml = actions.length > 0 ? `
+    <div style="margin-bottom:8px">
+      <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px">Actions</div>
+      ${actions.map(a => `<div style="font-size:11.5px;color:#111110;padding:3px 0;display:flex;gap:6px"><span style="color:#0D8A62;font-weight:700;flex-shrink:0">&rarr;</span><span>${a}</span></div>`).join('')}
+    </div>` : '';
+
+  res.send(`
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin-bottom:12px">
+      <div style="background:${bg};border-radius:8px;padding:12px 16px;flex:1;min-width:120px">
+        <div style="font-size:9px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">${fin.period || 'Current Period'}</div>
+        <div style="font-size:24px;font-weight:800;color:${col};letter-spacing:-0.8px">${result}</div>
+        ${fin.keyDriver && fin.keyDriver !== 'null' ? `<div style="font-size:10px;color:#4A4844;margin-top:3px;line-height:1.4">${fin.keyDriver}</div>` : ''}
+      </div>
+      ${ytdHtml}${forecastHtml}${outstandingHtml}
+    </div>
+    ${analysisHtml}
+    ${actionsHtml}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
+      <span style="font-size:9px;color:#9A9693">${updatedAt}${emailCount ? ' &middot; ' + emailCount : ''}</span>
+      <button onclick="rescanFinance()" style="font-size:10px;padding:3px 10px;border-radius:6px;background:#F2F1EE;border:1px solid rgba(0,0,0,0.13);cursor:pointer">&#8635; Re-scan emails</button>
+    </div>
+  `);
+});
+
+// Manually set financial snapshot (for when emails don't parse automatically)
+app.post('/proactive/finance-snapshot', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  if (!state.financialSnapshot) state.financialSnapshot = {};
+  Object.assign(state.financialSnapshot, req.body, {
+    updatedAt: new Date().toISOString(),
+    source: 'manual'
+  });
+  saveProactiveState(state);
+  console.log('[FinanceAlert] Manual snapshot set:', req.body.period, req.body.result);
+  res.json({ success: true, snapshot: state.financialSnapshot });
+});
+
+app.post('/proactive/compliance/add', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  if (!state.complianceItems) state.complianceItems = [];
+  const item = {
+    id: Date.now(),
+    title: req.body.title,
+    dueDate: req.body.dueDate,
+    category: req.body.category||'Other',
+    daysOut: Math.ceil((new Date(req.body.dueDate)-new Date())/(24*60*60*1000)),
+    source: 'manual'
+  };
+  state.complianceItems.push(item);
+  saveProactiveState(state);
+  res.json({success:true, item});
+});
+
+app.delete('/proactive/compliance/:id', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  state.complianceItems = (state.complianceItems||[]).filter(c=>String(c.id)!==String(req.params.id));
+  saveProactiveState(state);
+  res.json({success:true});
+});
+
+// Clear onboarding state (disable false positive trigger)
+app.post('/proactive/clear-onboarding', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  state.onboardingProcessed = {};
+  saveProactiveState(state);
+  // Also remove onboarding actions from open actions tracker
+  try {
+    const actions = loadActions();
+    const cleaned = actions.filter(a => a.type !== 'onboarding');
+    const removed = actions.length - cleaned.length;
+    saveActions(cleaned);
+    res.json({ success: true, message: 'Onboarding state cleared, ' + removed + ' actions removed' });
+  } catch(e) {
+    res.json({ success: true, message: 'State cleared', error: e.message });
+  }
+});
+
+app.post('/proactive/trigger/:feature', requireAuth, async (req, res) => {
+  const { feature } = req.params;
+  // Force-trigger any proactive feature for testing
+  const state = loadProactiveState();
+  const { weekKey, dateStr } = getBrisbaneNow();
+  try {
+    if (feature==='morning') { delete state.morningBriefDate; saveProactiveState(state); await sendMorningBrief(); }
+    else if (feature==='aurora') { delete state.auroraAlertWeek; saveProactiveState(state); await sendAuroraProjectAlert(); }
+    else if (feature==='ceo') { delete state.ceoWeeklyBriefWeek; saveProactiveState(state); await draftCEOWeeklyBrief(); }
+    else if (feature==='capacity') { delete state.capacityCheckWeek; saveProactiveState(state); await checkCapacityTrends(); }
+    else if (feature==='compliance') { delete state.complianceCheckDate; saveProactiveState(state); await checkComplianceDeadlines(); }
+    else if (feature==='receivables') { delete state.receivablesWeek; saveProactiveState(state); await checkReceivables(); }
+    else if (feature==='finance') {
+      // Explicitly clear the month guard so checkFinancialAlerts always runs
+      const pState = loadProactiveState();
+      const prevMonth = pState.financeCheckMonth;
+      delete pState.financeCheckMonth;
+      delete pState.financialSnapshot; // Also clear bad snapshot so it regenerates
+      saveProactiveState(pState);
+      console.log('[FinanceAlert] Trigger: cleared financeCheckMonth (was:', prevMonth, ')');
+      const finResult = await checkFinancialAlerts(true);
+      const snap = loadProactiveState().financialSnapshot;
+      const hasResult = snap && snap.result && snap.result !== 'null';
+      return res.json({ success: true, feature,
+        message: hasResult
+          ? 'Found ' + snap.period + ' — ' + snap.result + '. Dashboard updated.'
+          : 'Emails found but could not extract P&L figures. Check Azure logs.',
+        snapshot: snap||null
+      });
+    }
+    else if (feature==='onboarding') { await checkOnboardingTriggers(); }
+    res.json({success:true, feature});
+  } catch(e) {
+    res.status(500).json({error:e.message});
+  }
+});
+
+// Generate populated Word checklist from template using Python script
+async function generatePopulatedChecklist(entry) {
+  const { execSync } = await import('child_process');
+  const data = {
+    staffName:        entry.staffName || '',
+    staffRole:        entry.staffRole || '',
+    startDate:        entry.startDate || '',
+    endDate:          entry.endDate || '',
+    coveringColleague: entry.coveringColleague || '',
+    manager:          'Kandia Du Bruyn',
+    checklist:        entry.checklist || {},
+    sharepointLinks:  entry.sharepointLinks || {}
+  };
+  const SCRIPT_PATHS = [
+    '/home/generate_checklist.py',
+    '/home/site/wwwroot/generate_checklist.py',
+  ];
+  let scriptPath = null;
+  for (const p of SCRIPT_PATHS) {
+    if (existsSync(p)) { scriptPath = p; break; }
+  }
+  if (!scriptPath) throw new Error('generate_checklist.py not found');
+  const b64 = execSync(`python3 ${scriptPath} '${JSON.stringify(data).replace(/'/g,"'\''")}' `, {timeout:15000}).toString().trim();
+  if (!b64) throw new Error('Python script returned empty output');
+  return b64;
+}
+
+// Parse email replies to auto-update checklist and extract SharePoint links
+async function scanLeaveReplies(state) {
+  if (!tokenStore.access_token) return;
+  try {
+    const since = new Date(Date.now() - 7*24*60*60*1000).toISOString(); // 7 days
+    const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+
+    // Scan INBOX and SENT ITEMS — self-replies land in sent, colleague replies in inbox
+    let allMsgs = [];
+    try {
+      const [inboxData, sentData] = await Promise.all([
+        graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$orderby=receivedDateTime desc&$top=100&$select=id,subject,from,bodyPreview,conversationId,receivedDateTime`),
+        graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$orderby=createdDateTime desc&$top=100&$select=id,subject,from,bodyPreview,conversationId,createdDateTime`)
+      ]);
+      const seen = new Set();
+      allMsgs = [...(inboxData.value||[]), ...(sentData.value||[])].filter(m => {
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        if (!m.receivedDateTime) m.receivedDateTime = m.createdDateTime || new Date().toISOString();
+        return true;
+      });
+    } catch(fetchErr) {
+      console.error('[Leave] scanLeaveReplies: email fetch error:', fetchErr.message);
+      return;
+    }
+
+    let changed = false;
+
+    for (const entry of (state.leaveEntries||[])) {
+      if (!['process_started','in_progress','confirmed'].includes(entry.status)) continue;
+      if (!entry.firstEmailSentAt) continue;
+
+      const firstSentAt = new Date(entry.firstEmailSentAt);
+      if (!entry.colleagueChecklists) entry.colleagueChecklists = {};
+      if (!entry.checklist) entry.checklist = {};
+      if (!entry.processedReplies) entry.processedReplies = [];
+
+      const relevantAddrs = [...new Set([
+        ...(entry.coveringEmails||[]),
+        entry.staffEmail
+      ].filter(Boolean))];
+
+      // Find valid replies
+      const replies = allMsgs.filter(m => {
+        const addr = (m.from?.emailAddress?.address||'').toLowerCase();
+        const subj = (m.subject||'').toLowerCase();
+        if (!relevantAddrs.some(e => addr === e.toLowerCase())) return false;
+        if (new Date(m.receivedDateTime) <= firstSentAt) return false;
+        if (!subj.includes('re:') && !subj.includes('fw:') && !subj.includes('fwd:')) return false;
+        const replyId = m.id;
+        if (entry.processedReplies.includes(replyId)) return false;
+        return true;
+      });
+
+      if (!replies.length) continue;
+      console.log('[Leave] Found', replies.length, 'unprocessed repl(ies) for', entry.staffName);
+
+      for (const reply of replies) {
+        // Fetch full body
+        let bodyText = (reply.bodyPreview||'').toLowerCase();
+        try {
+          const full = await graphGet(`/me/messages/${reply.id}?$select=body,bodyPreview`);
+          const raw = (full.body?.content||full.bodyPreview||'');
+          bodyText = raw.replace(/<[^>]+>/g,' ').replace(/&[a-z]+;/gi,' ').replace(/\s+/g,' ').toLowerCase();
+        } catch(e) { console.warn('[Leave] Body fetch failed, using preview'); }
+
+        // Check for affirmative language
+        const isAffirmative = /(complet|done|finish|confirm|tick|checked|yes|agreed|sorted|all good|signoff|sign off|signed)/i.test(bodyText);
+        if (!isAffirmative) {
+          console.log('[Leave] Reply not affirmative, skipping:', (reply.subject||'').substring(0,60));
+          entry.processedReplies.push(reply.id);
+          changed = true;
+          continue;
+        }
+
+        console.log('[Leave] Processing affirmative reply:', (reply.subject||'').substring(0,60));
+
+        // Determine which items to tick
+        // If body contains "all" + affirmative OR the reply is short (just a confirmation), tick everything
+        const allDone = /all (items|sections|tasks|checklist)?.{0,20}(complete|done|confirmed|finished)/i.test(bodyText)
+          || /everything.{0,20}(complete|done|confirmed|finished)/i.test(bodyText);
+
+        const SECTION_MAP = [
+          { keys:['key contacts','contacts and access','contacts & access','contacts, access','contact list'], items:['contacts','access','external'] },
+          { keys:['current state','status update','project status','state of work'], items:['status','deadlines','stalling'] },
+          { keys:['sharepoint','resources and links','resources & links','links tested','folder'], items:['sharepoint','sp_verified'] },
+          { keys:['decisions','judgement','risks','sensitivities'], items:['decisions','risks'] },
+          { keys:['handover discussion','discussion','meeting','met with','spoke with'], items:['discussion','understood','emergency'] },
+          { keys:['section 1','section one','contacts section'], items:['contacts','access','external'] },
+          { keys:['section 2','section two','work section'], items:['status','deadlines','stalling'] },
+          { keys:['section 3','section three','links section'], items:['sharepoint','sp_verified'] },
+          { keys:['section 4','section four','decision'], items:['decisions','risks'] },
+          { keys:['section 5','section five','handover section','discussion section'], items:['discussion','understood','emergency'] },
+        ];
+
+        const itemsToTick = new Set();
+        if (allDone) {
+          CHECKLIST_ITEMS.filter(i=>!i.id.includes('signed')).forEach(i=>itemsToTick.add(i.id));
+        } else {
+          for (const mapping of SECTION_MAP) {
+            if (mapping.keys.some(k => bodyText.includes(k))) {
+              mapping.items.forEach(id => itemsToTick.add(id));
+            }
+          }
+        }
+
+        // Extract SharePoint links
+        const spLinks = bodyText.match(/https?:\/\/[^\s<>"]+sharepoint[^\s<>"]+/gi)||[];
+
+        if (itemsToTick.size === 0 && spLinks.length === 0) {
+          console.log('[Leave] No items matched in reply — marking processed anyway');
+          entry.processedReplies.push(reply.id);
+          changed = true;
+          continue;
+        }
+
+        // Update overall checklist
+        let itemsUpdated = false;
+        itemsToTick.forEach(id => {
+          if (!entry.checklist[id]) { entry.checklist[id] = true; itemsUpdated = true; }
+        });
+
+        // Update per-colleague checklists
+        const replyAddr = (reply.from?.emailAddress?.address||'').toLowerCase();
+        const colleagues2 = (entry.coveringColleagues||[]).map((name,i)=>({name, email:(entry.coveringEmails||[])[i]||''}));
+        const fromColleague = colleagues2.find(c => c.email && replyAddr === c.email.toLowerCase());
+        const toUpdate = fromColleague ? [fromColleague] : colleagues2;
+        toUpdate.forEach(c => {
+          if (!c.email) return;
+          if (!entry.colleagueChecklists[c.email]) entry.colleagueChecklists[c.email] = {name:c.name, checklist:{}};
+          itemsToTick.forEach(id => {
+            if (!entry.colleagueChecklists[c.email].checklist[id]) {
+              entry.colleagueChecklists[c.email].checklist[id] = true; itemsUpdated = true;
             }
           });
         });
-        if (actionableItems.length > 0) {
-          html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Client feedback · action required</div>';
-          html += window._feedbackItems = actionableItems;
-          actionableItems.map(function(f, fi) {
-            return '<div class="ins" onclick="feedbackClick('+fi+')">' +
-              '<div class="il">' + f.client + '</div>' +
-              '<div class="it">' + (f.note || f.sentiment) + '</div>' +
-            '</div>';
-          }).join('');
+
+        // SharePoint links
+        if (spLinks.length && !entry.sharepointLinks) entry.sharepointLinks = {};
+        spLinks.forEach((link,i) => {
+          const fields = ['masterFolder','clientFolder','templates','correspondence','other'];
+          const field = fields[i]||'other';
+          if (!entry.sharepointLinks[field]) { entry.sharepointLinks[field] = link; itemsUpdated = true; }
+        });
+
+        entry.processedReplies.push(reply.id);
+        if (itemsUpdated) {
+          entry.status = 'in_progress';
+          entry.lastChecklistUpdateAt = new Date().toISOString();
+          entry.awaitingReply = false;
+          changed = true;
+          console.log('[Leave] ✅ Ticked', itemsToTick.size, 'items for', entry.staffName, 'from reply by', reply.from?.emailAddress?.name);
+
+          // Send updated checklist immediately
+          try {
+            const done = CHECKLIST_ITEMS.filter(i=>entry.checklist[i.id]).length;
+            const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
+            const allCoverEmails = (entry.coveringEmails&&entry.coveringEmails.length>0) ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
+            const ccEmails = entry.staffEmail ? [entry.staffEmail] : [];
+            const htmlUpdate = buildLeaveEmail('checklist_updated', entry);
+            await sendLeaveAlert(allCoverEmails, ccEmails,
+              '📋 Checklist updated: '+pct+'% complete — '+entry.staffName+' leave handover', htmlUpdate, 'normal', entry);
+          } catch(emailErr) { console.error('[Leave] Update email error:', emailErr.message); }
         }
-        // No section shown if no actionable feedback — that's a good thing
       }
-    } catch(fbErr) {
-      console.warn('Feedback fetch failed:', fbErr.message);
     }
 
-    // Compliance from emails
-    var complianceKeywords = ['insurance','renewal','audit','compliance','iso','expir','certificate','licence','license','policy','indemnity'];
-    var complianceItems = [];
-    M365.emails.concat(infoEmails||[]).forEach(function(e){ var t=((e.subject||'')+' '+(e.from||'')).toLowerCase(); if(complianceKeywords.some(function(k){return t.includes(k);})) complianceItems.push(e.subject); });
-    docLibrary.forEach(function(d){ if(complianceKeywords.some(function(k){return d.name.toLowerCase().includes(k);})) complianceItems.push(d.name); });
-    html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px">Compliance · emails &amp; documents</div>';
-    if (complianceItems.length > 0) {
-      html += '<div class="ins" onclick="complianceClick(this)" data-items="' + complianceItems.slice(0,5).join('|').replace(/"/g,'&quot;') + '">' +
-      '<div class="il">' + complianceItems.length + ' item' + (complianceItems.length>1?'s':'') + ' detected</div>' +
-      '<div class="it">' + complianceItems.slice(0,3).join(' · ') + '</div></div>';
-    } else {
-      html += '<div class="ins"><div class="il">No compliance items detected</div><div class="it" style="color:var(--t3)">Upload insurance or audit documents to track them here</div></div>';
-    }
-
-    // Staff capacity
-    var overloaded = SD.filter(function(s){ return s.capacity>=85; });
-    html += '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px">Staff capacity</div>';
-    if (SD.length > 0) {
-      var capText = 'Avg capacity: '+Math.round(SD.reduce(function(a,b){return a+b.capacity;},0)/SD.length)+'%';
-      if (overloaded.length > 0) capText += ' · '+overloaded.length+' overloaded';
-      html += '<div class="ins" onclick="qa(\'Give me a staff capacity analysis and recommend workload adjustments\')"><div class="il">From check-ins</div><div class="it">'+capText+'</div></div>';
-    } else {
-      html += '<div class="ins"><div class="il">Staff capacity</div><div class="it" style="color:var(--t3)">No check-ins synced yet</div></div>';
-    }
-
-  } catch(e) {
-    html += '<div style="font-size:11px;color:var(--t3);padding:6px 0">Error loading metrics: '+e.message+'</div>';
-  }
-
-  el.innerHTML = html || '<div style="font-size:11px;color:var(--t3);padding:8px 0">No live data available.</div>';
-}
-
-// ── CLOCKIFY ──
-var clockifyData = null;
-async function loadClockify() {
-  var listEl=document.getElementById('clockifyStaffList'),flagsEl=document.getElementById('clockifyFlagsList'),statusEl=document.getElementById('clockifyConnStatus'),alertEl=document.getElementById('clockifyAlert');
-  if(listEl) listEl.innerHTML='<div style="font-size:12px;color:var(--t2);padding:12px 0">Loading Clockify data...</div>';
-  try {
-    var sr=await fetch('/clockify/status');
-    if(!sr.ok) throw new Error('Server returned '+sr.status);
-    var sd=await sr.json();
-    if(!sd.connected){
-      if(statusEl) statusEl.innerHTML='<span style="color:var(--r)">Not connected</span>';
-      if(alertEl){alertEl.style.display='block';alertEl.innerHTML='<div class="alert-box warn"><div class="ab-title">Clockify not connected</div><div class="ab-text">Add <strong>CLOCKIFY_API_KEY</strong> to Azure App Service → Configuration → Application Settings. <a href="https://app.clockify.me/user/settings" target="_blank" style="color:var(--b)">Get your API key →</a></div></div>';}
-      if(listEl) listEl.innerHTML='<div style="font-size:12px;color:var(--t3);padding:12px 0">Connect Clockify to see time tracking data.</div>';
-      return;
-    }
-    if(statusEl) statusEl.innerHTML='<span style="color:var(--g)">✓ Connected · '+sd.workspace+'</span>';
-    if(alertEl) alertEl.style.display='none';
-  } catch(e){ if(statusEl) statusEl.innerHTML='<span style="color:var(--r)">Connection error</span>'; return; }
-  try {
-    var r=await fetch('/clockify/summary');
-    if(!r.ok) throw new Error('Server returned '+r.status);
-    var d=await r.json(); if(d.error) throw new Error(d.error);
-    clockifyData=d;
-    var totalHours=d.summary.reduce(function(a,b){return a+b.totalHours;},0);
-    var totalFlags=d.summary.reduce(function(a,b){return a+(b.flags||[]).length;},0);
-    var el1=document.getElementById('cf-total-hours'),el2=document.getElementById('cf-flags'),el3=document.getElementById('cf-staff-count');
-    if(el1) el1.textContent=Math.round(totalHours*10)/10+'h';
-    if(el2){el2.textContent=totalFlags;el2.style.color=totalFlags>0?'var(--r)':'var(--g)';}
-    if(el3) el3.textContent=d.summary.filter(function(s){return s.totalHours>0;}).length;
-    var badge=document.getElementById('clockifyBadge');
-    if(badge){badge.style.display=totalFlags>0?'inline-block':'none';badge.textContent=totalFlags;}
-    if(listEl){
-      var wkLabel=d.weekStart?new Date(d.weekStart).toLocaleDateString('en-AU',{day:'numeric',month:'short'})+' →':'This week';
-      listEl.innerHTML=d.summary.map(function(person,i){
-        var av=['background:var(--bl2);color:#185FA5','background:var(--al);color:#854F0B','background:var(--gl);color:#0F6E56','background:#FBEAF0;color:#993556','background:#EEEDFE;color:#534AB7'];
-        var ini=person.name.split(' ').map(function(w){return w[0]||'';}).join('').substring(0,2).toUpperCase();
-        var ci=person.checkIn;
-        var ciBar=ci?('<div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span style="font-size:9px;color:var(--t3);min-width:80px">Reported cap</span><div style="flex:1;background:var(--bg3);border-radius:3px;height:4px"><div style="width:'+ci.capacity+'%;height:100%;border-radius:3px;background:'+(ci.capacity>=85?'var(--r)':ci.capacity>=70?'var(--a)':'var(--g)')+'"></div></div><span style="font-size:9px;font-weight:500;color:var(--t2)">'+ci.capacity+'%</span></div>'):'';
-        var impliedPct=person.totalHours>0?Math.min(100,Math.round((person.totalHours/37.5)*100)):0;
-        var cfBar='<div style="display:flex;align-items:center;gap:6px;margin-top:3px"><span style="font-size:9px;color:var(--t3);min-width:80px">Clockify logged</span><div style="flex:1;background:var(--bg3);border-radius:3px;height:4px"><div style="width:'+impliedPct+'%;height:100%;border-radius:3px;background:var(--b)"></div></div><span style="font-size:9px;font-weight:500;color:var(--b)">'+person.totalHours+'h</span></div>';
-        var projects=Object.keys(person.projects).map(function(p){return '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--bg3);color:var(--t2);margin:1px 2px 1px 0;display:inline-block">'+p+' '+person.projects[p].hours+'h</span>';}).join('');
-        var flagCount=(person.flags||[]).length;
-        var flagBadge=flagCount>0?'<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--rl);color:#A32D2D;margin-left:6px">'+flagCount+' flag'+(flagCount>1?'s':'')+'</span>':'';
-        return '<div style="padding:10px 0;border-bottom:0.5px solid var(--bl);cursor:pointer" onclick="analyseStaffClockify(\''+person.name+'\')">'+
-          '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'+
-            '<div style="width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;flex-shrink:0;'+av[i%av.length]+'">'+ini+'</div>'+
-            '<span style="font-size:12px;font-weight:500;color:var(--t1)">'+person.name.split(' ')[0]+'</span>'+flagBadge+
-            '<span style="font-size:10px;color:var(--t3);margin-left:auto">'+wkLabel+'</span>'+
-          '</div>'+cfBar+ciBar+(projects?'<div style="margin-top:5px">'+projects+'</div>':'')+
-        '</div>';
-      }).join('')||'<div style="font-size:12px;color:var(--t3);padding:12px 0">No time entries found this week.</div>';
-    }
-    var allFlags=[];
-    d.summary.forEach(function(person){(person.flags||[]).forEach(function(f){allFlags.push({person:person.name,flag:f});});});
-    if(flagsEl){
-      flagsEl.innerHTML=allFlags.length===0?'<div style="font-size:12px;color:var(--g);padding:8px 0">✓ No inconsistencies detected this week.</div>':
-        allFlags.map(function(item){var sev=item.flag.severity==='high'?'ph':item.flag.severity==='medium'?'pm':'pl';return '<div class="pri" onclick="analyseStaffClockify(\''+item.person+'\')"><span class="pp '+sev+'">'+(item.flag.severity==='high'?'High':item.flag.severity==='medium'?'Med':'Low')+'</span><span class="pt"><strong>'+item.person.split(' ')[0]+'</strong> — '+item.flag.message+'</span></div>';}).join('');
-    }
-  } catch(e){ if(listEl) listEl.innerHTML='<div style="font-size:12px;color:var(--r);padding:12px 0">Error: '+e.message+'</div>'; }
-}
-
-function analyseStaffClockify(name) {
-  if(!clockifyData){qa('Analyse the Clockify time tracking data for '+name+' and compare it against their check-in data.');return;}
-  var person=clockifyData.summary.find(function(p){return p.name===name;});
-  if(!person) return;
-  var ctx='CLOCKIFY DATA FOR '+name.toUpperCase()+' (this week):\nTotal hours: '+person.totalHours+'h\n';
-  Object.keys(person.projects).forEach(function(p){ctx+='- '+p+': '+person.projects[p].hours+'h\n';});
-  if(person.checkIn) ctx+='\nCHECK-IN: Capacity '+person.checkIn.capacity+'% | Projects: '+(person.checkIn.projects||'none')+' | Blockers: '+(person.checkIn.blockers||'none')+'\n';
-  if(person.flags&&person.flags.length>0) ctx+='\nFLAGS:\n'+person.flags.map(function(f){return '- '+f.message;}).join('\n');
-  qa('Analyse this Clockify vs check-in data for '+name+' — are they aligned? What should I follow up on?\n\n'+ctx);
-}
-
-function analyseClockify() {
-  if(!clockifyData||!clockifyData.summary){qa('Analyse the Clockify time tracking data for all staff this week. Cross-reference with check-ins and flag inconsistencies.');return;}
-  var ctx='CLOCKIFY WEEKLY SUMMARY:\n\n';
-  clockifyData.summary.forEach(function(p){ctx+=p.name+': '+p.totalHours+'h logged'+(p.checkIn?' | check-in: '+p.checkIn.capacity+'%':'')+'\n';});
-  qa('Analyse this Clockify data for all staff — flag inconsistencies with check-ins and who I should follow up with.\n\n'+ctx.substring(0,3000));
+    if (changed) saveLeaveState(state);
+  } catch(e) { console.error('[Leave] scanLeaveReplies error:', e.message, e.stack?.substring(0,200)); }
 }
 
 
-// ── CHAT FILE ATTACHMENTS ──
-var chatAttachments = []; // {name, type, mimeType, content, base64, size}
-var isListening = false;
-var recognition = null;
+// ── FRIDAY CHECK-IN REMINDER ──
+// Staff on leave can be added to LEAVE_LIST — they are excluded from reminders
+const LEAVE_LIST = ['Ross Mackenzie', 'ross.m@risk2solution.com']; // Update as staff come/go on leave
 
-function handleChatUpload(event) {
-  var files = Array.from(event.target.files);
-  if (!files.length) return;
-  files.forEach(function(file) {
-    var isPdf = file.type === 'application/pdf';
-    var isImg = file.type.startsWith('image/');
-    var maxSize = isPdf ? 20*1024*1024 : isImg ? 5*1024*1024 : 2*1024*1024;
-    if (file.size > maxSize) {
-      addMsg('a', '\u26a0 ' + file.name + ' is too large (' + Math.round(file.size/1024/1024*10)/10 + 'MB). Max: ' + Math.round(maxSize/1024/1024) + 'MB.');
-      return;
-    }
-    var reader = new FileReader();
-    reader.onload = function(e) {
-      var att = { name: file.name, size: file.size, mimeType: file.type };
-      if (isPdf) {
-        att.type = 'pdf';
-        att.base64 = e.target.result.split(',')[1];
-      } else if (isImg) {
-        att.type = 'image';
-        att.base64 = e.target.result.split(',')[1];
-      } else {
-        att.type = 'text';
-        att.content = e.target.result;
-      }
-      chatAttachments.push(att);
-      renderChatAttachments();
-    };
-    if (isPdf || isImg) reader.readAsDataURL(file);
-    else reader.readAsText(file);
-  });
-  event.target.value = '';
-}
-
-function renderChatAttachments() {
-  var bar = document.getElementById('attachBar');
-  var btn = document.getElementById('cattBtn');
-  if (!bar) return;
-  if (chatAttachments.length === 0) {
-    bar.classList.remove('show');
-    if (btn) btn.classList.remove('has-files');
-    return;
-  }
-  bar.classList.add('show');
-  if (btn) btn.classList.add('has-files');
-  bar.innerHTML = chatAttachments.map(function(att, idx) {
-    var icon = att.type==='pdf' ? '\ud83d\udcc4' : att.type==='image' ? '\ud83d\uddbc' : '\ud83d\udcc3';
-    var kb = att.size < 1024*1024 ? Math.round(att.size/1024)+'KB' : Math.round(att.size/1024/1024*10)/10+'MB';
-    return '<div class="attach-chip">' + icon + ' <span>' + att.name + '</span>' +
-      '<span style="color:var(--t3);margin-left:2px">(' + kb + ')</span>' +
-      '<button onclick="removeChatAttachment(' + idx + ')">x</button></div>';
-  }).join('');
-}
-
-function removeChatAttachment(idx) {
-  chatAttachments.splice(idx, 1);
-  renderChatAttachments();
-}
-
-
-async function sendAllReminders() {
-  var checked = SD.map(function(s){ return s.name.toLowerCase(); });
-  var missing = ALL_STAFF.filter(function(s){
-    var first = s.name.split(' ')[0].toLowerCase();
-    return !checked.some(function(n){ return n.includes(first); });
-  });
-  if (missing.length === 0) {
-    showToast('All staff have already submitted check-ins this week!');
-    return;
-  }
-
-  var emailList = missing.map(function(s){ return s.email; });
-  var subject = 'Reminder: Weekly Check-in';
-  var emailBody = 'Hi team,\n\nThis is a friendly reminder to please submit your weekly check-in if you have not done so yet.\n\nYour check-in helps Kandia understand your capacity, priorities and any blockers so she can support you effectively.\n\nComplete it here:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin\n\nThanks!\nKandia Du Bruyn | COO | Risk 2 Solution';
-
-  // Show loading state
-  openModal('Sending reminders...', 'Saving draft to Outlook',
-    '<div style="text-align:center;padding:20px 0"><div class="think"><span></span><span></span><span></span></div></div>'
-  );
-
-  var draftCreated = false;
-  try {
-    var r = await fetch('/graph/email/draft', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({subject: subject, body: emailBody, to: emailList})
-    });
-    var d = await r.json();
-    draftCreated = !!(d && d.success);
-  } catch(e) { console.warn('Draft failed:', e.message); }
-
-  var recipientHtml = missing.map(function(s){
-    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:0.5px solid var(--bl)">' +
-      '<div style="width:28px;height:28px;border-radius:50%;background:var(--gl);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--g);flex-shrink:0">' + s.name.charAt(0) + '</div>' +
-      '<div><div style="font-size:12px;font-weight:500;color:var(--t1)">' + s.name + '</div><div style="font-size:10px;color:var(--t3)">' + s.email + '</div></div>' +
-    '</div>';
-  }).join('');
-
-  if (draftCreated) {
-    openModal('Reminders saved to Drafts', missing.length + ' staff — open Outlook Drafts to review and send',
-      '<div class="alert-box ok"><div class="ab-title">Draft email ready in Outlook Drafts</div>' +
-      '<div class="ab-text">The reminder has been saved as a draft to your Outlook. Open Outlook Drafts, review the email, and send it to the team.</div></div>' +
-      '<div style="margin:12px 0">' + recipientHtml + '</div>' +
-      '<div style="display:flex;gap:8px;margin-top:4px">' +
-        '<button class="m-btn" style="background:#0078D4" onclick="openOutlookDrafts()">Open Outlook Drafts</button>' +
-        '<button class="m-btn sec" onclick="closeModal()">Close</button>' +
-      '</div>'
-    );
-  } else {
-    // Draft save failed — show mailto fallback
-    var mailtoLink = 'mailto:' + emailList.join(';') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(emailBody);
-    openModal('Could not save to Outlook', 'Use the link below to send directly',
-      '<div class="alert-box warn"><div class="ab-title">Outlook draft could not be created</div>' +
-      '<div class="ab-text">Your M365 session may have expired. Use the Send via Outlook button below to open the email directly in your email client.</div></div>' +
-      '<div style="margin:12px 0">' + recipientHtml + '</div>' +
-      '<div style="display:flex;gap:8px;margin-top:4px">' +
-        '<a class="m-btn" href="' + mailtoLink + '" style="text-decoration:none;display:inline-flex;align-items:center">Send via Outlook</a>' +
-        '<button class="m-btn sec" onclick="closeModal()">Close</button>' +
-      '</div>'
-    );
-  }
-}
-
-// ── GENERATE REPORT AS DOWNLOAD ──
-async function generateReport(type, label) {
-  // Show loading state in automation panel
-  var panel = document.getElementById('pnl-auto');
-  var loadDiv = document.getElementById('gen-report-loading');
-  if (!loadDiv) {
-    loadDiv = document.createElement('div');
-    loadDiv.id = 'gen-report-loading';
-    loadDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:9999';
-    loadDiv.innerHTML = '<div style="background:#fff;border-radius:16px;padding:32px 40px;text-align:center;max-width:340px">' +
-      '<div style="font-size:32px;margin-bottom:12px">📄</div>' +
-      '<div style="font-size:14px;font-weight:600;color:var(--t1);margin-bottom:6px">Generating ' + label + '</div>' +
-      '<div style="font-size:12px;color:var(--t2)">Cinderella is pulling data from your emails, check-ins and document library. This may take 20-30 seconds...</div>' +
-      '<div style="margin-top:16px"><div class="think"><span></span><span></span><span></span></div></div></div>';
-    document.body.appendChild(loadDiv);
-  } else {
-    loadDiv.style.display = 'flex';
-  }
-
-  try {
-    var r = await fetch('/generate/report', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: type, label: label })
-    });
-    if (!r.ok) {
-      var err = await r.json().catch(function(){ return {error:'Server error '+r.status}; });
-      throw new Error(err.error || 'Failed to generate report');
-    }
-    // Trigger download
-    var blob = await r.blob();
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    var cd = r.headers.get('Content-Disposition') || '';
-    var fn = (cd.match(/filename="([^"]+)"/) || [])[1] || (label+'.doc').replace(/ /g,'-');
-    a.href = url; a.download = fn; a.click();
-    URL.revokeObjectURL(url);
-  } catch(e) {
-    alert('Could not generate report: ' + e.message);
-  } finally {
-    loadDiv.style.display = 'none';
-  }
-}
-
-
-// ── MANUAL CHECK-IN ENTRY ──
-function openManualCheckin(prefillName) {
-  var staffOptions = ALL_STAFF.map(function(s){
-    return '<option value="'+s.name+'"'+(prefillName===s.name?' selected':'')+'>'+s.name+'</option>';
-  }).join('');
-  var today = new Date();
-  var day = today.getDay();
-  var sunday = new Date(today);
-  sunday.setDate(today.getDate() + (day === 0 ? 0 : 7 - day));
-  var weekEnding = sunday.toISOString().split('T')[0];
-
-  openModal('Add check-in manually', 'For staff who submitted but data was not received',
-    '<div class="mfield"><div class="mfl">Staff member</div>'+
-    '<select id="mc-name" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;background:var(--bg2)"><option value="">Select...</option>'+staffOptions+'</select></div>'+
-    '<div class="mfield"><div class="mfl">Capacity this week (%)</div>'+
-    '<input id="mc-cap" type="number" min="0" max="100" value="80" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>'+
-    '<div class="mfield"><div class="mfl">Projects working on</div>'+
-    '<input id="mc-proj" type="text" placeholder="e.g. Client onboarding, ISO prep" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>'+
-    '<div class="mfield"><div class="mfl">Blockers / needs support with</div>'+
-    '<input id="mc-block" type="text" placeholder="None" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>'+
-    '<div class="mfield"><div class="mfl">Focus next week</div>'+
-    '<input id="mc-focus" type="text" placeholder="e.g. Complete Q2 review" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>'+
-    '<input type="hidden" id="mc-week" value="'+weekEnding+'">'+
-    '<button class="m-btn" onclick="submitManualCheckin()">Save check-in</button> '+
-    '<button class="m-btn sec" onclick="closeModal()">Cancel</button>'
-  );
-}
-
-async function submitManualCheckin() {
-  var name = document.getElementById('mc-name').value;
-  var cap = document.getElementById('mc-cap').value;
-  var proj = document.getElementById('mc-proj').value;
-  var block = document.getElementById('mc-block').value;
-  var focus = document.getElementById('mc-focus').value;
-  var week = document.getElementById('mc-week').value;
-  if (!name) { alert('Please select a staff member'); return; }
-  try {
-    var r = await fetch('/checkins/manual', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name, capacity: parseInt(cap)||80, projects: proj, blockers: block, focus: focus, weekEnding: week, submitted: new Date().toISOString() })
-    });
-    var d = await r.json();
-    if (!d.success) throw new Error(d.error || 'Failed');
-    closeModal();
-    await syncNow();
-    alert('Check-in saved for ' + name + ' ✓');
-  } catch(e) {
-    alert('Error saving check-in: ' + e.message);
-  }
-}
-
-// ── OPEN ACTIONS TRACKER ──
-var _trackerActions = [];
-
-async function loadTracker() {
-  try {
-    var r = await fetch('/openactions');
-    if (!r.ok) {
-      if (r.status === 401) console.warn('[Tracker] Session expired — please log in again');
-      else console.warn('[Tracker] Server error', r.status);
-      return;
-    }
-    var d = await r.json();
-    _trackerActions = d.actions || [];
-    renderTracker();
-    updateTrackerBadge();
-  } catch(e) { console.warn('[Tracker] Load failed:', e.message); }
-}
-
-function updateTrackerBadge() {
-  var open = _trackerActions.filter(function(a){ return a.status === 'open'; }).length;
-  var badge = document.getElementById('trackerBadge');
-  if (badge) { badge.textContent = open; badge.style.display = open > 0 ? 'inline-block' : 'none'; }
-}
-
-function renderTracker() {
-  var el = document.getElementById('trackerList');
-  if (!el) return;
-  var filter = (document.getElementById('tracker-filter') || {}).value || 'open';
-  var items = _trackerActions.filter(function(a){
-    if (filter === 'open') return a.status === 'open';
-    if (filter === 'resolved') return ['resolved','complete','dismissed','escalated'].includes(a.status);
-    return true;
-  });
-  if (items.length === 0) {
-    el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:24px 0;text-align:center">' +
-      (filter === 'open' ? 'No open actions — all clear! 🎉' : 'No items in this view.') + '</div>';
-    return;
-  }
-  var out = '';
-  items.forEach(function(a) {
-    var urgCls = a.urgency === 'Urgent' ? 'ph' : a.urgency === 'This week' ? 'pm' : 'pl';
-    var statusBadge = a.status !== 'open' ? '<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--gl);color:#0F6E56;margin-left:6px">' + a.status + '</span>' : '';
-    var deadline = a.deadline ? '<span style="font-size:9px;color:var(--r);margin-left:6px">⏰ ' + a.deadline + '</span>' : '';
-    var added = new Date(a.addedAt).toLocaleString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
-    var btns = a.status === 'open'
-      ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' +
-          '<button onclick="updateAction(' + a.id + ',\'complete\')" style="font-size:10px;padding:3px 10px;border-radius:8px;background:var(--gl);color:#0F6E56;border:none;cursor:pointer;font-family:var(--f)">✓ Complete</button>' +
-          '<button onclick="updateAction(' + a.id + ',\'resolved\')" style="font-size:10px;padding:3px 10px;border-radius:8px;background:var(--bg2);color:var(--t2);border:1px solid var(--bl);cursor:pointer;font-family:var(--f)">Resolved</button>' +
-          '<button onclick="updateAction(' + a.id + ',\'incomplete\')" style="font-size:10px;padding:3px 10px;border-radius:8px;background:var(--al);color:#854F0B;border:none;cursor:pointer;font-family:var(--f)">Incomplete</button>' +
-          '<button onclick="escalateAction(' + a.id + ')" style="font-size:10px;padding:3px 10px;border-radius:8px;background:var(--rl);color:#A32D2D;border:none;cursor:pointer;font-family:var(--f)">↑ Escalate</button>' +
-          '<button onclick="updateAction(' + a.id + ',\'dismissed\')" style="font-size:10px;padding:3px 10px;border-radius:8px;background:none;color:var(--t3);border:none;cursor:pointer;font-family:var(--f)">Dismiss</button>' +
-        '</div>'
-      : '';
-    out += '<div style="padding:12px 0;border-bottom:0.5px solid var(--bl)">' +
-      '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:4px">' +
-        '<span class="pp ' + urgCls + '">' + a.urgency + '</span>' + statusBadge + deadline +
-      '</div>' +
-      '<div style="font-size:13px;font-weight:500;color:var(--t1);margin-bottom:3px">' + a.title + '</div>' +
-      '<div style="font-size:11px;color:var(--t3)">From: ' + (a.source||'—') + ' · Added ' + added + '</div>' +
-      (a.detail ? '<div style="font-size:11px;color:var(--t2);margin-top:4px;padding:6px 8px;background:var(--bg2);border-radius:6px">' + a.detail.substring(0,200) + '</div>' : '') +
-      btns +
-    '</div>';
-  });
-  el.innerHTML = out;
-}
-
-async function updateAction(id, status) {
-  try {
-    await fetch('/openactions/' + id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:status})});
-    await loadTracker();
-  } catch(e) { alert('Error: ' + e.message); }
-}
-
-async function escalateAction(id) {
-  var action = _trackerActions.find(function(a){ return a.id === id; });
-  if (!action) return;
-  var el = document.getElementById('trackerList');
-  if (el) { var btn = el.querySelector('[onclick*="escalateAction(' + id + ')"]'); if(btn) btn.textContent = 'Drafting...'; }
-
-  try {
-    // Generate escalation email via AI
-    var r = await fetch('/proxy', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 600,
-        system: 'You are Cinderella, COO executive assistant. Write a professional escalation email. Return only the email body text, no subject line, no preamble.',
-        messages: [{role:'user', content: 'Write a professional escalation email about this open action item that needs urgent attention:\n\nAction: ' + action.title + '\nSource: ' + (action.source||'internal') + '\nUrgency: ' + action.urgency + (action.deadline ? '\nDeadline: ' + action.deadline : '') + (action.detail ? '\nDetail: ' + action.detail : '') + '\n\nMention this requires immediate attention and outline what is needed.'}]
-      })
-    });
-    var d = await r.json();
-    var body = (d.content && d.content[0] && d.content[0].text) ? d.content[0].text.trim() : 'Please note this action item requires escalation: ' + action.title;
-    var subject = 'ESCALATION: ' + action.title.substring(0, 60);
-
-    // Save draft to Outlook
-    var dr = await fetch('/graph/email/draft', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({subject: subject, body: body, to: []})
-    });
-    var dd = await dr.json();
-    if (dd.success) {
-      await fetch('/openactions/' + id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({status:'escalated'})});
-      await loadTracker();
-      openModal('Escalation draft saved', 'Open Outlook Drafts to review and send',
-        '<div class="alert-box ok"><div class="ab-title">Draft saved to Outlook Drafts folder</div>' +
-        '<div class="ab-text">Subject: ' + subject + '</div></div>' +
-        '<button class="m-btn" style="background:#0078D4" onclick="openOutlookDrafts()">Open Outlook Drafts</button> ' +
-        '<button class="m-btn sec" onclick="closeModal()">Close</button>'
-      );
-    } else {
-      throw new Error(dd.error || 'Draft failed');
-    }
-  } catch(e) {
-    alert('Escalation failed: ' + e.message);
-    await loadTracker();
-  }
-}
-
-async function addToTracker(title, source, urgency, detail, emailFrom, emailSubject) {
-  try {
-    var r = await fetch('/openactions', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({title:title, source:source, urgency:urgency||'This week', detail:detail||'', emailFrom:emailFrom||null, emailSubject:emailSubject||null, type: emailFrom ? 'email' : 'ai-action'})
-    });
-    var d = await r.json();
-    if (d.success) {
-      _trackerActions.unshift(d.action);
-      updateTrackerBadge();
-      // Flash the nav badge
-      var btn = document.getElementById('actionTrackerBtn');
-      if (btn) { btn.style.color = 'var(--g)'; setTimeout(function(){ btn.style.color = ''; }, 2000); }
-    }
-  } catch(e) { console.warn('addToTracker:', e.message); }
-}
-
-function addEmailToTracker(idx) {
-  var e = M365.emails[idx];
-  if (!e) return;
-  addToTracker(
-    'Follow up: ' + e.subject,
-    e.from,
-    e.hoursOld >= 48 ? 'Urgent' : 'This week',
-    'Email from ' + e.from + ' received ' + e.hoursOld + 'h ago. Subject: ' + e.subject,
-    e.from,
-    e.subject
-  );
-  // Visual feedback
-  var btn = event.target;
-  btn.textContent = '✓ Added';
-  btn.style.color = 'var(--g)';
-  setTimeout(function(){ btn.textContent = '+ Track'; btn.style.color = ''; }, 2000);
-}
-
-function openAddActionModal() {
-  openModal('Add open action', 'Manually add an action to track',
-    '<div class="mfield"><div class="mfl">Action title</div><input id="at-title" type="text" placeholder="What needs to be done?" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>' +
-    '<div class="mfield"><div class="mfl">Source / from</div><input id="at-source" type="text" placeholder="Who raised this or where it came from" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>' +
-    '<div class="mfield"><div class="mfl">Urgency</div><select id="at-urgency" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;background:var(--bg2)"><option>Urgent</option><option selected>This week</option><option>Next week</option></select></div>' +
-    '<div class="mfield"><div class="mfl">Deadline (optional)</div><input id="at-deadline" type="text" placeholder="e.g. 15 June 2026" style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box"></div>' +
-    '<div class="mfield"><div class="mfl">Detail / notes</div><textarea id="at-detail" rows="3" placeholder="Any additional context..." style="width:100%;padding:7px 10px;border:1px solid var(--bl);border-radius:8px;font-family:var(--f);font-size:13px;box-sizing:border-box;resize:vertical"></textarea></div>' +
-    '<button class="m-btn" onclick="saveManualAction()">Add to tracker</button> ' +
-    '<button class="m-btn sec" onclick="closeModal()">Cancel</button>'
-  );
-}
-
-async function saveManualAction() {
-  var title = document.getElementById('at-title').value.trim();
-  if (!title) { alert('Please enter an action title'); return; }
-  await addToTracker(
-    title,
-    document.getElementById('at-source').value.trim() || 'Manual',
-    document.getElementById('at-urgency').value,
-    document.getElementById('at-detail').value.trim(),
-    null, null
-  );
-  // Set deadline separately
-  var deadline = document.getElementById('at-deadline').value.trim();
-  if (deadline && _trackerActions[0]) {
-    await fetch('/openactions/' + _trackerActions[0].id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({deadline:deadline})});
-  }
-  closeModal();
-  show('tracker', document.getElementById('actionTrackerBtn'));
-}
-
-
-function cooTrack(i, btn) {
-  var a = window._cooActions && window._cooActions[i];
-  if (!a) return;
-  addToTracker(a.task, a.source, a.urgency, '', null, null);
-  btn.textContent = '✓'; btn.style.color = 'var(--g)';
-}
-
-function dismissCOOAction(el) {
-  el.style.opacity = '0';
-  el.style.transition = 'opacity 0.2s';
-  setTimeout(function(){ el.remove(); }, 200);
-}
-
-
-function cooTrack(i, btn) {
-  var a = window._cooActions && window._cooActions[i];
-  if (!a) return;
-  addToTracker(a.task, a.source, a.urgency, '', null, null);
-  btn.textContent = '✓'; btn.style.color = 'var(--g)';
-}
-
-function dismissCOOAction(el) {
-  el.style.opacity = '0';
-  el.style.transition = 'opacity 0.2s';
-  setTimeout(function(){ el.remove(); }, 200);
-}
-
-
-
-// ── PROACTIVE INTELLIGENCE FUNCTIONS ──
-
-var _finSnapLoading = false;
-async function loadFinancialSnapshot() {
-  var el = document.getElementById('financialSnapshotContent');
-  if (!el || _finSnapLoading) return;
-  _finSnapLoading = true;
-  try {
-    var r = await fetch('/proactive/finance-html');
-    if (r.status === 401) { el.innerHTML = '<div style="font-size:11px;color:#9A9693">Session expired.</div>'; return; }
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    var html = await r.text();
-    el.innerHTML = html;
-  } catch(e) {
-    el.innerHTML = '<div style="font-size:11px;color:#9A9693;padding:4px 0">Could not load. <button onclick="_finSnapLoading=false;loadFinancialSnapshot()" style="font-size:10px;padding:2px 8px;border-radius:6px;background:#F2F1EE;border:1px solid rgba(0,0,0,0.12);cursor:pointer">Retry</button></div>';
-  } finally {
-    _finSnapLoading = false;
-  }
-}
-
-
-function showToast(msg) {
-  var t = document.createElement('div');
-  t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1A1A1A;color:#fff;padding:10px 18px;border-radius:10px;font-size:12px;z-index:9999;font-family:var(--f);box-shadow:0 4px 16px rgba(0,0,0,.2)';
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s';setTimeout(function(){t.remove();},300);}, 3200);
-}
-
-async function triggerProactive(feature) {
-  var labels = {morning:'morning brief',aurora:'Aurora project alert',ceo:'CEO weekly brief draft',capacity:'capacity check',receivables:'receivables chasers',finance:'financial snapshot',compliance:'compliance check',onboarding:'onboarding check'};
-  try {
-    var btn = event && event.target;
-    if (btn) { btn.disabled = true; btn.textContent = 'Running...'; }
-    var r = await fetch('/proactive/trigger/'+feature, {method:'POST',headers:{'Content-Type':'application/json'}});
-    var d = await r.json();
-    if (btn) { btn.disabled = false; btn.textContent = labels[feature]||feature; }
-    if (d.success || d.error === undefined) {
-      var msg = d.message || (feature==='finance' ? 'Financial data extracted — scroll to Financial Intelligence in COO duties' : feature==='compliance' ? 'Compliance calendar updated' : 'Done — check your Outlook inbox and drafts');
-      showToast(msg);
-      if (feature==='finance') { _finSnapLoading = false; setTimeout(loadFinancialSnapshot, 2000); }
-      if (feature==='compliance') setTimeout(loadCompliance, 1500);
-    } else {
-      showToast('Error: '+(d.error||'unknown error'));
-    }
-  } catch(e) {
-    showToast('Error: '+e.message);
-  }
-}
-
-function showAddCompliance() {
-  var f = document.getElementById('complianceAddForm');
-  if (f) f.style.display = f.style.display==='none' ? 'block' : 'none';
-}
-
-async function addComplianceItem() {
-  var title = (document.getElementById('compTitle')||{}).value;
-  var date  = (document.getElementById('compDate')||{}).value;
-  var cat   = (document.getElementById('compCat')||{}).value;
-  if (!title || !date) { showToast('Please enter a title and due date'); return; }
-  try {
-    var r = await fetch('/proactive/compliance/add', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:title.trim(),dueDate:date,category:cat||'Compliance'})});
-    var d = await r.json();
-    if (d.success) { var f=document.getElementById('complianceAddForm'); if(f) f.style.display='none'; loadCompliance(); showToast('Compliance item added'); }
-  } catch(e) { showToast('Error: '+e.message); }
-}
-
-async function deleteComplianceItem(id) {
-  try { await fetch('/proactive/compliance/'+id, {method:'DELETE'}); loadCompliance(); } catch(e) {}
-}
-
-async function loadCompliance() {
-  var el = document.getElementById('complianceList');
-  if (!el) return;
-  el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Loading...</div>';
-  try {
-    var r = await fetch('/proactive/state');
-    if (!r.ok) throw new Error('HTTP '+r.status);
-    var d = await r.json().catch(function(){return {};});
-    var items = (d.complianceItems||[]).sort(function(a,b){return new Date(a.dueDate)-new Date(b.dueDate);});
-    var badge = document.getElementById('complianceBadge');
-    var urgent = items.filter(function(c){return (c.daysOut||999)<=30;});
-    if (badge) { badge.textContent=urgent.length; badge.style.display=urgent.length>0?'inline-block':'none'; }
-    if (items.length===0) {
-      el.innerHTML='<div style="font-size:12px;color:var(--t3);padding:24px 0;text-align:center">No compliance items yet.<br>Click "Run check now" to scan your calendar and recent emails automatically.</div>';
-      return;
-    }
-    var CAT_COLORS={Accreditation:'var(--b)',Certification:'var(--g)',Compliance:'var(--a)',Government:'#6B4FA8',Insurance:'#0C6E8A',Legal:'var(--r)',Tender:'#0F6E56',Other:'var(--t2)'};
-    var now=new Date();
-    var groups={overdue:[],critical:[],soon:[],upcoming:[]};
-    items.forEach(function(c){
-      var daysOut=c.daysOut!==undefined?c.daysOut:Math.ceil((new Date(c.dueDate)-now)/(24*60*60*1000));
-      c.daysOut=daysOut;
-      if(daysOut<0) groups.overdue.push(c);
-      else if(daysOut<=14) groups.critical.push(c);
-      else if(daysOut<=30) groups.soon.push(c);
-      else groups.upcoming.push(c);
-    });
-    function renderGroup(label,list,colour){
-      if(!list.length) return '';
-      return '<div style="font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px">'+label+' ('+list.length+')</div>'+
-        list.map(function(c){
-          var cc=CAT_COLORS[c.category]||'var(--t2)';
-          var dLabel=c.daysOut<0?Math.abs(c.daysOut)+'d overdue':c.daysOut===0?'Today':c.daysOut+'d';
-          var srcTag=c.source==='email'?'<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#EEF3FB;color:#1B3A6B;margin-left:4px">email</span>':c.source==='calendar'?'<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#E8F5F1;color:#1E5C3A;margin-left:4px">calendar</span>':'';
-          var notes=c.notes?'<div style="font-size:10px;color:var(--t2);margin-top:2px">'+c.notes+'</div>':'';
-          return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:0.5px solid var(--bl)">'+
-            '<div style="text-align:center;min-width:52px;flex-shrink:0"><div style="font-size:13pt;font-weight:700;color:'+colour+'">'+dLabel+'</div><div style="font-size:8px;color:var(--t3)">days</div></div>'+
-            '<div style="flex:1"><div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px"><span style="font-size:12px;font-weight:500;color:var(--t1)">'+c.title+'</span>'+srcTag+'<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:var(--bg2);color:'+cc+'">'+( c.category||'Other')+'</span></div>'+
-            '<div style="font-size:10px;color:var(--t3);margin-top:1px">Due '+c.dueDate+'</div>'+notes+'</div>'+
-            '<button onclick="deleteComplianceItem('+c.id+')" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--bg2);border:0.5px solid var(--bm);cursor:pointer;color:var(--t3);font-family:var(--f);flex-shrink:0">Remove</button>'+
-          '</div>';
-        }).join('');
-    }
-    el.innerHTML=renderGroup('Overdue',groups.overdue,'var(--r)')+renderGroup('Critical — within 14 days',groups.critical,'var(--r)')+renderGroup('Due within 30 days',groups.soon,'var(--a)')+renderGroup('Upcoming',groups.upcoming,'var(--t2)');
-  } catch(e) {
-    if(el) el.innerHTML='<div style="font-size:12px;color:var(--r);padding:8px 0">Error: '+e.message+'</div>';
-  }
-}
-
-function openAuroraApp() {
-  window.open('https://aurora-agent-b6f3b2fcd3a9gqct.australiaeast-01.azurewebsites.net','_blank');
-}
-
-function askAboutAuroraProject() {
-  var title = document.getElementById('m-title').textContent.replace('Aurora - ','').replace('Aurora — ','');
-  closeModal();
-  qa('Give me a full status update on the ' + title + ' project from Aurora — open deliverables, outstanding invoices, what does Kandia need to action?');
-}
-
-
-async function loadEmailBrief() {
-  var el = document.getElementById('emailBriefContent');
-  var btn = document.getElementById('emailBriefRefresh');
-  if (!el) return;
-  if (btn) { btn.textContent = 'Generating...'; btn.style.pointerEvents = 'none'; }
-  el.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;font-size:11px;color:var(--t3)"><div class="think"><span></span><span></span><span></span></div>Analysing your inbox&hellip;</div>';
-  try {
-    var r = await fetch('/email-brief');
-    if (r.status === 401) { el.innerHTML = '<div style="font-size:11px;color:var(--t3)">Session expired - refresh page.</div>'; return; }
-    if (!r.ok) throw new Error('Server error ' + r.status);
-    var d = await r.json();
-    if (d.error) throw new Error(d.error);
-    el.innerHTML = d.html || '<div style="font-size:11px;color:var(--t3)">No emails in last 24 hours.</div>';
-  } catch(e) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--t3);padding:4px 0">' + e.message + ' <button onclick="loadEmailBrief()" style="font-size:10px;padding:2px 8px;border-radius:6px;background:var(--bg2);border:1px solid var(--bm);cursor:pointer;font-family:var(--f);margin-left:6px">Retry</button></div>';
-  } finally {
-    if (btn) { btn.innerHTML = '&#8635; Refresh'; btn.style.pointerEvents = 'auto'; }
-  }
-}
-
-
-async function generateHRProcess(type) {
-  var staffContext = '';
-  var atRisk = [];
-  var withBlockers = [];
-  var onLeave = [];
-  var allSkills = {};
-
-  (SD||[]).forEach(function(s) {
-    var cap = s.capacity||0;
-    staffContext += s.name + ' (' + (s.role||'?') + '): ' + cap + '% capacity';
-    if (s.trend) staffContext += ', trend: ' + s.trend;
-    if (s.projects) staffContext += ', projects: ' + s.projects;
-    var hasBlocker = s.blockers && !s.blockers.toLowerCase().match(/^(none|no|ntr|n\/a|not at the moment|-)$/);
-    if (hasBlocker) { staffContext += ', BLOCKER: ' + s.blockers; withBlockers.push(s.name + ': ' + s.blockers); }
-    if (s.leave) { staffContext += ', leave: ' + s.leave; onLeave.push(s.name + ' - ' + s.leave); }
-    if (cap >= 88) atRisk.push(s.name + ' ' + cap + '%');
-    if (s.skills) s.skills.split(',').forEach(function(sk) { var k = sk.trim(); if (k) { if (!allSkills[k]) allSkills[k]=[]; allSkills[k].push(s.name); } });
-    staffContext += '\n';
-  });
-
-  var skillsList = Object.entries(allSkills).map(function(e){ return e[0] + ' (' + e[1].join(', ') + ')'; }).join('; ');
-  var atRiskStr = atRisk.join(', ') || 'None this week';
-  var blockersStr = withBlockers.join('; ') || 'None reported';
-  var leaveStr = onLeave.join('; ') || 'None this week';
-
-  var typeConfig = {
-    pip:          { title:'Performance Improvement Plan (PIP)', colour:'#185FA5', bg:'#EFF6FF' },
-    burnout:      { title:'Burnout Prevention Protocol',        colour:'#A32D2D', bg:'#FEF2F2' },
-    skills:       { title:'Skills Development Plan',            colour:'#0F6E56', bg:'#F0FDF4' },
-    leave:        { title:'Leave Management Process',           colour:'#185FA5', bg:'#EFF6FF' },
-    actions:      { title:'HR Actions — This Week',             colour:'#D97706', bg:'#FFFBEB' },
-    blockers:     { title:'Blocker Resolution Plan',            colour:'#A32D2D', bg:'#FEF2F2' },
-    availability: { title:'Availability & Coverage Plan',       colour:'#D97706', bg:'#FFFBEB' },
-    plan:         { title:'Weekly HR Action Plan',              colour:'#185FA5', bg:'#EFF6FF' }
-  };
-  var cfg = typeConfig[type] || typeConfig.pip;
-
-  openModal(cfg.title, 'Generated from live check-in data — ' + (SD||[]).length + ' submissions this week',
-    '<div style="display:flex;align-items:center;gap:8px;padding:12px 0;font-size:12px;color:var(--t3)"><div class="think"><span></span><span></span><span></span></div>Generating using your actual team data&hellip; (this takes ~15 seconds)</div>'
-  );
-
-  // Send to server endpoint
-  try {
-    var r = await fetch('/hr-process', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        type: type,
-        staffContext: staffContext,
-        atRisk: atRiskStr,
-        blockers: blockersStr,
-        leave: leaveStr,
-        skills: skillsList,
-        staffCount: (SD||[]).length
-      })
-    });
-    if (!r.ok) throw new Error('Server error ' + r.status);
-    var d = await r.json();
-    if (d.error) throw new Error(d.error);
-
-    var text = d.content || '';
-    var formatted = text
-      .replace(/^#{1,3} (.+)$/gm, '<div style="font-size:13px;font-weight:700;color:var(--t1);margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--bl)">$1</div>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/^[-\u2022] (.+)$/gm, '<div style="display:flex;gap:6px;padding:2px 0;font-size:12px"><span style="color:var(--g);flex-shrink:0">\u2022</span><span>$1</span></div>')
-      .replace(/^\d+\. (.+)$/gm, '<div style="display:flex;gap:6px;padding:3px 0;font-size:12px"><span style="font-weight:700;color:var(--b);flex-shrink:0">\u203a</span><span>$1</span></div>')
-      .replace(/\n\n/g, '<div style="height:6px"></div>')
-      .replace(/\n/g, '<br>');
-
-    window._lastHRDoc = text;
-    document.getElementById('m-body').innerHTML =
-      '<div style="font-size:11px;color:var(--t3);margin-bottom:14px;padding:8px 12px;background:' + cfg.bg + ';border-radius:6px;border-left:3px solid ' + cfg.colour + '">Generated by Cinderella using live check-in data</div>' +
-      '<div style="font-size:12.5px;line-height:1.75;color:var(--t1);max-height:55vh;overflow-y:auto;padding-right:4px">' + formatted + '</div>' +
-      '<div style="display:flex;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid var(--bl)">' +
-        '<button onclick="navigator.clipboard.writeText(window._lastHRDoc||\'\').then(function(){showToast(\'Copied\');})" class="m-btn sec" style="flex:1">Copy text</button>' +
-        '<button onclick="closeModal()" class="m-btn sec" style="flex:1">Close</button>' +
-      '</div>';
-  } catch(e) {
-    document.getElementById('m-body').innerHTML = '<div style="font-size:12px;color:var(--r);padding:8px 0">Error: ' + e.message + '</div><button onclick="closeModal()" class="m-btn sec" style="margin-top:10px">Close</button>';
-  }
-}
-
-
-// ══ LEAVE MANAGEMENT ══════════════════════════════════════
-
-const LEAVE_STAFF_LIST = [
+const REMINDER_STAFF = [
   {name:'Janita Zhang',    email:'janita.z@risk2solution.com'},
   {name:'Diane Kruger',    email:'diane.k@risk2solution.com'},
   {name:'Garima Arora',    email:'garima.a@risk2solution.com'},
   {name:'Reinette Kruger', email:'reinette.k@risk2solution.com'},
   {name:'Dani Stevenson',  email:'dani.s@risk2solution.com'},
-  {name:'Ross Mackenzie',  email:'ross.m@risk2solution.com'},
   {name:'Cherry Abadeza',  email:'cherry.a@risk2solution.com'},
   {name:'Paul Johnston',   email:'paul.j@risk2solution.com'},
-  {name:'Rionoch Goodwin', email:'rionoch.g@risk2solution.com'},
+  {name:'Rionoch Goodwin',  email:'rionoch.g@risk2solution.com'},
 ];
 
-const CHECKLIST_ITEMS_CLIENT = [
-  {id:'contacts',    section:'1. Contacts & Access',        label:'Key contacts listed for each active project/relationship'},
-  {id:'access',      section:'1. Contacts & Access',        label:'Instructions for covering colleague to obtain system/drive/account access'},
-  {id:'external',    section:'1. Contacts & Access',        label:'External parties notified of absence and redirected'},
-  {id:'status',      section:'2. Current State of Work',    label:'Status update prepared for each active project/task'},
-  {id:'deadlines',   section:'2. Current State of Work',    label:'Deadlines and deliverables due during absence identified and dated'},
-  {id:'stalling',    section:'2. Current State of Work',    label:'Items that could stall identified (pending approvals, awaited decisions)'},
-  {id:'sharepoint',  section:'3. Resources & Links',        label:'SharePoint links added (master folder, client folder, templates, correspondence)'},
-  {id:'sp_verified', section:'3. Resources & Links',        label:'All SharePoint links tested and accessible by covering colleague'},
-  {id:'decisions',   section:'4. Decisions & Judgement',    label:'Matters needing a decision identified with recommendation or boundaries'},
-  {id:'risks',       section:'4. Decisions & Judgement',    label:'Known risks and sensitivities noted (difficult client, sensitive matters)'},
-  {id:'discussion',  section:'5. Handover Discussion',      label:'Handover discussion held with covering colleague (not just document sent)'},
-  {id:'understood',  section:'5. Handover Discussion',      label:'Covering colleague confirms understanding and escalation path'},
-  {id:'emergency',   section:'5. Handover Discussion',      label:'Emergency contact method agreed (business critical only)'},
-  {id:'phase1_signed',section:'6. Sign Off',                label:'Phase 1 SIGNED — staff member going on leave'},
-  {id:'phase2_signed',section:'6. Sign Off',                label:'Phase 2 SIGNED — covering colleague'},
-  {id:'phase3_signed',section:'6. Sign Off',                label:'Phase 3 SIGNED — Kandia Du Bruyn (Manager)'},
-];
-
-const STATUS_LABELS = {
-  detected:'Detected',notified:'Notified',checklist_sent:'Checklist Sent',
-  in_progress:'In Progress',approved:'Approved',on_leave:'On Leave',returned:'Returned',cancelled:'Cancelled'
-};
-const STATUS_COLORS = {
-  detected:'var(--a)',notified:'var(--b)',checklist_sent:'var(--b)',
-  in_progress:'var(--a)',approved:'var(--g)',on_leave:'var(--r)',returned:'var(--t3)',cancelled:'var(--t3)'
-};
-
-async function loadLeaveEntries() {
-  var el = document.getElementById('leaveList');
-  if (!el) return;
-  try {
-    var r = await fetch('/leave');
-    var entries = await r.json();
-
-    // Badge shows non-returned entries
-    var badge = document.getElementById('leaveBadge');
-    var active = entries.filter(function(e){ return e.status !== 'returned' && e.status !== 'cancelled'; });
-    if (badge) { badge.textContent = active.length; badge.style.display = active.length > 0 ? 'inline-block' : 'none'; }
-
-    if (!entries.length) {
-      el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:24px 0;text-align:center">No leave entries yet.<br>Click + Add leave to log a staff member\'s leave and start the handover process.</div>';
-      return;
-    }
-
-    var pending   = entries.filter(function(e){ return e.status === 'pending_confirmation'; });
-    var confirmed = entries.filter(function(e){ return e.status !== 'pending_confirmation'; });
-    var out = '';
-
-    // ── Pending confirmation section ──
-    if (pending.length) {
-      out += '<div style="margin-bottom:18px">';
-      out += '<div style="font-size:9px;font-weight:700;color:var(--a);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">⚠ Awaiting your confirmation (' + pending.length + ')</div>';
-      pending.forEach(function(e) {
-        var startStr = new Date(e.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
-        var endStr   = new Date(e.endDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
-        out += '<div class="card" style="margin-bottom:8px;border-left:3px solid var(--a)">' +
-          '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px">' +
-            '<div><div style="font-size:13px;font-weight:700;color:var(--t1)">' + e.staffName + '</div>' +
-            '<div style="font-size:11px;color:var(--t3);margin-top:2px">' + startStr + ' – ' + endStr +
-              (e.notes ? ' &nbsp;&middot;&nbsp; <em>' + e.notes + '</em>' : '') + '</div></div>' +
-            '<span style="font-size:9.5px;font-weight:700;padding:2px 10px;border-radius:999px;background:var(--al);color:var(--a);flex-shrink:0">AWAITING CONFIRMATION</span>' +
-          '</div>' +
-          '<div style="font-size:11.5px;color:var(--t2);margin-bottom:10px">Review the dates, nominate covering colleagues, then confirm to start the handover process. No emails are sent until you confirm.</div>' +
-          '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
-            '<button onclick="showConfirmLeave(\'' + e.id + '\')" class="m-btn" style="font-size:11px;padding:6px 14px">✓ Review &amp; confirm leave</button>' +
-            '<button onclick="deleteLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:6px 12px;color:var(--r)">Not leave — dismiss</button>' +
-          '</div>' +
-        '</div>';
-      });
-      out += '</div>';
-    }
-
-    // ── Confirmed leave section ──
-    if (confirmed.length) {
-      if (pending.length) out += '<div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">Confirmed leave</div>';
-      confirmed.forEach(function(e) {
-        var total = CHECKLIST_ITEMS_CLIENT.length;
-        var done  = CHECKLIST_ITEMS_CLIENT.filter(function(i){ return e.checklist && e.checklist[i.id]; }).length;
-        var pct   = Math.round(done/total*100);
-        var statusCol = STATUS_COLORS[e.status] || 'var(--t3)';
-        var startStr  = new Date(e.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
-        var endStr    = new Date(e.endDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
-        var trigStr   = new Date(e.triggerDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
-        var daysLeft  = Math.ceil((new Date(e.startDate) - new Date()) / (24*60*60*1000));
-        var urgency   = daysLeft < 7 && !['approved','returned','on_leave'].includes(e.status);
-        var hasPendingReply = e.pendingReplyReview;
-        out += '<div class="card" style="margin-bottom:12px;' + (urgency ? 'border-left:3px solid var(--r)' : '') + '">';
-
-        // Reply notification
-        if (hasPendingReply) {
-          out += '<div style="background:var(--gl);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:11.5px;color:var(--t1)">' +
-            '💬 <strong>Reply received</strong> from ' + e.pendingReplyReview.from + ' — ' +
-            new Date(e.pendingReplyReview.receivedAt).toLocaleDateString('en-AU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) +
-            ': <em>"' + (e.pendingReplyReview.preview||'').substring(0,80) + '"</em> — ' +
-            '<a href="#" onclick="clearReplyFlag(\'' + e.id + '\'); return false;" style="color:var(--g);font-weight:600">mark reviewed</a>' +
-          '</div>';
-        }
-
-        out += '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px">' +
-          '<div><div style="font-size:13px;font-weight:700;color:var(--t1)">' + e.staffName + '</div>' +
-            '<div style="font-size:11px;color:var(--t3);margin-top:2px">' + startStr + ' – ' + endStr +
-              (e.coveringColleague ? ' &nbsp;&middot;&nbsp; Cover: <strong>' + e.coveringColleague + '</strong>' : '') + '</div></div>' +
-          '<span style="font-size:9.5px;font-weight:700;padding:2px 10px;border-radius:999px;background:var(--bg2);color:' + statusCol + '">' + (STATUS_LABELS[e.status]||e.status).toUpperCase() + '</span>' +
-        '</div>' +
-        '<div style="margin-bottom:10px">' +
-          '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">' +
-            '<span style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">Checklist progress</span>' +
-            '<span style="font-size:12px;font-weight:700;color:' + (pct===100?'var(--g)':urgency?'var(--r)':'var(--a)') + '">' + done + '/' + total + ' — ' + pct + '%</span>' +
-          '</div>' +
-          '<div style="height:8px;background:var(--bg2);border-radius:999px;overflow:hidden">' +
-            '<div style="height:100%;width:' + pct + '%;background:' + (pct===100?'var(--g)':urgency?'var(--r)':'var(--a)') + ';border-radius:999px;transition:width .3s"></div>' +
-          '</div>' +
-        '</div>' +
-        '<div style="font-size:10.5px;color:var(--t3);margin-bottom:10px">Trigger date: <strong>' + trigStr + '</strong>' +
-          (daysLeft > 0 ? ' &nbsp;&middot;&nbsp; ' + daysLeft + ' days until leave' :
-           daysLeft === 0 ? ' &nbsp;&middot;&nbsp; <span style="color:var(--r)">Leave starts today</span>' :
-           ' &nbsp;&middot;&nbsp; <span style="color:var(--t3)">Currently on leave</span>') +
-        '</div>' +
-        '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
-          '<button data-lid="' + e.id + '" onclick="openLeaveChecklist(this.dataset.lid)" class="m-btn" style="font-size:11px;padding:5px 12px">View checklist</button>' +
-
-
-
-          '<button onclick="editLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">✏ Edit</button>' +
-          '<button data-lid="' + e.id + '" onclick="sendLeaveChecklistNow(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">Send nomination email</button>' +
-          '<button data-lid="' + e.id + '" onclick="sendLeaveUpdate(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">Send updated checklist</button>' +
-          '<button data-lid="' + e.id + '" onclick="processLeaveReplies(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">&#128257; Process replies</button>' +
-          '<button onclick="deleteLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px;color:var(--r)">Delete</button>' +
-        '</div>' +
-        '</div>';
-      });
-    }
-
-    el.innerHTML = out || '<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">No leave entries</div>';
-
-  } catch(e) {
-    if (el) el.innerHTML = '<div style="font-size:12px;color:var(--r)">Error: ' + e.message + '</div>';
+async function sendFridayCheckInReminder() {
+  if (!tokenStore.access_token) return;
+  const { weekKey, dateStr } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.fridayReminderWeek === weekKey) {
+    console.log('[FridayReminder] Already sent this week');
+    return;
   }
-}
 
-
-function showAddLeave() {
-  var staffOptions = LEAVE_STAFF_LIST.map(function(s){ return '<option value="'+s.name+'|'+s.email+'">'+s.name+'</option>'; }).join('');
-  var today = new Date().toISOString().substring(0,10);
-  openModal('Add Staff Leave', 'Log leave and start the handover process',
-    '<div style="display:grid;gap:10px">' +
-      '<div><div class="mfl">Staff member *</div><select id="lv_staff" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)"><option value="">Select staff member...</option>'+staffOptions+'</select></div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
-        '<div><div class="mfl">Leave start date *</div><input id="lv_start" type="date" min="'+today+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
-        '<div><div class="mfl">Leave end date *</div><input id="lv_end" type="date" min="'+today+'" style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f)"></div>' +
-      '</div>' +
-      '<div><div class="mfl">Covering colleague(s) <span style="font-weight:400;color:var(--t3)">(hold Ctrl/Cmd to select multiple)</span></div><select id="lv_cover" multiple style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg);height:100px">'+staffOptions+'<option value="Kandia Du Bruyn|kandia@risk2solution.com">Kandia Du Bruyn</option></select></div>' +
-      '<div><div class="mfl">Notes (optional)</div><textarea id="lv_notes" rows="2" placeholder="Any context about this leave..." style="width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);resize:vertical"></textarea></div>' +
-      '<div style="background:#DCEEE6;border-radius:8px;padding:10px 12px;font-size:12px;color:#111;line-height:1.5"><b>What happens next:</b> Cinderella emails the covering colleagues with the checklist attached. Staff member is CC&rsquo;d. Automated 3-day reminders follow.</div>' +
-    '<div style="display:flex;gap:8px;margin-top:14px">' +
-      '<button class="m-btn" onclick="submitAddLeave()" style="flex:1">Log leave & start process</button>' +
-      '<button class="m-btn sec" onclick="closeModal()" style="flex:1">Cancel</button>' +
-    '</div>'
+  // Exclude staff on leave
+  const recipients = REMINDER_STAFF.filter(s =>
+    !LEAVE_LIST.some(l => l.toLowerCase().includes(s.name.toLowerCase().split(' ')[0]) ||
+                          l.toLowerCase() === s.email.toLowerCase())
   );
-}
 
-async function submitAddLeave() {
-  var staffSel = (document.getElementById('lv_staff')||{}).value || '';
-  var start    = (document.getElementById('lv_start')||{}).value;
-  var end      = (document.getElementById('lv_end')||{}).value;
-  var notes    = (document.getElementById('lv_notes')||{}).value || '';
-  if (!staffSel || !start || !end) { showToast('Please fill in staff member and dates'); return; }
-  var staffParts = staffSel.split('|');
-  var coverSelect = document.getElementById('lv_cover');
-  var coverNames = [], coverEmails = [];
-  if (coverSelect) {
-    Array.from(coverSelect.selectedOptions).forEach(function(opt) {
-      var parts = opt.value.split('|');
-      if (parts[0]) coverNames.push(parts[0]);
-      if (parts[1]) coverEmails.push(parts[1]);
-    });
+  console.log('[FridayReminder] Sending to', recipients.length, 'staff. Excluded:', LEAVE_LIST.join(', '));
+
+  const subject = 'Reminder: weekly check-in';
+  const body = `Hi team,
+
+Just a reminder to please submit your weekly check-in if you have not done so yet. These should be submitted on a Friday by 2pm so it falls in the correct week for analysis and review as these really help us to understand your capacity, priorities and any blockers so we can support you effectively.
+
+Complete it here:
+https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/checkin
+
+Thanks!
+
+Kandia Du Bruyn | COO | Risk 2 Solution`;
+
+  try {
+    const token = await getValidToken();
+    const emailList = recipients.map(s => s.email);
+
+    // Send individually so each person receives a personalised copy
+    let sent = 0;
+    for (const staff of recipients) {
+      try {
+        const personalBody = body.replace('Hi team,', `Hi ${staff.name.split(' ')[0]},`);
+        const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+          method:'POST',
+          headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+          body:JSON.stringify({
+            subject, body:{contentType:'Text',content:personalBody},
+            toRecipients:[{emailAddress:{address:staff.email}}]
+          })
+        });
+        const msg = await draft.json();
+        if (msg.id) {
+          const send = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',
+            {method:'POST', headers:{Authorization:'Bearer '+token}});
+          if (send.status === 202) sent++;
+        }
+      } catch(e) { console.warn('[FridayReminder] Failed for', staff.name, ':', e.message); }
+    }
+
+    console.log('[FridayReminder] ✅ Sent to', sent, 'of', recipients.length, 'staff');
+    state.fridayReminderWeek = weekKey;
+    state.fridayReminderSentAt = new Date().toISOString();
+    state.fridayReminderCount = sent;
+    saveProactiveState(state);
+  } catch(e) {
+    console.error('[FridayReminder] Error:', e.message);
   }
-  if (!coverNames.length) { showToast('Please select at least one covering colleague'); return; }
-  try {
-    var r = await fetch('/leave', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        staffName:      staffParts[0],
-        staffEmail:     staffParts[1]||'',
-        startDate:      start,
-        endDate:        end,
-        coveringColleague: coverNames.join(', '),
-        coveringEmail:  coverEmails[0]||'',
-        coveringColleagues: coverNames,
-        coveringEmails: coverEmails,
-        notes,
-        confirmed: true
-      })
-    });
-    var d = await r.json();
-    if (d.success) {
-      closeModal();
-      showToast('Leave logged — handover email being sent to covering colleague(s) now');
-      loadLeaveEntries();
-    } else { showToast('Error: '+(d.error||'Failed')); }
-  } catch(e) { showToast('Error: '+e.message); }
 }
 
+// Manual trigger for Friday reminder (from proactive/trigger endpoint)
+app.post('/proactive/trigger/friday-reminder', requireAuth, async (req, res) => {
+  const state = loadProactiveState();
+  delete state.fridayReminderWeek;
+  saveProactiveState(state);
+  await sendFridayCheckInReminder();
+  const newState = loadProactiveState();
+  res.json({success:true, sent:newState.fridayReminderCount, sentAt:newState.fridayReminderSentAt});
+});
 
-async function openLeaveChecklist(id, preselectedEmail) {
+// ── EMAIL BRIEF ──────────────────────────────────────────────
+app.get('/email-brief', requireAuth, async (req, res) => {
   try {
-    var r = await fetch('/leave');
-    var entries = await r.json();
-    var entry = entries.find(function(e){ return e.id === id; });
-    if (!entry) { showToast('Leave entry not found'); return; }
+    // Fetch last 24 hours of inbox emails
+    const since = new Date(Date.now() - 24*60*60*1000).toISOString();
+    const [inboxData, sentData] = await Promise.all([
+      graphGet(`/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${since}&$top=80&$select=subject,from,bodyPreview,receivedDateTime,isRead,importance,hasAttachments,conversationId&$orderby=receivedDateTime desc`),
+      graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$select=conversationId&$top=100`)
+    ]);
 
-    var colleagues = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
-      ? entry.coveringColleagues.map(function(name,i){ return {name:name, email:(entry.coveringEmails||[])[i]||''}; })
-      : [{name:entry.coveringColleague||'', email:entry.coveringEmail||''}];
+    const repliedConvs = new Set((sentData.value||[]).map(m=>m.conversationId).filter(Boolean));
 
-    var selectedEmail = preselectedEmail || (colleagues[0] ? colleagues[0].email : '');
+    // Filter out bulk/system/marketing noise
+    const EXCLUDE_SENDERS = ['noreply','no-reply','donotreply','mailer-daemon','notifications@','newsletter','@bounce','postmaster','automated@','alerts@','quarantine@'];
+    const EXCLUDE_KEYWORDS = ['unsubscribe','special offer','limited time','click here','dear customer','dear valued','winner','prize','survey feedback','receipt for your','payment confirmation','order confirmation','shipping confirmation','capcoal','luxury escapes','island printing'];
+    const EXCLUDE_DOMAINS = ['mailchimp','constantcontact','campaignmonitor','sendgrid','klaviyo','hubspot','marketo'];
 
-    function getChecklist(email) {
-      return (entry.colleagueChecklists && entry.colleagueChecklists[email] && entry.colleagueChecklists[email].checklist)
-        ? entry.colleagueChecklists[email].checklist : (entry.checklist || {});
+    const emails = (inboxData.value||[]).filter(m => {
+      const addr = (m.from?.emailAddress?.address||'').toLowerCase();
+      const name = (m.from?.emailAddress?.name||'').toLowerCase();
+      const subj = (m.subject||'').toLowerCase();
+      if (EXCLUDE_SENDERS.some(p=>addr.includes(p))) return false;
+      if (EXCLUDE_KEYWORDS.some(p=>subj.includes(p)||addr.includes(p))) return false;
+      if (EXCLUDE_DOMAINS.some(p=>addr.includes(p))) return false;
+      if (name.includes('no reply')||name.includes('automated')) return false;
+      return true;
+    });
+
+    if (emails.length === 0) {
+      return res.json({ html: '<div style="font-size:12px;color:#9A9693;padding:8px 0">No significant emails in the last 24 hours.</div>' });
     }
 
-    var cl = getChecklist(selectedEmail);
-    var matchedC = colleagues.find(function(c){ return c.email === selectedEmail; });
-    var colleagueName = matchedC ? matchedC.name : '';
-    var done  = CHECKLIST_ITEMS_CLIENT.filter(function(i){ return cl[i.id]; }).length;
-    var total = CHECKLIST_ITEMS_CLIENT.length;
-    var pct   = Math.round(done/total*100);
-    var pctCol = pct===100 ? 'var(--g)' : pct>50 ? 'var(--a)' : 'var(--r)';
+    // Build email list for AI
+    const emailList = emails.slice(0,25).map(m => {
+      const replied = m.conversationId && repliedConvs.has(m.conversationId);
+      return `FROM: ${m.from?.emailAddress?.name||m.from?.emailAddress?.address} <${m.from?.emailAddress?.address}>
+SUBJECT: ${m.subject}
+TIME: ${new Date(m.receivedDateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})}
+READ: ${m.isRead?'yes':'no'} | REPLIED: ${replied?'yes':'no'} | IMPORTANCE: ${m.importance||'normal'}
+PREVIEW: ${(m.bodyPreview||'').substring(0,180)}`;
+    }).join('\n\n---\n\n');
 
-    var tabBar = '';
-    if (colleagues.length > 1) {
-      tabBar = '<div style="display:flex;gap:4px;background:var(--bg2);border-radius:8px;padding:3px;margin-bottom:14px">';
-      colleagues.forEach(function(c) {
-        var isActive = c.email === selectedEmail;
-        var cDone = CHECKLIST_ITEMS_CLIENT.filter(function(i){ return getChecklist(c.email)[i.id]; }).length;
-        tabBar += '<button data-lid="'+id+'" data-em="'+c.email+'" onclick="openLeaveChecklist(this.dataset.lid,this.dataset.em)" style="flex:1;padding:6px 4px;border:none;border-radius:6px;font-size:11px;font-weight:'+(isActive?'700':'500')+';cursor:pointer;font-family:var(--f);background:'+(isActive?'var(--bg)':'transparent')+';color:'+(isActive?'var(--g)':'var(--t3)')+'">'+c.name.split(' ')[0]+' ('+Math.round(cDone/total*100)+'%)</button>';
+    const prompt = `You are Cinderella, executive assistant to Kandia Du Bruyn (COO, Risk 2 Solution Group).
+
+Generate an executive and concise Inbox Brief for the following emails received in the last 24 hours. 
+
+GROUP BY action needed:
+- 🔴 Needs Reply — emails requiring a response from Kandia
+- 🟠 Decision Required — emails where Kandia must make a decision or give direction  
+- 🔵 FYI — informational emails worth noting
+- 🟢 Read Later — low priority, can be reviewed later
+
+Rules:
+- If no emails fall under a category, omit that category entirely
+- Exclude Cinderella's own morning briefs and pre-meeting briefs from the groups (they can be mentioned in roll-up count)
+- Start with ONE sentence: total count, 2-3 dominant themes, any invites
+- List 3-5 bullets per group maximum: [Sender] — Subject — one-line gist
+- End with 3-5 specific suggested next actions as bullet points
+- Be specific and analytical — reference actual names, amounts, deadlines from the emails
+- Use the Cinderella/R2S context: risk management company, COO role, key staff are Diane Kruger (finance/ops), Janita Zhang (IT/marketing), Dave Cohen (CEO), Paul Johnston (risk/consulting)
+
+Return ONLY valid JSON, no markdown:
+{
+  "rollup": "One sentence summary of emails, themes, invites",
+  "groups": [
+    {
+      "label": "🔴 Needs Reply",
+      "items": [
+        {"icon":"📧","sender":"Name","subject":"Subject","gist":"One-line gist"}
+      ]
+    }
+  ],
+  "actions": ["specific action 1","specific action 2","specific action 3"]
+}
+
+EMAILS:
+${emailList}`;
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+      body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:2000,messages:[{role:'user',content:prompt}]})
+    });
+    const aiData = await aiRes.json();
+    const rawText = (aiData.content||[]).map(c=>c.text||'').join('').replace(/^```json\s*/,'').replace(/```$/,'').trim();
+
+    let brief;
+    try {
+      // Strip all markdown wrappers and find the JSON object
+      let cleaned = rawText.replace(/^```json\s*/i,'').replace(/^```\s*/,'').replace(/\s*```\s*$/,'').trim();
+      // Find the outermost JSON object
+      const jsonStart = cleaned.indexOf('{');
+      const jsonEnd = cleaned.lastIndexOf('}');
+      if (jsonStart >= 0 && jsonEnd > jsonStart) cleaned = cleaned.substring(jsonStart, jsonEnd+1);
+      brief = JSON.parse(cleaned);
+      console.log('[EmailBrief] Parsed OK — groups:', (brief.groups||[]).length, 'actions:', (brief.actions||[]).length);
+    } catch(e) {
+      console.error('[EmailBrief] JSON parse error:', e.message);
+      console.error('[EmailBrief] Raw AI text:', rawText.substring(0,500));
+      return res.json({ html: '<div style="font-size:12px;color:#9A9693;padding:4px 0">Could not parse email brief — check Azure logs. Raw: ' + rawText.substring(0,200).replace(/</g,'&lt;') + '</div>' });
+    }
+
+    // Build HTML
+    const GROUP_COLOURS = {
+      '🔴':{ bg:'#FEE2E2', border:'#C8211E', label:'#C8211E' },
+      '🟠':{ bg:'#FEF3C7', border:'#D97706', label:'#92400E' },
+      '🔵':{ bg:'#EFF6FF', border:'#2563EB', label:'#1D4ED8' },
+      '🟢':{ bg:'#F0FDF4', border:'#16A34A', label:'#15803D' },
+    };
+
+    let html = '';
+
+    // Roll-up
+    html += `<div style="font-size:12.5px;color:#111110;line-height:1.6;margin-bottom:14px;padding:12px 14px;background:#F8F8F6;border-radius:8px;border-left:3px solid #0D8A62">${brief.rollup||''}</div>`;
+
+    // Groups
+    (brief.groups||[]).forEach(group => {
+      const emoji = group.label ? group.label.charAt(0) : '🔵';
+      const c = GROUP_COLOURS[emoji]||GROUP_COLOURS['🔵'];
+      html += `<div style="margin-bottom:12px">`;
+      html += `<div style="font-size:10px;font-weight:700;color:${c.label};text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${group.label||''}</div>`;
+      (group.items||[]).forEach(item => {
+        html += `<div style="display:flex;gap:8px;padding:7px 10px;border-radius:6px;margin-bottom:4px;background:${c.bg};border-left:2.5px solid ${c.border}">` +
+          `<span style="flex-shrink:0">${item.icon||'📧'}</span>` +
+          `<div style="min-width:0">` +
+            `<div style="font-size:12px;font-weight:600;color:#111110;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.sender||''} — ${item.subject||''}</div>` +
+            `<div style="font-size:11px;color:#4A4844;margin-top:1px;line-height:1.4">${item.gist||''}</div>` +
+          `</div>` +
+        `</div>`;
       });
-      tabBar += '</div>';
+      html += `</div>`;
+    });
+
+    // Suggested actions
+    if ((brief.actions||[]).length > 0) {
+      html += `<div style="margin-top:14px;padding:12px 14px;background:#F8F8F6;border-radius:8px">`;
+      html += `<div style="font-size:10px;font-weight:700;color:#9A9693;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Suggested next actions</div>`;
+      brief.actions.forEach(a => {
+        html += `<div style="display:flex;gap:8px;padding:4px 0;font-size:12px;color:#111110;line-height:1.5"><span style="color:#0D8A62;font-weight:700;flex-shrink:0">✅</span><span>${a}</span></div>`;
+      });
+      html += `</div>`;
     }
 
-    var lastSec = '';
-    var rows = CHECKLIST_ITEMS_CLIENT.map(function(item) {
-      var ticked = !!cl[item.id];
-      var secHdr = '';
-      if (item.section !== lastSec) {
-        secHdr = '<div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin:12px 0 5px;padding-top:8px;border-top:1px solid var(--bl)">'+item.section+'</div>';
-        lastSec = item.section;
-      }
-      return secHdr +
-        '<div data-lid="'+id+'" data-em="'+selectedEmail+'" data-item="'+item.id+'" onclick="toggleLeaveItemForColleague(this.dataset.lid,this.dataset.em,this.dataset.item)" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;background:'+(ticked?'var(--bg2)':'var(--bg)')+';margin-bottom:4px;border:1px solid '+(ticked?'var(--g)':'var(--bm)')+'">' +
-          '<div style="width:18px;height:18px;border-radius:4px;border:2px solid '+(ticked?'var(--g)':'var(--bm)')+';background:'+(ticked?'var(--g)':'transparent')+';display:flex;align-items:center;justify-content:center;flex-shrink:0">' +
-            (ticked?'<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2.5 2.5L8 3" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>':'') +
-          '</div>' +
-          '<span style="font-size:11.5px;color:var(--t1);line-height:1.4">'+item.label+'</span>' +
-        '</div>';
+    // Footer
+    const emailCount = emails.length;
+    html += `<div style="font-size:10px;color:#9A9693;margin-top:10px;padding-top:8px;border-top:1px solid #E8E6E1">${emailCount} emails scanned · Last 24 hours · Generated ${new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})}</div>`;
+
+    res.json({ html });
+  } catch(e) {
+    console.error('[EmailBrief] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// ── HR PROCESS GENERATOR ──────────────────────────────────────
+app.post('/hr-process', requireAuth, async (req, res) => {
+  try {
+    const { type, staffContext, atRisk, blockers, leave, skills, staffCount } = req.body;
+
+    const PROMPTS = {
+      actions: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a prioritised THIS WEEK HR Action Plan based on ACTUAL check-in data.
+
+TEAM DATA (${staffCount} submitted):
+${staffContext}
+HIGH CAPACITY STAFF (88%+): ${atRisk}
+STAFF WITH BLOCKERS: ${blockers}
+AVAILABILITY ISSUES: ${leave}
+
+Generate a clear, prioritised action plan for Kandia to work through this week:
+
+## Priority 1 — Urgent (action today or tomorrow)
+List specific actions for each person at 90%+ or with serious blockers. Name them. What exactly should Kandia do?
+
+## Priority 2 — This week
+Actions for staff at 85-90% and minor blockers. Specific steps.
+
+## Priority 3 — Monitor
+Staff to keep an eye on. What signals to watch for.
+
+## Recommended 1:1 Agenda items
+For each overloaded or blocked staff member — 3 specific questions to ask in a check-in conversation.
+
+## Workload Redistribution Options
+Based on current capacity, who can absorb work from whom? Name the specific pairings.
+
+Be direct and specific. Name staff. Give exact recommended actions, not general advice.`,
+
+      blockers: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a Blocker Resolution Plan based on ACTUAL current blockers.
+
+TEAM DATA (${staffCount} submitted):
+${staffContext}
+STAFF WITH BLOCKERS: ${blockers}
+
+For each person with a reported blocker, generate:
+
+## [Staff Name] — [Their Role]
+**Blocker:** What they reported
+**Impact:** What this is affecting (their projects, team, deliverables)
+**Root Cause Analysis:** Most likely cause of this blocker
+**Recommended Action for Kandia:** Exactly what to do (email, call, escalate, provide resource, make decision)
+**Estimated Resolution Time:** How long to fix if actioned today
+**Follow-up:** What to check at next 1:1
+
+End with a summary table of all blockers by severity (High/Medium/Low) and owner.
+
+Be specific. If blockers say 'NTR' or 'None' these are fine — focus only on real blockers.`,
+
+      availability: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a Coverage and Availability Management Plan based on ACTUAL current data.
+
+TEAM DATA (${staffCount} submitted):
+${staffContext}
+AVAILABILITY ISSUES / LEAVE: ${leave}
+STAFF ALREADY AT HIGH CAPACITY (limited ability to cover): ${atRisk}
+
+Generate:
+
+## Current Availability Issues
+For each person with availability concerns — what is the issue, when, and what projects are affected.
+
+## Coverage Assignments
+For each person who is away or limited — who specifically covers what. Name the backup person and the specific tasks they take on.
+
+## Risk Assessment
+What is at risk this week if coverage isn't arranged? Client deliverables, deadlines, internal tasks?
+
+## Recommended Actions for Kandia (Today)
+Numbered list of specific actions to take to address each availability issue.
+
+## Communication Needed
+Who needs to be notified? What should Kandia communicate to clients or staff?
+
+## Leave Calendar Gap Alert
+Given who is at high capacity, flag if any planned absence creates a dangerous coverage gap.`,
+
+      plan: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a comprehensive HR Action Plan for this week based on ALL check-in data.
+
+TEAM DATA (${staffCount} submitted):
+${staffContext}
+HIGH CAPACITY (88%+): ${atRisk}
+BLOCKERS: ${blockers}
+AVAILABILITY ISSUES: ${leave}
+SKILLS ACROSS TEAM: ${skills}
+
+Generate a complete weekly HR action plan:
+
+## Executive Summary
+2-3 sentences on overall team health this week. Traffic light status: 🔴🟡🟢
+
+## This Week's Priority Actions (in order)
+Numbered list of specific actions, each with: WHO (Kandia does what), WHAT (exact action), WHY (the issue it addresses), WHEN (today/tomorrow/end of week)
+
+## Staff-by-Staff Assessment
+For each staff member — current status, any concerns, recommended action
+
+## Capacity Risk Matrix
+Table showing: Name | Capacity | Risk Level | Recommended Action
+
+## BD Impact Assessment
+Given current team capacity, what is the impact on business development and new work intake?
+
+## Next Check-in Focus
+What should Kandia specifically focus on asking each staff member in their next 1:1?
+
+Be analytical and specific. Name staff members. Give exact recommended actions.`,
+
+
+      pip: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group (integrated risk management company, Brisbane, Australia).
+
+Generate a complete, professional Performance Improvement Plan (PIP) template for R2S.
+
+CURRENT TEAM DATA (${staffCount} staff submitted this week):
+${staffContext}
+Staff with blockers: ${blockers}
+
+Create a ready-to-use PIP document with these sections:
+1. Employee & Role Details (include fields for name, role, manager, start date of PIP)
+2. Performance Concerns (specific, measurable examples relevant to consulting/training/risk work)
+3. Improvement Objectives with SMART goals (4-6 objectives specific to R2S service delivery)
+4. Support Provided by R2S (mentoring, training, resources, regular check-ins with Kandia)
+5. Review Milestones (Week 2, Week 4, Week 8 — what success looks like at each stage)
+6. Consequence Statement
+7. Sign-off section (Employee, COO, CEO)
+
+Make it specific to R2S context — reference consulting deliverables, client management, check-in compliance, project delivery. Use professional HR language. Format with clear numbered sections.`,
+
+      burnout: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a practical Burnout Prevention Protocol based on ACTUAL current team data.
+
+CURRENT TEAM DATA (${staffCount} staff this week):
+${staffContext}
+STAFF AT HIGH CAPACITY (88%+): ${atRisk}
+STAFF WITH BLOCKERS: ${blockers}
+
+Generate a protocol with these sections:
+1. Trigger Thresholds — capacity % levels and what each triggers (85%, 90%, 95%+)
+2. Immediate Actions for Kandia — specific steps when a staff member hits 90%+ (name the current at-risk staff)
+3. Workload Redistribution — specific reallocation options based on current team availability
+4. Check-in Conversation Guide — what to say, what questions to ask, what to listen for
+5. Week-by-Week Recovery Plan — how to bring capacity back down over 4 weeks
+6. Early Warning Signals — behavioural and check-in patterns to watch for at R2S
+7. Escalation Path — when to involve Dave Cohen or HR support
+
+Reference the ACTUAL staff currently at high capacity by name. Be specific and actionable.`,
+
+      skills: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a Skills Development Plan based on ACTUAL current team skills data.
+
+CURRENT TEAM DATA (${staffCount} staff):
+${staffContext}
+SKILLS ACROSS TEAM: ${skills}
+
+Generate:
+1. Team Skills Inventory Summary — what R2S has and where coverage is thin
+2. Critical Single-Person Dependencies — skills held by only one person (vulnerability analysis)
+3. Cross-Training Recommendations — specific pairs (Person A should learn X from Person B)
+4. Individual Development Priorities — for each named staff member, 2-3 development focus areas
+5. 90-Day Learning Plan Template — structured format for quarterly development goals
+6. Recommended Resources — specific courses, certifications, and programs relevant to risk management, emergency planning, RTO/training, and business consulting
+7. Skill Gap Priorities for R2S Growth — what skills does R2S need to acquire for BD and service expansion?
+
+Use actual staff names and their listed skills. Flag vulnerabilities explicitly.`,
+
+      leave: `You are Cinderella, COO assistant to Kandia Du Bruyn at Risk 2 Solution Group.
+
+Generate a Leave Management Process based on CURRENT team situation.
+
+CURRENT TEAM DATA (${staffCount} staff):
+${staffContext}
+STAFF ON/PLANNING LEAVE: ${leave}
+STAFF AT HIGH CAPACITY (who cannot absorb extra work easily): ${atRisk}
+
+Generate:
+1. Current Coverage Assessment — who is away and what coverage exists right now (name specific people)
+2. Leave Request Process — how staff submit requests, approval timeline, minimum notice periods by role
+3. Handover Checklist — what must be completed before leave starts (client handover, project status, file access)
+4. Minimum Coverage Rules — which roles/functions cannot have simultaneous absence at R2S
+5. Cover Assignments — for each role, who covers in their absence (name specific backup people from current team)
+6. On-Call Protocol — emergency contacts, escalation to Dave Cohen or Kandia
+7. Return-to-Work Process — briefing, catch-up steps, priority reset
+
+Be specific — use actual staff names. Flag any coverage risks given current high-capacity staff who cannot absorb leave.`
+    };
+
+    const prompt = PROMPTS[type];
+    if (!prompt) return res.status(400).json({ error: 'Unknown HR process type: ' + type });
+
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2500, messages: [{ role: 'user', content: prompt }] })
+    });
+    const aiData = await aiRes.json();
+    if (aiData.error) throw new Error(aiData.error.message || 'AI error');
+    const content = (aiData.content||[]).map(c => c.text||'').join('');
+    res.json({ success: true, content });
+  } catch(e) {
+    console.error('[HRProcess] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════
+// ── STAFF LEAVE MANAGEMENT SYSTEM ──
+// ════════════════════════════════════════════════════════════
+const LEAVE_STATE_PATH = '/home/leave-state.json';
+
+function loadLeaveState() {
+  try { return JSON.parse(readFileSync(LEAVE_STATE_PATH,'utf8')||'{"leaveEntries":[]}'); }
+  catch(e) { return { leaveEntries: [] }; }
+}
+function saveLeaveState(s) {
+  try { writeFileSync(LEAVE_STATE_PATH, JSON.stringify(s,null,2)); } catch(e) {}
+}
+
+const CHECKLIST_ITEMS = [
+  { id:'contacts',       section:1, label:'Key contacts listed for each active project/relationship (name, role, contact details)' },
+  { id:'access',         section:1, label:'Instructions provided for covering colleague to obtain system/drive/account access' },
+  { id:'external',       section:1, label:'External parties notified of absence and directed to correct contact' },
+  { id:'status',         section:2, label:'Status update prepared for each active project/task (done vs outstanding)' },
+  { id:'deadlines',      section:2, label:'Deadlines and deliverables due during absence identified and dated' },
+  { id:'stalling',       section:2, label:'Items in progress that could stall identified (pending approvals, awaited decisions)' },
+  { id:'sharepoint',     section:3, label:'SharePoint links added to checklist (master folder, client folder, templates, correspondence)' },
+  { id:'sp_verified',    section:3, label:'All SharePoint links tested and confirmed accessible by covering colleague' },
+  { id:'decisions',      section:4, label:'Matters needing a decision identified, with recommendation or decision boundaries' },
+  { id:'risks',          section:4, label:'Known risks and sensitivities noted (difficult client, sensitive matter, tricky negotiation)' },
+  { id:'discussion',     section:5, label:'Handover discussion held between staff member and covering colleague (not just document sent)' },
+  { id:'understood',     section:5, label:'Covering colleague confirms understanding of expectations and escalation path' },
+  { id:'emergency',      section:5, label:'Emergency contact method agreed (business critical work only)' },
+  { id:'phase1_signed',  section:6, label:'Phase 1 signed by staff member going on leave' },
+  { id:'phase2_signed',  section:6, label:'Phase 2 reviewed and signed by covering colleague' },
+  { id:'phase3_signed',  section:6, label:'Phase 3 approved and signed by Kandia Du Bruyn (Manager)' },
+];
+
+// Build an Outlook-compatible HTML email for leave notifications
+function buildLeaveEmail(type, entry) {
+  const TEAL = '#07706B';
+  const staff = entry.staffName;
+  const REPLY_INST = '<table cellpadding="0" cellspacing="0" bgcolor="#EFF6FF" style="background:#EFF6FF;border-radius:8px;width:100%;margin-top:12px"><tr><td style="padding:14px 16px;border-left:3px solid #2563EB"><p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; How to update your checklist</p><p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6">As you complete each section, <strong>reply to this email</strong> confirming what has been done. Cinderella will automatically tick off the items and send everyone an updated checklist.</p><p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:11px;color:#333;font-style:italic">Example reply: <strong>&ldquo;Confirming Section 1 (Contacts &amp; Access) is complete and Section 2 (Current State of Work) is complete.&rdquo;</strong></p><p style="margin:6px 0 0;font-family:Arial,sans-serif;font-size:11px;color:#666">When everything is done, reply: <strong>&ldquo;All checklist items are complete.&rdquo;</strong></p></td></tr></table>';
+  const cover = entry.coveringColleague || 'To be confirmed';
+  const start = new Date(entry.startDate).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  const end   = new Date(entry.endDate).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  const trigger = new Date(entry.triggerDate).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  const completedItems = CHECKLIST_ITEMS.filter(i => entry.checklist && entry.checklist[i.id]);
+  const pendingItems = CHECKLIST_ITEMS.filter(i => !entry.checklist || !entry.checklist[i.id]);
+
+  const header = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:20px;background:#F2F1EE;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #E8E6E1;">
+<tr><td bgcolor="#07706B" style="background-color:#07706B;padding:22px 28px;">
+  <table cellpadding="0" cellspacing="0" width="100%"><tr>
+    <td style="padding:0">
+      <table cellpadding="0" cellspacing="0"><tr>
+        <td style="width:36px;height:36px;background-color:#ffffff;border-radius:8px;text-align:center;vertical-align:middle;padding:0;margin:0">
+          <span style="font-family:Georgia,serif;font-size:22px;font-weight:bold;color:#07706B;line-height:36px;display:block">C</span>
+        </td>
+        <td style="padding-left:12px;vertical-align:middle">
+          <p style="margin:0;font-family:Georgia,serif;font-size:22px;font-style:italic;color:#ffffff;font-weight:bold;line-height:1.1">Cinderella</p>
+          <p style="margin:2px 0 0;font-family:Arial,sans-serif;font-size:9px;color:rgba(255,255,255,0.85);letter-spacing:2px;text-transform:uppercase">EXECUTIVE ASSISTANT &middot; RISK 2 SOLUTION</p>
+        </td>
+      </tr></table>
+    </td>
+    <td align="right" style="vertical-align:middle">
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:9px;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:1px">Staff Leave Management</p>
+    </td>
+  </tr></table>
+</td></tr>`;
+
+  const footer = `<tr><td bgcolor="#F2F1EE" style="background-color:#F2F1EE;padding:14px 28px;border-top:1px solid #E8E6E1;">
+  <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#777777;">Cinderella &middot; Executive Assistant to Kandia Du Bruyn, COO &middot; Risk 2 Solution</p>
+</td></tr></table></body></html>`;
+
+  function row(label, value, bold) {
+    return `<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#9A9693;padding:4px 0;min-width:130px;vertical-align:top">${label}</td>` +
+           `<td style="font-family:Arial,sans-serif;font-size:12px;color:#111;${bold?'font-weight:bold;':''}padding:4px 8px;vertical-align:top">${value}</td></tr>`;
+  }
+
+  const detailsTable = `<table cellpadding="0" cellspacing="0" bgcolor="#F8F8F6" style="background-color:#F8F8F6;border-radius:8px;margin-bottom:16px;width:100%;border:1px solid #E8E6E1"><tr><td style="padding:14px 16px"><table cellpadding="0" cellspacing="0">
+    ${row('Staff member', staff, true)}${row('Leave start', start, false)}${row('Leave end', end, false)}
+    ${row('Covering colleague', cover, true)}${row('Handover due by', trigger, true)}
+  </table></td></tr></table>`;
+
+  if (type === 'kandia_notification') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">🗓 Leave Detected — ${staff}</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi Kandia,</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">I have detected that <strong>${staff}</strong> has applied for leave. Here are the details and the process I will run:</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">What Cinderella will do</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Now:</strong> Log this leave in the Leave Management panel in Cinderella</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>${trigger}:</strong> Send handover checklist email to ${staff} (CC you) with Excel attachment</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Ongoing:</strong> Monitor checklist completion and alert you, ${staff}, and ${cover} at each stage</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>7 days before:</strong> Final reminder if checklist not complete</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Leave start:</strong> Confirmation email to you and ${cover}</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666;line-height:1.5;">Please confirm the covering colleague in the Leave Management panel in Cinderella, or reply to this email with any corrections.</p>
+    </td></tr>` + footer;
+  }
+
+  if (type === 'checklist_email') {
+    const checkRows = CHECKLIST_ITEMS.map(item => {
+      const done = entry.checklist && entry.checklist[item.id];
+      const sectionLabels = {1:'Contacts & Access',2:'Current State of Work',3:'Resources & Links',4:'Decisions & Judgement',5:'Handover Discussion',6:'Sign Off'};
+      return `<tr><td style="font-family:Arial,sans-serif;font-size:12px;padding:5px 0;color:${done?'#9A9693':'#111'};text-decoration:${done?'line-through':'none'};vertical-align:top">
+        <span style="display:inline-block;width:18px;height:18px;border:2px solid ${done?'#0D8A62':'#9A9693'};border-radius:3px;margin-right:8px;text-align:center;line-height:16px;color:#0D8A62;font-weight:bold">${done?'&#10003;':''}</span>
+        <strong style="color:#666;font-size:10px">${sectionLabels[item.section]}: </strong>${item.label}
+      </td></tr>`;
     }).join('');
 
-    var startStr = new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
-    var endStr   = new Date(entry.endDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 Leave Handover Checklist — Action Required</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${staff.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Your leave starts on <strong>${start}</strong>. As per R2S policy, your handover must be completed <strong>by ${trigger}</strong> (two weeks before leave start). Please work through the checklist below and complete the attached Excel document.</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Handover checklist — please complete all items</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:20px;width:100%">${checkRows}</table>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:12px;color:#444;line-height:1.6;">The Excel checklist is attached. Please complete it, arrange a handover discussion with <strong>${cover}</strong>, and have all three signature phases signed before <strong>${trigger}</strong>.</p>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#666">Per R2S Leave Handover Policy V1.0 — leave approval is only granted once all phases are signed. Questions? Contact Kandia.</p>
+    </td></tr>` + footer;
+  }
 
-    openModal(
-      entry.staffName + (colleagueName ? ' — ' + colleagueName : '') + ' Checklist',
-      startStr + ' – ' + endStr,
-      tabBar +
-      '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">' +
-        '<span style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em">'+(colleagueName||'Checklist')+' progress</span>' +
-        '<span style="font-size:16px;font-weight:800;color:'+pctCol+'">'+done+'/'+total+' &mdash; '+pct+'%</span>' +
-      '</div>' +
-      '<div style="height:8px;background:var(--bg2);border-radius:999px;overflow:hidden;margin-bottom:14px">' +
-        '<div style="height:100%;width:'+pct+'%;background:'+pctCol+';border-radius:999px"></div>' +
-      '</div>' +
-      '<div style="max-height:45vh;overflow-y:auto;padding-right:4px">' + rows + '</div>' +
-      '<div style="display:flex;gap:8px;margin-top:14px;border-top:1px solid var(--bl);padding-top:12px">' +
-        '<button data-lid="'+id+'" onclick="sendLeaveChecklistNow(this.dataset.lid)" class="m-btn sec" style="flex:1;font-size:11px">Send email</button>' +
+  if (type === 'reminder') {
+    const daysLeft = Math.ceil((new Date(entry.startDate) - new Date()) / (24*60*60*1000));
+    const pendingList = pendingItems.map(i => `<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#C8211E;padding:3px 0">&bull;&nbsp;&nbsp;${i.label}</td></tr>`).join('');
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #C8211E;">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">⚠ Leave Handover — ${pendingItems.length} Items Still Outstanding</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">${staff}'s leave starts in <strong>${daysLeft} days</strong> (${start}). The following handover items are still incomplete:</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">${pendingList}</table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Please complete these items before ${trigger}. Per R2S policy, leave cannot be approved until all phases are signed.</p>
+    </td></tr>` + footer;
+  }
 
-        '<button onclick="closeModal()" class="m-btn sec" style="flex:1;font-size:11px">Close</button>' +
-      '</div>'
-    );
-  } catch(err) {
-    showToast('Error: ' + err.message);
-    console.error('[Leave] openLeaveChecklist error:', err);
+  const pendingList = pendingItems.map(i=>`<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#C8211E;padding:3px 0">&bull;&nbsp;&nbsp;${i.label}</td></tr>`).join('');
+  const doneList = completedItems.map(i=>`<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#0D8A62;padding:3px 0">&#10003;&nbsp;&nbsp;${i.label}</td></tr>`).join('');
+  const daysLeft = Math.ceil((new Date(entry.startDate) - new Date()) / (24*60*60*1000));
+
+  // Covering colleague: combined nomination + briefing (sent at 2-week trigger — ONE email)
+  if (type === 'cover_nominated_briefing') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 You are covering ${staff} — nomination &amp; handover briefing</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">You have been nominated to cover <strong>${staff}</strong> during their upcoming leave. The handover process has now started — please read this email carefully and action the steps below.</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">What you need to do in the next two weeks</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">1.&nbsp;&nbsp;Review the handover checklist attached to this email</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">2.&nbsp;&nbsp;When ${staff} sends you the handover document, review it thoroughly before meeting</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">3.&nbsp;&nbsp;Arrange and attend a 15-20 minute handover discussion with ${staff} <strong>before ${trigger}</strong></td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">4.&nbsp;&nbsp;Test that you can access all SharePoint folders and shared drives</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">5.&nbsp;&nbsp;Raise any gaps or concerns with ${staff} while they are still available</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">6.&nbsp;&nbsp;Sign Phase 2 of the handover checklist once you are satisfied</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:4px 0">7.&nbsp;&nbsp;Contact Kandia immediately if you have capacity concerns or anything falls outside your scope</td></tr>
+      </table>
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">What to expect going forward</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>3 days before leave:</strong> Final preparation reminder from Cinderella</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Day before leave:</strong> Full briefing with everything you need to cover</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Day leave starts:</strong> Activation email confirming you are now covering</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Mid-leave:</strong> Check-in from Cinderella to make sure coverage is going well</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Return day:</strong> Handback prompt so nothing falls through the cracks</td></tr>
+      </table>
+      <p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:12px;color:#666;line-height:1.5;">The updated handover checklist is attached as an Excel file showing current progress. Please confirm with Kandia that you are able to cover during this period. Do not hesitate to contact Kandia if you have any concerns.</p>
+      <table cellpadding="0" cellspacing="0" bgcolor="#EFF6FF" style="background-color:#EFF6FF;border-radius:8px;width:100%"><tr><td style="padding:14px 16px;border-left:3px solid #2563EB">
+        <p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; How to update your checklist</p>
+        <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6">As you complete each section, <strong>reply to this email</strong> confirming what has been done. Cinderella will automatically tick off the items and send everyone an updated checklist.</p>
+        <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:11px;color:#333;font-style:italic">Example reply: <strong>&ldquo;Confirming Section 1 (Contacts &amp; Access) is complete and Section 2 (Current State of Work) is complete.&rdquo;</strong></p>
+        <p style="margin:6px 0 0;font-family:Arial,sans-serif;font-size:11px;color:#666">When all items are done, reply: <strong>&ldquo;All checklist items are complete.&rdquo;</strong></p>
+      </td></tr></table>
+    </td></tr>` + footer;
+  }
+
+  // Covering colleague: nominated (kept for backwards compat — now replaced by cover_nominated_briefing)
+  if (type === 'cover_nominated') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 You have been nominated as covering colleague</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">You have been nominated to cover <strong>${staff}</strong> during their upcoming leave. Here are the details:</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">What to expect</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>${trigger}:</strong> You will receive a detailed handover briefing from Cinderella</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Before leave:</strong> Review the handover document prepared by ${staff}</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Day before:</strong> Final briefing email from Cinderella with everything you need</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>During leave:</strong> You are the primary contact for ${staff}'s responsibilities</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Please confirm with Kandia that you are able to cover during this period. If you have any concerns about capacity, raise them now.</p>
+    </td></tr>` + footer;
+  }
+
+  // Covering colleague: 2-week briefing
+  if (type === 'cover_briefing') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 Handover briefing: covering ${staff}</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">The handover process for ${staff}'s leave has started. As the covering colleague, here is what you need to do over the next two weeks:</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Your responsibilities as covering colleague</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">1.&nbsp;&nbsp;Review the handover document once ${staff} shares it with you</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">2.&nbsp;&nbsp;Arrange and attend a 15-20 minute handover discussion with ${staff}</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">3.&nbsp;&nbsp;Test that you can access all SharePoint links and shared drives listed in the document</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">4.&nbsp;&nbsp;Raise any gaps or questions with ${staff} before the leave starts</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">5.&nbsp;&nbsp;Sign Phase 2 of the handover checklist once satisfied</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">6.&nbsp;&nbsp;Contact Kandia immediately if anything is unclear or outside your scope</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Cinderella is tracking progress. You will receive updates as the handover checklist is completed and a full briefing the day before leave starts.</p>
+    </td></tr>` + footer;
+  }
+
+  // 10-day reminder
+  if (type === 'reminder_10day') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #D97706;">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 10-day check: handover is ${pctDone}% complete</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${staff.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Your leave starts in <strong>10 days (${startStr})</strong>. Your handover checklist is only <strong>${pctDone}% complete</strong>. Please action the following items urgently:</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">${pendingList}</table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">The checklist must be completed by ${trigger} per R2S Leave Handover Policy. Contact Kandia if you need support.</p>
+    </td></tr>` + footer;
+  }
+
+  // 5-day escalation to Kandia
+  if (type === 'escalation_5day') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #C8211E;">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#C8211E;font-family:Arial,sans-serif;">🔴 ESCALATION: Phase 1 not signed — leave in 5 days</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi Kandia,</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;"><strong>${staff}</strong> leaves in 5 days and has not yet signed Phase 1 of the handover checklist. Per R2S policy, leave cannot be approved without this. <strong>Immediate action is required.</strong></p>
+      ${detailsTable}
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px;background:#FEE2E2;border-radius:8px;padding:12px 14px;width:100%">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#C8211E;padding-bottom:6px">Outstanding checklist items (${pendingItems.length}):</td></tr>
+        ${pendingList}
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Recommended action: contact ${staff} directly today to resolve this before leave starts.</p>
+    </td></tr>` + footer;
+  }
+
+  // 3-day final warning
+  if (type === 'final_warning') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #C8211E;">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#C8211E;font-family:Arial,sans-serif;">🔴 FINAL WARNING: Handover incomplete — leave in ${daysLeft} days</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${staff.split(' ')[0]} and ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Leave starts in <strong>${daysLeft} days</strong> and the handover is not fully complete. This is a formal reminder that per R2S policy, leave approval is contingent on all three phases being signed.</p>
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Still outstanding</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:12px">${pendingList}</table>
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Completed items</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">${doneList}</table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Contact Kandia immediately if any item cannot be completed before leave starts.</p>
+    </td></tr>` + footer;
+  }
+
+  // Covering colleague: day before
+  if (type === 'cover_day_before') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 Tomorrow: your coverage of ${staff} begins</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;"><strong>${staff}</strong>'s leave starts tomorrow (${startStr}). Here is your final pre-coverage summary:</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Before you start tomorrow</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Confirm you can access all SharePoint folders and shared drives</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Review the handover document one final time</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Have ${staff}'s key client contact list accessible</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Know the escalation path — anything outside your scope goes to Kandia</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Emergency contact for ${staff}: agreed method only, and only for business-critical matters</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Kandia is across everything. Contact her at any point if you need support or a decision outside your scope.</p>
+    </td></tr>` + footer;
+  }
+
+  // Covering colleague: leave has started — activation
+  if (type === 'cover_activation') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #D97706;">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">🟡 Coverage active: ${staff} is now on leave</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;"><strong>${staff} is now on leave.</strong> You are the primary contact for their responsibilities from today until <strong>${endStr}</strong>.</p>
+      ${detailsTable}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">While ${staff} is away</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Handle all incoming queries for ${staff}'s projects per the handover document</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Log anything unusual or outside scope — do not let it sit</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Escalate to Kandia immediately for decisions beyond your scope</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Only contact ${staff} directly if it is a genuine business-critical emergency</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Note anything for handback when ${staff} returns on ${endStr}</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Cinderella will check in with you and Kandia during the leave period. You are doing great — reach out to Kandia any time.</p>
+    </td></tr>` + footer;
+  }
+
+  // Mid-leave check-in
+  if (type === 'mid_leave_checkin') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">📋 Mid-leave check: ${staff}</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi Kandia,</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">${staff} has been on leave for approximately 5 days. This is a check-in to confirm coverage is going smoothly.</p>
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Please confirm</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;${cover} is handling coverage without issues</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;No client or project matters have fallen through the cracks</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Any issues that have arisen are being managed</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">${staff} is due to return on ${endStr}. Cinderella will send a handback prompt on their return day.</p>
+    </td></tr>` + footer;
+  }
+
+  // Return day
+  if (type === 'return_day') {
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">✅ Welcome back: ${staff} — handback today</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi ${staff.split(' ')[0]} and ${cover.split(' ')[0]},</p>
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;"><strong>Welcome back ${staff.split(' ')[0]}!</strong> Today is your first day back. Please arrange a quick handback discussion with ${cover} to ensure a smooth transition.</p>
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px;">Return day handback — please complete today</p>
+      <table cellpadding="0" cellspacing="0" style="margin-bottom:16px">
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&#9744;&nbsp;&nbsp;Brief handback discussion between ${staff} and ${cover} (15 mins)</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&#9744;&nbsp;&nbsp;${cover} to hand over any in-progress matters, decisions made, and items to action</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&#9744;&nbsp;&nbsp;Review emails, Teams messages, and any client correspondence from during leave</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&#9744;&nbsp;&nbsp;Confirm with Kandia that coverage period closed without outstanding issues</td></tr>
+        <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&#9744;&nbsp;&nbsp;Note any improvements for next handover (update Cinderella leave record)</td></tr>
+      </table>
+      <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">Thank you ${cover.split(' ')[0]} for covering — please flag anything that needs Kandia's attention before handing back.</p>
+    </td></tr>` + footer;
+  }
+
+  // Checklist updated — sent every time items are ticked by reply scan
+  if (type === 'checklist_updated') {
+    const done = completedItems.length;
+    const total = CHECKLIST_ITEMS.length;
+    const pct = Math.round(done/total*100);
+    const barCol = pct === 100 ? '#0D8A62' : pct > 50 ? '#D97706' : '#C8211E';
+    const doneRows = completedItems.map(i =>
+      `<tr><td bgcolor="#F0FDF4" style="background:#F0FDF4;padding:5px 10px;border-radius:4px;margin-bottom:3px;font-family:Arial,sans-serif;font-size:12px;color:#0D8A62">&#9745;&nbsp;&nbsp;${i.label}</td></tr><tr><td style="height:3px"></td></tr>`
+    ).join('');
+    const pendingRows = pendingItems.map(i =>
+      `<tr><td style="padding:4px 10px;font-family:Arial,sans-serif;font-size:12px;color:#444">&#9744;&nbsp;&nbsp;${i.label}</td></tr>`
+    ).join('');
+    return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
+      <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">&#128203; Leave checklist updated &mdash; ${pct}% complete</p>
+    </td></tr><tr><td style="padding:20px 28px;">
+      <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Hi all, Cinderella has updated the leave handover checklist for <strong>${staff}</strong> based on a recent reply. The updated checklist is attached.</p>
+      ${detailsTable}
+      <table cellpadding="0" cellspacing="0" bgcolor="#F8F8F6" style="background:#F8F8F6;border-radius:8px;width:100%;margin-bottom:16px"><tr><td style="padding:14px 16px">
+        <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">Progress: ${done}/${total} items complete</p>
+        <table cellpadding="0" cellspacing="0" width="100%"><tr>
+          <td bgcolor="#E8E6E1" style="background:#E8E6E1;border-radius:999px;height:10px;overflow:hidden">
+            <table cellpadding="0" cellspacing="0" width="${pct}%"><tr><td bgcolor="${barCol}" style="background:${barCol};height:10px;border-radius:999px"></td></tr></table>
+          </td>
+          <td style="padding-left:10px;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:${barCol};white-space:nowrap">${pct}%</td>
+        </tr></table>
+        ${done > 0 ? `<p style="margin:12px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#0D8A62;text-transform:uppercase;letter-spacing:1px">Completed:</p><table cellpadding="0" cellspacing="0" width="100%">${doneRows}</table>` : ''}
+        ${pendingItems.length > 0 ? `<p style="margin:10px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1px">Still outstanding:</p><table cellpadding="0" cellspacing="0" width="100%">${pendingRows}</table>` : ''}
+      </td></tr></table>
+      ${pct < 100 ? `<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:12px;color:#666">Cinderella will continue monitoring replies and updating the checklist automatically.</p>${REPLY_INST}` : `<p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#0D8A62;font-weight:bold">&#10003; All checklist items complete &mdash; sign-off phase now begins.</p>`}
+    </td></tr>` + footer;
+  }
+
+  // Urgent reminder — short notice leave (< 7 days)
+  if (type === 'reminder_urgent') {
+    const daysLeft2 = Math.ceil((new Date(entry.startDate) - new Date()) / (24*60*60*1000));
+    const pct2 = Math.round(completedItems.length/CHECKLIST_ITEMS.length*100);
+    const doneRows2 = completedItems.map(i=>'<tr><td bgcolor="#F0FDF4" style="background:#F0FDF4;padding:6px 10px;border-radius:4px;font-family:Arial,sans-serif;font-size:12px;color:#0D8A62">&#9745;&nbsp;&nbsp;'+i.label+'</td></tr><tr><td style="height:3px"></td></tr>').join('');
+    const pendingRows2 = pendingItems.map(i=>{
+      const tickUrl = getTickUrl ? getTickUrl(entry.id, i.id) : '#';
+      return '<tr><td style="padding:3px 0"><table cellpadding="0" cellspacing="0" width="100%"><tr>' +
+        '<td bgcolor="#FEE2E2" style="background:#FEE2E2;padding:6px 10px;border-radius:4px 0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#7F1D1D">&#9744;&nbsp;&nbsp;'+i.label+'</td>' +
+        '<td bgcolor="#07706B" style="background:#07706B;padding:6px 14px;border-radius:0 4px 4px 0;white-space:nowrap;width:1%"><a href="'+tickUrl+'" style="font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:#ffffff;text-decoration:none">&#10003; Mark done</a></td>' +
+      '</tr></table></td></tr><tr><td style="height:3px"></td></tr>';
+    }).join('');
+    return header + '<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #C8211E;">' +
+      '<p style="margin:0;font-size:16px;font-weight:bold;color:#C8211E;font-family:Arial,sans-serif;">&#128308; Urgent: leave in '+daysLeft2+' day'+(daysLeft2!==1?'s':'')+' — handover checklist required</p>' +
+    '</td></tr><tr><td style="padding:20px 28px;">' +
+      '<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">Hi '+cover.split(',')[0].trim().split(' ')[0]+',</p>' +
+      '<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6"><strong>'+staff+'</strong> is on leave in <strong>'+daysLeft2+' day'+(daysLeft2!==1?'s':'')+'</strong>. Because there are fewer than 7 days until leave starts, we are running an accelerated daily checklist process. Please complete all outstanding items as soon as possible.</p>' +
+      detailsTable +
+      '<table cellpadding="0" cellspacing="0" bgcolor="#F8F8F6" style="background:#F8F8F6;border-radius:8px;width:100%;margin-bottom:14px"><tr><td style="padding:14px 16px">' +
+        '<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">Progress: '+completedItems.length+'/'+CHECKLIST_ITEMS.length+' items complete ('+pct2+'%)</p>' +
+        (completedItems.length > 0 ? '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#0D8A62;text-transform:uppercase">Completed:</p><table cellpadding="0" cellspacing="0" width="100%">'+doneRows2+'</table>' : '') +
+        (pendingItems.length > 0 ? '<p style="margin:'+(completedItems.length>0?'10':'0')+'px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#C8211E;text-transform:uppercase">&#9888; Still outstanding — action urgently:</p><table cellpadding="0" cellspacing="0" width="100%">'+pendingRows2+'</table>' : '') +
+      '</td></tr></table>' +
+      '<table cellpadding="0" cellspacing="0" bgcolor="#EFF6FF" style="background-color:#EFF6FF;border-radius:8px;width:100%"><tr><td style="padding:14px 16px;border-left:3px solid #2563EB">' +
+        '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; Reply to confirm items complete</p>' +
+        '<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6">Reply to this email confirming which sections you have completed. Cinderella will update the checklist and send everyone a progress update within 8 hours.</p>' +
+        '<p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#333;font-style:italic">Example: <strong>&ldquo;Section 1 (Contacts &amp; Access) is complete and Section 2 (Current State of Work) is complete.&rdquo;</strong></p>' +
+      '</td></tr></table>' +
+    '</td></tr>' + footer;
+  }
+
+  return header + `<tr><td style="padding:20px 28px;"><p style="font-family:Arial,sans-serif">Leave notification for ${staff}</p></td></tr>` + footer;
+}
+
+// Generate Excel checklist — dynamic with completion status, overdue flags, issues
+async function generateLeaveChecklistXlsx(entry) {
+  // XLSX imported at top
+  const now = new Date();
+  const staff = entry.staffName;
+  const cover = entry.coveringColleague || 'To be confirmed';
+  const startDate = new Date(entry.startDate).toLocaleDateString('en-AU');
+  const endDate   = new Date(entry.endDate).toLocaleDateString('en-AU');
+  const triggerDate = new Date(entry.triggerDate).toLocaleDateString('en-AU');
+  const isPastTrigger = now > new Date(entry.triggerDate);
+  const daysToStart = Math.ceil((new Date(entry.startDate) - now) / (24*60*60*1000));
+
+  const checkItems = [
+    {section:'1. Contacts & Access',    id:'contacts',    label:'Key contacts listed for each active project/relationship (name, role, contact details)'},
+    {section:'1. Contacts & Access',    id:'access',      label:'Instructions for covering colleague to obtain system/drive/account access'},
+    {section:'1. Contacts & Access',    id:'external',    label:'External parties notified of absence and redirected to correct contact'},
+    {section:'2. Current State of Work',id:'status',      label:'Status update prepared for each active project/task'},
+    {section:'2. Current State of Work',id:'deadlines',   label:'Deadlines and deliverables due during absence identified and dated'},
+    {section:'2. Current State of Work',id:'stalling',    label:'Items that could stall identified (pending approvals, awaited decisions)'},
+    {section:'3. Resources & Links',    id:'sharepoint',  label:'SharePoint links added (master folder, client folder, templates, correspondence)'},
+    {section:'3. Resources & Links',    id:'sp_verified', label:'All SharePoint links tested and accessible by covering colleague'},
+    {section:'4. Decisions & Judgement',id:'decisions',   label:'Matters needing a decision identified with recommendation or decision boundaries'},
+    {section:'4. Decisions & Judgement',id:'risks',       label:'Known risks and sensitivities noted (difficult client, sensitive matters)'},
+    {section:'5. Handover Discussion',  id:'discussion',  label:'Handover discussion held with covering colleague (not just document sent)'},
+    {section:'5. Handover Discussion',  id:'understood',  label:'Covering colleague confirms understanding and escalation path'},
+    {section:'5. Handover Discussion',  id:'emergency',   label:'Emergency contact method agreed (business critical only)'},
+  ];
+
+  const completed = checkItems.filter(i => entry.checklist && entry.checklist[i.id]);
+  const pending   = checkItems.filter(i => !entry.checklist || !entry.checklist[i.id]);
+  const overdue   = isPastTrigger ? pending : [];
+  const issues    = [];
+  if (daysToStart <= 5 && !entry.checklist?.phase1_signed) issues.push('🔴 CRITICAL: Phase 1 not signed — leave starts in '+daysToStart+' days');
+  if (daysToStart <= 3 && !entry.checklist?.phase2_signed) issues.push('🔴 CRITICAL: Phase 2 not signed — covering colleague has not confirmed');
+  if (overdue.length > 0) issues.push('⚠ '+overdue.length+' checklist items past due date (trigger was '+triggerDate+')');
+  if (!cover || cover === 'To be confirmed') issues.push('⚠ No covering colleague assigned');
+
+  const wb = XLSX.utils.book_new();
+
+  // ── SUMMARY SHEET ──────────────────────────────────────────
+  const summaryRows = [
+    ['RISK 2 SOLUTION — LEAVE HANDOVER SUMMARY','',''],
+    ['Generated:', new Date().toLocaleString('en-AU',{timeZone:'Australia/Brisbane'}),''],
+    [''],
+    ['STAFF MEMBER', staff,''],
+    ['LEAVE DATES', startDate + ' to ' + endDate,''],
+    ['COVERING COLLEAGUE(S)', cover,''],
+    ['TRIGGER DATE (due by)', triggerDate, isPastTrigger ? '⚠ PAST DUE' : 'OK'],
+    ['DAYS UNTIL LEAVE', daysToStart > 0 ? daysToStart+' days' : 'LEAVE HAS STARTED',''],
+    [''],
+    ['PROGRESS SUMMARY','',''],
+    ['Total checklist items', checkItems.length,''],
+    ['✅ Completed', completed.length,''],
+    ['⏳ Outstanding', pending.length,''],
+    ['🔴 Overdue (past trigger date)', overdue.length,''],
+    [''],
+    ['SIGN-OFF STATUS','',''],
+    ['Phase 1 — Staff member signed', entry.checklist?.phase1_signed ? '✅ SIGNED' : (daysToStart<=5?'🔴 OVERDUE':'⏳ PENDING'),''],
+    ['Phase 2 — Covering colleague signed', entry.checklist?.phase2_signed ? '✅ SIGNED' : (daysToStart<=3?'🔴 OVERDUE':'⏳ PENDING'),''],
+    ['Phase 3 — Kandia Du Bruyn signed', entry.checklist?.phase3_signed ? '✅ APPROVED' : '⏳ PENDING',''],
+    ['LEAVE APPROVED?', (entry.checklist?.phase1_signed && entry.checklist?.phase2_signed && entry.checklist?.phase3_signed) ? '✅ YES — ALL PHASES COMPLETE' : '🔴 NO — PENDING SIGN-OFF',''],
+  ];
+  if (issues.length > 0) {
+    summaryRows.push(['']);
+    summaryRows.push(['⚠ ISSUES REQUIRING ATTENTION','','']);
+    issues.forEach(issue => summaryRows.push([issue,'','']));
+  }
+
+  const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+  wsSummary['!cols'] = [{wch:35},{wch:45},{wch:20}];
+  XLSX.utils.book_append_sheet(wb, wsSummary, '📊 Summary');
+
+  // ── CHECKLIST SHEET ────────────────────────────────────────
+  const clRows = [
+    ['RISK 2 SOLUTION — STAFF LEAVE HANDOVER CHECKLIST','','','',''],
+    ['To be completed no later than two weeks before leave start date','','','',''],
+    [''],
+    ['Staff Member', staff, '', 'Trigger Date', triggerDate],
+    ['Covering Colleague', cover, '', 'Leave Starts', startDate],
+    ['Manager', 'Kandia Du Bruyn', '', 'Leave Ends', endDate],
+    [''],
+    ['SECTION','CHECKLIST ITEM','STATUS','NOTES',''],
+  ];
+
+  let lastSection = '';
+  checkItems.forEach(item => {
+    const done = entry.checklist && entry.checklist[item.id];
+    const isOverdue = !done && isPastTrigger;
+    const status = done ? '✅ COMPLETE' : isOverdue ? '🔴 OVERDUE' : '⏳ OUTSTANDING';
+    if (item.section !== lastSection) {
+      clRows.push(['','','','','']);
+      clRows.push([item.section,'','','','']);
+      lastSection = item.section;
+    }
+    clRows.push(['', item.label, status,'','']);
+  });
+
+  clRows.push(['']);
+  clRows.push(['RESOURCES & SHAREPOINT LINKS','','','','']);
+  clRows.push(['Master Project Folder','[Insert link]','','','']);
+  clRows.push(['Client/Account Folder','[Insert link]','','','']);
+  clRows.push(['Templates & Precedents','[Insert link]','','','']);
+  clRows.push(['Correspondence/Email Archive','[Insert link]','','','']);
+  clRows.push(['Other Relevant Folder','[Insert link]','','','']);
+  clRows.push(['All links tested by covering colleague?', entry.checklist?.sp_verified?'✅ YES':'⏳ NOT YET','','','']);
+
+  clRows.push(['']);
+  clRows.push(['SIGN-OFF — ALL THREE PHASES REQUIRED BEFORE LEAVE IS APPROVED','','','','']);
+  clRows.push(['Phase 1: Staff Member','Signed by:', staff, 'Status:', entry.checklist?.phase1_signed?'✅ SIGNED':(daysToStart<=5?'🔴 OVERDUE':'⏳ PENDING')]);
+  clRows.push(['Phase 2: Covering Colleague','Signed by:', cover, 'Status:', entry.checklist?.phase2_signed?'✅ SIGNED':(daysToStart<=3?'🔴 OVERDUE':'⏳ PENDING')]);
+  clRows.push(['Phase 3: Manager (Kandia Du Bruyn)','Signed by:', 'Kandia Du Bruyn', 'Status:', entry.checklist?.phase3_signed?'✅ APPROVED':'⏳ PENDING']);
+
+  if (issues.length > 0) {
+    clRows.push(['']);
+    clRows.push(['⚠ ISSUES FLAGGED BY CINDERELLA','','','','']);
+    issues.forEach(issue => clRows.push([issue,'','','','']));
+  }
+
+  const wsChecklist = XLSX.utils.aoa_to_sheet(clRows);
+  wsChecklist['!cols'] = [{wch:32},{wch:60},{wch:16},{wch:25},{wch:16}];
+  XLSX.utils.book_append_sheet(wb, wsChecklist, '📋 Checklist');
+
+  const buf = XLSX.write(wb, {type:'buffer', bookType:'xlsx'});
+  const path = '/home/leave-checklist-' + entry.id + '.xlsx';
+  writeFileSync(path, buf);
+  return path;
+}
+
+// Send leave checklist email with Excel attachment
+async function sendLeaveChecklistEmail(entry) {
+  if (!tokenStore.access_token) return;
+  try {
+    const token = await getValidToken();
+    const kandiaEmail = await getKandiaEmail();
+    const staffEmail = entry.staffEmail;
+    const coverEmail = entry.coveringEmail;
+    const subject = 'Action Required: Leave Handover Checklist — ' + entry.staffName + ' (Leave from ' + new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ')';
+
+    // Generate Excel
+    const xlsxPath = await generateLeaveChecklistXlsx(entry);
+    const xlsxContent = readFileSync(xlsxPath);
+    const xlsxB64 = xlsxContent.toString('base64');
+    const xlsxName = 'Leave_Handover_Checklist_' + entry.staffName.replace(/\s+/g,'_') + '.xlsx';
+
+    const htmlBody = buildLeaveEmail('checklist_email', entry);
+
+    const recipients = [
+      { emailAddress: { address: staffEmail } }
+    ];
+    const ccRecipients = [
+      { emailAddress: { address: kandiaEmail } }
+    ];
+    // CC all covering colleagues
+    const allCoverEmails = entry.coveringEmails && entry.coveringEmails.length > 0
+      ? entry.coveringEmails
+      : coverEmail ? [coverEmail] : [];
+    allCoverEmails.forEach(em => {
+      if (em && em !== kandiaEmail && em !== staffEmail) {
+        ccRecipients.push({ emailAddress: { address: em } });
+      }
+    });
+
+    const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST',
+      headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        subject, importance:'high',
+        body:{contentType:'HTML',content:htmlBody},
+        toRecipients: recipients,
+        ccRecipients,
+        attachments:[{
+          '@odata.type':'#microsoft.graph.fileAttachment',
+          name: xlsxName,
+          contentType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          contentBytes: xlsxB64
+        }]
+      })
+    });
+    const msg = await draft.json();
+    if (msg.id) {
+      const send = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',
+        {method:'POST',headers:{Authorization:'Bearer '+token}});
+      if (send.status === 202) console.log('[Leave] ✅ Checklist email sent to', staffEmail);
+      else console.log('[Leave] Checklist email saved to Drafts');
+    }
+    return msg.id;
+  } catch(e) {
+    console.error('[Leave] Checklist email error:', e.message);
   }
 }
 
-// Per-colleague checklist item toggle
-async function toggleLeaveItemForColleague(leaveId, colleagueEmail, itemId) {
+// Detect leave from emails/Teams
+async function detectLeaveFromEmails() {
+  if (!tokenStore.access_token) return;
   try {
-    var r2 = await fetch('/leave');
-    var entries2 = await r2.json();
-    var e2 = entries2.find(function(x){ return x.id === leaveId; });
-    if (!e2) return;
-    var cl2 = (e2.colleagueChecklists && e2.colleagueChecklists[colleagueEmail] && e2.colleagueChecklists[colleagueEmail].checklist)
-      ? e2.colleagueChecklists[colleagueEmail].checklist : {};
-    var upd = {}; upd[itemId] = !cl2[itemId]; upd.colleagueEmail = colleagueEmail;
-    await fetch('/leave/'+leaveId+'/checklist', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(upd)});
-    openLeaveChecklist(leaveId, colleagueEmail);
-    loadLeaveEntries();
-  } catch(err) { showToast('Error: '+err.message); }
+    const since = new Date(Date.now()-7*24*60*60*1000).toISOString();
+    const emails = await graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$top=100&$select=subject,from,bodyPreview,receivedDateTime`);
+    const LEAVE_KEYWORDS = ['annual leave','leave request','leave application','taking leave','going on leave','out of office from','away from','leave from','leave starting','leave begins'];
+    const DATE_PATTERN = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{2,4})/gi;
+
+    const state = loadLeaveState();
+    const existingStaff = new Set((state.leaveEntries||[]).map(e=>e.staffName.toLowerCase()));
+
+    for (const email of (emails.value||[])) {
+      const subj = (email.subject||'').toLowerCase();
+      const preview = (email.bodyPreview||'').toLowerCase();
+      const combined = subj + ' ' + preview;
+      const hasLeaveKeyword = LEAVE_KEYWORDS.some(k=>combined.includes(k));
+      if (!hasLeaveKeyword) continue;
+
+      const fromName = email.from?.emailAddress?.name || '';
+      const fromAddr = email.from?.emailAddress?.address || '';
+      // Only internal R2S staff
+      if (!fromAddr.includes('risk2solution.com')) continue;
+      if (existingStaff.has(fromName.toLowerCase())) continue;
+
+      const dates = (email.subject + ' ' + email.bodyPreview).match(DATE_PATTERN);
+      if (!dates || dates.length < 1) continue;
+
+      console.log('[Leave] Possible leave detected from:', fromName, '| Subject:', email.subject, '| Dates:', dates);
+      // Flag for manual review — don't auto-create, just alert Kandia
+      await draftToKandia(
+        '🗓 Possible leave detected — ' + fromName,
+        'Hi Kandia,\n\nI detected what may be a leave request from ' + fromName + '.\n\nEmail: "' + email.subject + '"\nPreview: ' + email.bodyPreview.substring(0,200) + '\nDates mentioned: ' + (dates||[]).join(', ') + '\n\nPlease add this leave in the Leave Management panel in Cinderella if confirmed:\nhttps://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net\n\nCinderella',
+        true
+      );
+      // Mark as alerted
+      existingStaff.add(fromName.toLowerCase());
+    }
+  } catch(e) {
+    console.error('[Leave] Detection error:', e.message);
+  }
 }
 
-async function clearReplyFlag(id) {
-  await fetch('/leave/'+id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pendingReplyReview:null})});
-  loadLeaveEntries();
-}
-
-
-async function processLeaveReplies(id) {
-  showToast('Scanning inbox and sent items for replies...');
+// Helper: send a leave alert email with optional Excel checklist attachment
+async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance, entry) {
   try {
-    var r = await fetch('/leave/'+id+'/process-replies', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({force: false})
-    });
-    var d = await r.json();
-    if (d.success) {
-      if (d.changed) {
-        showToast('Checklist updated to '+d.pct+'% — email sent to covering colleagues');
-      } else {
-        showToast(d.message || 'No new confirmations found');
+    const token = await getValidToken();
+    const toRecipients = toEmails.filter(Boolean).map(a=>({emailAddress:{address:a}}));
+    const ccRecipients = (ccEmails||[]).filter(Boolean).map(a=>({emailAddress:{address:a}}));
+    const INFO_EMAIL = process.env.INFO_EMAIL || 'info@risk2solution.com';
+    const payload = {
+      subject, importance:importance||'high', body:{contentType:'HTML',content:htmlBody},
+      toRecipients, ccRecipients,
+      from: {emailAddress:{address:INFO_EMAIL, name:'Cinderella | Risk 2 Solution'}},
+      replyTo: [{emailAddress:{address:INFO_EMAIL, name:'Cinderella | Risk 2 Solution'}}]
+    };
+    // Attach updated Excel checklist if entry provided
+    if (entry) {
+      try {
+        const attachB64 = await generatePopulatedChecklist(entry);
+        payload.attachments = [{
+          '@odata.type': '#microsoft.graph.fileAttachment',
+          name: 'R2S_Staff_Leave_Handover_Checklist.docx',
+          contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          contentBytes: attachB64
+        }];
+        console.log('[Leave] ✅ Populated checklist attached');
+      } catch(e) {
+        console.error('[Leave] Dynamic checklist failed:', e.message, '— trying static template');
+        try {
+          const TEMPLATE_PATHS = ['/home/leave-checklist-template.docx','/home/site/wwwroot/leave-checklist-template.docx'];
+          for (const tp of TEMPLATE_PATHS) {
+            try {
+              const buf = readFileSync(tp);
+              payload.attachments = [{'@odata.type':'#microsoft.graph.fileAttachment',
+                name:'R2S_Staff_Leave_Handover_Checklist.docx',
+                contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                contentBytes:buf.toString('base64')}];
+              console.log('[Leave] ✅ Static template attached as fallback');
+              break;
+            } catch(e2) {}
+          }
+        } catch(e3) { console.error('[Leave] All attachment methods failed'); }
       }
-      loadLeaveEntries();
-    } else { showToast('Error: '+(d.error||'Failed')); }
-  } catch(e) { showToast('Error: '+e.message); }
+    }
+    const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+      method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    const msg = await draft.json();
+    if (msg.id) {
+      const send = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',{method:'POST',headers:{Authorization:'Bearer '+token}});
+      return send.status === 202;
+    }
+  } catch(e) { console.error('[Leave] Alert send error:', e.message); }
+  return false;
 }
 
+// Monitor leave entries — new flow requiring Kandia confirmation before any emails
+async function monitorLeaveEntries() {
+  if (!tokenStore.access_token) return;
+  const state = loadLeaveState();
+  const now = new Date();
+  const { bHour, bMin } = getBrisbaneNow();
+  let changed = false;
+  const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
 
-async function sendLeaveChecklistNow(id) {
-  showToast('Sending checklist email...');
+  for (const entry of (state.leaveEntries||[])) {
+    if (['cancelled','returned'].includes(entry.status)) continue;
+
+    const startDate  = new Date(entry.startDate);
+    const endDate    = new Date(entry.endDate);
+    const daysToStart = Math.ceil((startDate - now) / (24*60*60*1000));
+    const allCoverEmails = (entry.coveringEmails&&entry.coveringEmails.length>0
+      ? entry.coveringEmails : entry.coveringEmail ? [entry.coveringEmail] : []);
+    const staffEmail = entry.staffEmail||'';
+
+    // ── STAGE 0: pending_confirmation — notify Kandia to confirm ──
+    // This fires when leave is detected (from email/manual) but NOT yet confirmed
+    if (entry.status === 'pending_confirmation' && !entry.kandiaAlertedAt) {
+      entry.kandiaAlertedAt = now.toISOString();
+      changed = true;
+      saveLeaveState(state);
+      const html = buildLeaveEmail('kandia_confirm_request', entry);
+      await sendLeaveAlert([kandiaEmail], [],
+        '🔔 Possible leave detected — please confirm: ' + entry.staffName,
+        html, 'high');
+      console.log('[Leave] Stage 0: Kandia asked to confirm leave for', entry.staffName);
+      continue; // Wait for Kandia to confirm before doing anything else
+    }
+
+    // Everything below only runs AFTER Kandia has confirmed (status === 'confirmed' or later)
+    if (entry.status === 'pending_confirmation') continue;
+
+    // ── STAGE 1: confirmed — send first email to covering colleagues ──
+    if (entry.status === 'confirmed' && !entry.firstEmailSentAt) {
+      if (!allCoverEmails.length) {
+        console.warn('[Leave] Cannot start process for', entry.staffName, '— no covering colleagues set');
+        continue;
+      }
+      entry.firstEmailSentAt = now.toISOString();
+      entry.status = 'process_started';
+      changed = true;
+      saveLeaveState(state);
+      // INDIVIDUAL email to EACH covering colleague separately — each gets their own checklist
+      if (!entry.colleagueChecklists) entry.colleagueChecklists = {};
+      const colleagues3 = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
+        ? entry.coveringColleagues.map((name,i)=>({name, email:(entry.coveringEmails||[])[i]||''}))
+        : [{name:entry.coveringColleague||'', email:entry.coveringEmail||''}];
+      for (const colleague3 of colleagues3) {
+        if (!colleague3.email) continue;
+        if (!entry.colleagueChecklists[colleague3.email]) entry.colleagueChecklists[colleague3.email] = {name:colleague3.name, checklist:{}};
+        const entryForColleague = {...entry, coveringColleague:colleague3.name, coveringEmail:colleague3.email,
+          coveringColleagues:[colleague3.name], coveringEmails:[colleague3.email]};
+        const daysLeft3 = Math.ceil((new Date(entry.startDate)-now)/(24*60*60*1000));
+        const isUrgent3 = daysLeft3 < 7;
+        const html3type = isUrgent3 ? 'reminder_urgent' : 'cover_nominated_briefing';
+        const subj3 = isUrgent3
+          ? '🔴 URGENT: Your covering colleague checklist — '+entry.staffName+' on leave in '+daysLeft3+' day'+(daysLeft3!==1?'s':'')+' — '+colleague3.name
+          : '📋 Your handover checklist: covering '+entry.staffName+' — '+colleague3.name;
+        const html3 = buildLeaveEmail(html3type, entryForColleague);
+        const to3 = [colleague3.email];
+        const cc3 = (staffEmail && staffEmail !== colleague3.email ? [staffEmail] : []);
+        await sendLeaveAlert(to3, cc3, subj3, html3, 'high', entryForColleague);
+        console.log('[Leave] Stage 1: Individual checklist sent to', colleague3.name);
+      }
+      continue;
+    }
+
+    // ── STAGE 2: Urgency-aware reminder schedule ──
+    if (['process_started','in_progress'].includes(entry.status)) {
+      const pending = CHECKLIST_ITEMS.filter(i => !entry.checklist || !entry.checklist[i.id]);
+      const lastReminder = entry.lastReminderAt ? new Date(entry.lastReminderAt) : new Date(entry.firstEmailSentAt||now);
+      const hoursSinceReminder = (now - lastReminder) / (60*60*1000);
+      const daysSinceReminder = Math.floor(hoursSinceReminder / 24);
+      const todayStr = todayBrisStr; // Brisbane calendar date
+
+      // Determine urgency based on days to leave start
+      const urgency = daysToStart >= 14 ? 'normal'      // standard 3-day cycle
+                    : daysToStart >= 7  ? 'accelerated' // daily reminders
+                    : 'emergency';                       // every morning + 8hr check
+
+      const reminderIntervalDays = urgency === 'normal' ? 3 : 1; // daily for urgent
+
+      // Send morning reminder — once per calendar day, between 8-9am Brisbane
+      // Bug fixed: use calendar date comparison (not hours), and != not ! ===
+      const reminderNotSentToday = entry.reminderSentDate !== todayStr;
+      const lastReminderDateStr = entry.lastReminderAt
+        ? new Date(entry.lastReminderAt).toLocaleDateString('en-AU',{timeZone:'Australia/Brisbane'})
+        : null;
+      const calendarDaysSinceReminder = lastReminderDateStr
+        ? Math.floor((now - new Date(entry.lastReminderAt)) / (24*60*60*1000))
+        : 999; // Never sent — always trigger
+
+      // Morning reminder: fires at 8am Brisbane sharp
+      if (pending.length > 0 && calendarDaysSinceReminder >= reminderIntervalDays &&
+          bHour === 8 && bMin < 30 && reminderNotSentToday) {
+        entry.lastReminderAt = now.toISOString();
+        entry.reminderSentDate = todayStr;
+        entry.awaitingReply = true;
+        entry.awaitingReplySince = now.toISOString();
+        changed = true;
+        saveLeaveState(state);
+
+        let subject, html;
+        if (urgency === 'emergency') {
+          subject = '🔴 URGENT: Leave handover required — ' + entry.staffName + ' on leave in ' + daysToStart + ' day' + (daysToStart!==1?'s':'');
+          html = buildLeaveEmail('reminder_urgent', entry);
+        } else {
+          subject = '⏰ Reminder: leave handover items due — ' + entry.staffName + ' (please reply to confirm completed)';
+          html = buildLeaveEmail('reminder_3day', entry);
+        }
+
+        // Send individual reminders per colleague
+        const colleagues4 = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
+          ? entry.coveringColleagues.map((name,i)=>({name, email:(entry.coveringEmails||[])[i]||''}))
+          : [{name:entry.coveringColleague||'', email:entry.coveringEmail||''}];
+        for (const c4 of colleagues4) {
+          if (!c4.email) continue;
+          const entryForC4 = {...entry, coveringColleague:c4.name, coveringEmail:c4.email, coveringColleagues:[c4.name], coveringEmails:[c4.email]};
+          const cc4 = staffEmail && staffEmail !== c4.email ? [staffEmail] : [];
+          await sendLeaveAlert([c4.email], cc4, subject, html, urgency==='emergency'?'high':'normal', entryForC4);
+        }
+        console.log('[Leave] Stage 2: Reminder sent (' + urgency + ' mode, ' + daysToStart + ' days to leave)');
+      }
+
+      // 3pm AEST: send updated checklist if checklist changed today (via replies)
+      // Fires if morning reminder was sent OR if checklist was updated today by replies
+      const reminderWasSentToday = entry.reminderSentDate === todayStr;
+      const checklistUpdatedToday = entry.lastChecklistUpdateAt &&
+        new Date(entry.lastChecklistUpdateAt).toLocaleDateString('en-CA',{timeZone:'Australia/Brisbane'}) === todayStr;
+      if ((reminderWasSentToday || checklistUpdatedToday) &&
+          bHour === 15 && bMin < 30 && entry.eightHourCheckSent !== todayStr) {
+        entry.eightHourCheckSent = todayStr; // Mark 3pm check as done for today
+        if (checklistUpdatedToday) {
+          // Replies came in and items were ticked — send the update
+          entry.awaitingReply = false;
+          changed = true;
+          saveLeaveState(state);
+          const done3pm = CHECKLIST_ITEMS.filter(i=>entry.checklist&&entry.checklist[i.id]).length;
+          const pct3pm = Math.round(done3pm/CHECKLIST_ITEMS.length*100);
+          const html3pm = buildLeaveEmail('checklist_updated', entry);
+          const cc3pm = staffEmail ? [staffEmail] : [];
+          await sendLeaveAlert(allCoverEmails, cc3pm,
+            '📋 Updated checklist: ' + pct3pm + '% complete — ' + entry.staffName + ' leave handover',
+            html3pm, 'normal', entry);
+          console.log('[Leave] Stage 2: 3pm update sent (checklist changed today) at', pct3pm + '%');
+        } else {
+          // No replies received today — do not send, just reset for tomorrow
+          entry.awaitingReply = false;
+          changed = true;
+          saveLeaveState(state);
+          console.log('[Leave] Stage 2: 3pm check — no checklist changes today, skipping update email');
+        }
+      }
+
+      // Reset awaiting reply flag at midnight so new day's reminder can fire
+      if (entry.awaitingReply && entry.reminderSentDate && entry.reminderSentDate !== todayStr) {
+        entry.awaitingReply = false;
+        changed = true;
+      }
+    }
+
+    // ── STAGE 3: Phase complete — send to sign-off person ──
+    if (['process_started','in_progress'].includes(entry.status)) {
+      const phase1Items = CHECKLIST_ITEMS.filter(i => i.section <= 5 && i.id !== 'phase1_signed' && i.id !== 'phase2_signed' && i.id !== 'phase3_signed');
+      const phase1Done = phase1Items.every(i => entry.checklist && entry.checklist[i.id]);
+      // Phase sign-off requests go at 3pm so they land at a consistent end-of-day time
+      if (phase1Done && !entry.checklist?.phase1_signed && !entry.phase1SignoffSentAt &&
+          bHour === 15 && bMin < 30) {
+        entry.phase1SignoffSentAt = now.toISOString();
+        changed = true;
+        saveLeaveState(state);
+        const html = buildLeaveEmail('phase1_signoff_request', entry);
+        await sendLeaveAlert([staffEmail], [kandiaEmail],
+          '✅ All checklist items complete — please sign off Phase 1: ' + entry.staffName,
+          html, 'high', entry);
+        console.log('[Leave] Stage 3: Phase 1 sign-off request sent at 3pm to', staffEmail);
+      }
+    }
+
+    // ── STAGE 4: Leave starts ──
+    if (!['on_leave','returned'].includes(entry.status) && daysToStart <= 0 && daysToStart > -200 && !entry.activationSentAt) {
+      entry.activationSentAt = now.toISOString();
+      entry.status = 'on_leave';
+      changed = true;
+      saveLeaveState(state);
+      if (allCoverEmails.length) {
+        const html = buildLeaveEmail('cover_activation', entry);
+        await sendLeaveAlert(allCoverEmails, [kandiaEmail],
+          '🟡 ACTIVE: ' + entry.staffName + ' is now on leave — coverage begins today',
+          html, 'high', entry);
+      }
+      console.log('[Leave] Stage 4: Leave started for', entry.staffName);
+    }
+
+    // ── STAGE 5: Return day ──
+    if (entry.status === 'on_leave' && now >= endDate && now < new Date(endDate.getTime()+24*60*60*1000) && !entry.returnAlertAt) {
+      entry.returnAlertAt = now.toISOString();
+      entry.status = 'returned';
+      changed = true;
+      saveLeaveState(state);
+      const returnEmails = [...new Set([staffEmail, ...allCoverEmails].filter(Boolean))];
+      const html = buildLeaveEmail('return_day', entry);
+      await sendLeaveAlert(returnEmails, [kandiaEmail],
+        '✅ Welcome back: ' + entry.staffName + ' — handback process today',
+        html, 'normal');
+      console.log('[Leave] Stage 5: Return day handback sent');
+    }
+
+    // Mark returned if past end date
+    if (entry.status === 'on_leave' && now > new Date(endDate.getTime()+24*60*60*1000)) {
+      entry.status = 'returned'; changed = true;
+    }
+  }
+
+  // Scan email replies to auto-update checklist
+  await scanLeaveReplies(state);
+
+  if (changed) saveLeaveState(state);
+}
+
+// Scan inbox for replies confirming checklist items completed
+// (old monitor replaced)
+
+
+// ── LEAVE API ENDPOINTS ──
+
+app.get('/leave', requireAuth, (req, res) => {
+  const state = loadLeaveState();
+  res.json(state.leaveEntries || []);
+});
+
+// Kandia confirms leave — starts the process
+app.post('/leave/:id/confirm', requireAuth, async (req, res) => {
   try {
-    var r = await fetch('/leave/'+id+'/send-checklist', {method:'POST'});
-    var text = await r.text();
-    var d;
-    try { d = JSON.parse(text); }
-    catch(e) {
-      console.error('send-checklist non-JSON response:', text.substring(0,200));
-      showToast('Server error — check Azure logs');
-      return;
-    }
-    if (d.success) {
-      showToast(d.message || 'Checklist email sent');
- 
-async function sendLeaveUpdate(id) {
-  showToast('Sending updated checklist...');
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    const { coveringColleagues, coveringEmails, startDate, endDate, notes } = req.body;
+    // Update entry with confirmed details
+    if (coveringColleagues) { entry.coveringColleagues = coveringColleagues; entry.coveringColleague = coveringColleagues.join(', '); }
+    if (coveringEmails) { entry.coveringEmails = coveringEmails; entry.coveringEmail = coveringEmails[0]||''; }
+    if (startDate) { entry.startDate = startDate; entry.triggerDate = new Date(new Date(startDate).getTime()-14*24*60*60*1000).toISOString().substring(0,10); }
+    if (endDate) entry.endDate = endDate;
+    if (notes) entry.notes = notes;
+    entry.status = 'confirmed';
+    entry.confirmedAt = new Date().toISOString();
+    saveLeaveState(state);
+    // Trigger monitoring immediately so Stage 1 email goes out
+    setTimeout(() => monitorLeaveEntries(), 500);
+    res.json({success:true, entry});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+app.post('/leave', requireAuth, async (req, res) => {
   try {
-    var r = await fetch('/leave/'+id+'/send-update', {method:'POST'});
-    var d = await r.json();
-    if (d.success) {
-      showToast(d.message || 'Updated checklist sent');
-    } else {
-      showToast('Error: '+(d.error||'Failed'));
+    const { staffName, staffEmail, startDate, endDate, coveringColleague, coveringEmail, staffRole } = req.body;
+    if (!staffName || !startDate || !endDate) return res.status(400).json({error:'staffName, startDate, endDate required'});
+    const start = new Date(startDate);
+    const triggerDate = new Date(start.getTime() - 14*24*60*60*1000); // 2 weeks before
+    // Support both single and multiple covering colleagues
+    const colleagues = req.body.coveringColleagues && req.body.coveringColleagues.length > 0
+      ? req.body.coveringColleagues
+      : coveringColleague ? [coveringColleague] : [];
+    const colleagueEmails = req.body.coveringEmails && req.body.coveringEmails.length > 0
+      ? req.body.coveringEmails
+      : coveringEmail ? [coveringEmail] : [];
+
+    const entry = {
+      id: 'leave_' + Date.now(),
+      staffName, staffEmail: staffEmail||'', staffRole: staffRole||'',
+      startDate, endDate,
+      coveringColleague: colleagues.join(', '),   // display string
+      coveringEmail: colleagueEmails[0] || '',     // primary email (backwards compat)
+      coveringColleagues: colleagues,              // array of names
+      coveringEmails: colleagueEmails,             // array of emails
+      triggerDate: triggerDate.toISOString().substring(0,10),
+      status: req.body.confirmed ? 'confirmed' : 'pending_confirmation',
+      checklist: {},
+      createdAt: new Date().toISOString(),
+      notifiedKandiaAt: null,
+      checklistSentAt: null,
+      sevenDayAlertAt: null,
+      notes: req.body.notes || ''
+    };
+    const state = loadLeaveState();
+    if (!state.leaveEntries) state.leaveEntries = [];
+    state.leaveEntries.push(entry);
+    saveLeaveState(state);
+    // Trigger notification immediately
+    setTimeout(() => monitorLeaveEntries(), 500);
+    res.json({success:true, entry});
+  } catch(e) {
+    res.status(500).json({error:e.message});
+  }
+});
+
+app.put('/leave/:id', requireAuth, (req, res) => {
+  try {
+    const state = loadLeaveState();
+    const idx = (state.leaveEntries||[]).findIndex(e=>e.id===req.params.id);
+    if (idx < 0) return res.status(404).json({error:'Not found'});
+    Object.assign(state.leaveEntries[idx], req.body);
+    // Recalculate trigger if dates changed
+    if (req.body.startDate) {
+      const start = new Date(req.body.startDate);
+      state.leaveEntries[idx].triggerDate = new Date(start.getTime()-14*24*60*60*1000).toISOString().substring(0,10);
     }
-  } catch(e) { showToast('Error: '+e.message); }
+    saveLeaveState(state);
+    res.json({success:true, entry:state.leaveEntries[idx]});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+app.delete('/leave/:id', requireAuth, (req, res) => {
+  const state = loadLeaveState();
+  state.leaveEntries = (state.leaveEntries||[]).filter(e=>e.id!==req.params.id);
+  saveLeaveState(state);
+  res.json({success:true});
+});
+
+app.put('/leave/:id/checklist', requireAuth, (req, res) => {
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    // Support per-colleague checklist: body may include { colleagueEmail, ...items }
+    const { colleagueEmail, ...items } = req.body;
+    if (colleagueEmail && entry.colleagueChecklists) {
+      if (!entry.colleagueChecklists[colleagueEmail]) entry.colleagueChecklists[colleagueEmail] = {name:colleagueEmail, checklist:{}};
+      Object.assign(entry.colleagueChecklists[colleagueEmail].checklist, items);
+    }
+    // Always update the overall checklist too
+    if (!entry.checklist) entry.checklist = {};
+    Object.assign(entry.checklist, items);
+    const totalItems = CHECKLIST_ITEMS.filter(i=>!i.id.includes('signed')).length;
+    const completedItems = CHECKLIST_ITEMS.filter(i=>!i.id.includes('signed')&&entry.checklist[i.id]).length;
+    if (entry.checklist.phase3_signed) entry.status = 'approved';
+    else if (completedItems > 0) entry.status = 'in_progress';
+    saveLeaveState(state);
+    res.json({success:true, checklist:entry.checklist, colleagueChecklists:entry.colleagueChecklists, status:entry.status, progress:{completed:completedItems,total:totalItems}});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+app.post('/leave/:id/send-checklist', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Leave entry not found'});
+
+    // Diagnose before sending
+    const kandiaEmail = await getKandiaEmail().catch(()=>'unknown');
+    const allCoverEmails = entry.coveringEmails && entry.coveringEmails.length > 0
+      ? entry.coveringEmails : entry.coveringEmail ? [entry.coveringEmail] : [];
+
+    console.log('[Leave] send-checklist request for:', entry.staffName);
+    console.log('[Leave] staffEmail:', entry.staffEmail || 'EMPTY');
+    console.log('[Leave] coveringEmails:', allCoverEmails.join(',') || 'NONE');
+    console.log('[Leave] kandiaEmail:', kandiaEmail);
+
+    if (!entry.staffEmail && !allCoverEmails.length) {
+      return res.status(400).json({
+        error: 'No email addresses — staffEmail and covering colleagues are both empty. Edit the leave entry to add them.',
+        debug: { staffEmail: entry.staffEmail, coveringEmails: allCoverEmails }
+      });
+    }
+
+    // Send to covering colleagues (TO) and staff + Kandia (CC)
+    // This is the CORRECT direction per the new process
+    const toEmails = allCoverEmails.length > 0 ? allCoverEmails : [entry.staffEmail];
+    const ccEmails = [];
+    if (entry.staffEmail && !toEmails.includes(entry.staffEmail)) ccEmails.push(entry.staffEmail);
+    if (kandiaEmail && !toEmails.includes(kandiaEmail)) ccEmails.push(kandiaEmail);
+
+    console.log('[Leave] Sending TO:', toEmails.join(','), '| CC:', ccEmails.join(','));
+
+    const subject = '📋 Leave Handover Checklist — ' + entry.staffName + ' (leave from ' + new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ')';
+    const html = buildLeaveEmail('cover_nominated_briefing', entry);
+    const sent = await sendLeaveAlert(toEmails, ccEmails, subject, html, 'high', entry);
+
+    entry.checklistSentAt = new Date().toISOString();
+    saveLeaveState(state);
+
+    res.json({
+      success: true,
+      sent,
+      message: sent
+        ? 'Checklist email sent to ' + toEmails.join(', ') + (ccEmails.length ? ' (CC: '+ccEmails.join(', ')+')' : '')
+        : 'Email saved to Outlook Drafts — Mail.Send permission may not be granted. Open Outlook Drafts to send manually.',
+      debug: { to: toEmails, cc: ccEmails, staffEmail: entry.staffEmail, coveringEmails: allCoverEmails }
+    });
+  } catch(e) {
+    console.error('[Leave] send-checklist error:', e.message, e.stack?.substring(0,500));
+    res.status(500).json({error: e.message || 'Failed to send checklist email'});
+  }
+});
+
+// Reset checklist (for testing/corrections)
+app.post('/leave/:id/reset-checklist', requireAuth, (req, res) => {
+  const state = loadLeaveState();
+  const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+  if (!entry) return res.status(404).json({error:'Not found'});
+  entry.checklist = {};
+  entry.processedReplies = [];
+  entry.sharepointLinks = {};
+  saveLeaveState(state);
+  console.log('[Leave] Checklist reset for', entry.staffName);
+  res.json({success:true, message:'Checklist reset for '+entry.staffName});
+});
+
+// Force send today's reminder immediately (bypasses time/date checks)
+app.post('/leave/:id/send-reminder', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+    const now = new Date();
+    const daysToStart = Math.ceil((new Date(entry.startDate)-now)/(24*60*60*1000));
+    const todayStr = now.toLocaleDateString('en-CA',{timeZone:'Australia/Brisbane'});
+    const allCoverEmails = entry.coveringEmails&&entry.coveringEmails.length>0 ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
+    const staffEmail = entry.staffEmail||'';
+    const urgency = daysToStart < 7 ? 'emergency' : daysToStart < 14 ? 'accelerated' : 'normal';
+    const colleagues = (entry.coveringColleagues&&entry.coveringColleagues.length>0)
+      ? entry.coveringColleagues.map((name,i)=>({name,email:(entry.coveringEmails||[])[i]||''}))
+      : [{name:entry.coveringColleague||'',email:entry.coveringEmail||''}];
+    let sent = 0;
+    for (const c of colleagues) {
+      if (!c.email) continue;
+      const entryForC = {...entry, coveringColleague:c.name, coveringEmail:c.email, coveringColleagues:[c.name], coveringEmails:[c.email]};
+      const html = buildLeaveEmail('reminder_urgent', entryForC);
+      const subject = '🔴 URGENT: Daily handover update — '+entry.staffName+' on leave in '+daysToStart+' day'+(daysToStart!==1?'s':'')+' — '+c.name;
+      const cc = staffEmail && staffEmail !== c.email ? [staffEmail] : [];
+      const ok = await sendLeaveAlert([c.email], cc, subject, html, 'high', entryForC);
+      if (ok) sent++;
+    }
+    entry.lastReminderAt = now.toISOString();
+    entry.reminderSentDate = todayStr;
+    entry.awaitingReply = true;
+    entry.awaitingReplySince = now.toISOString();
+    entry.eightHourCheckSent = null; // Reset so 3pm check fires today
+    saveLeaveState(state);
+    res.json({success:true, sent, colleagues:colleagues.length, urgency, daysToStart});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+// Manual trigger: force Stage 1 for a specific entry and return detailed logs
+app.post('/leave/:id/trigger', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  const logs = [];
+  const log = (msg) => { console.log('[Trigger]', msg); logs.push(msg); };
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found', logs});
+    log('Entry found: '+entry.staffName+' status='+entry.status);
+    log('staffEmail: '+(entry.staffEmail||'EMPTY'));
+    log('coveringEmails: '+(entry.coveringEmails||[]).join(', ')||'EMPTY');
+    log('coveringColleagues: '+(entry.coveringColleagues||[]).join(', ')||'EMPTY');
+    log('firstEmailSentAt: '+(entry.firstEmailSentAt||'null'));
+
+    // Check token
+    if (!tokenStore.access_token) return res.json({error:'No M365 token', logs});
+    log('M365 token present');
+
+    // Get Kandia email
+    const kandiaEmail = await getKandiaEmail().catch(e=>{log('getKandiaEmail error: '+e.message); return 'kandia@risk2solution.com';});
+    log('kandiaEmail: '+kandiaEmail);
+
+    const now = new Date();
+    const daysToStart = Math.ceil((new Date(entry.startDate)-now)/(24*60*60*1000));
+    log('daysToStart: '+daysToStart);
+
+    const colleagues = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
+      ? entry.coveringColleagues.map((name,i)=>({name, email:(entry.coveringEmails||[])[i]||''}))
+      : [{name:entry.coveringColleague||'', email:entry.coveringEmail||''}];
+    log('Colleagues to email: '+JSON.stringify(colleagues));
+
+    for (const c of colleagues) {
+      if (!c.email) { log('SKIP: no email for '+c.name); continue; }
+      log('Sending to: '+c.name+' <'+c.email+'>');
+      const daysLeft = Math.ceil((new Date(entry.startDate)-now)/(24*60*60*1000));
+      const isUrgent = daysLeft < 7;
+      const emailType = isUrgent ? 'reminder_urgent' : 'cover_nominated_briefing';
+      log('Email type: '+emailType+' (isUrgent='+isUrgent+')');
+      const entryForC = {...entry, coveringColleague:c.name, coveringEmail:c.email, coveringColleagues:[c.name], coveringEmails:[c.email]};
+      let html;
+      try { html = buildLeaveEmail(emailType, entryForC); log('HTML built, length: '+html.length); }
+      catch(e2) { log('buildLeaveEmail ERROR: '+e2.message); continue; }
+      const subject = isUrgent
+        ? '🔴 URGENT: Your covering colleague checklist — '+entry.staffName+' on leave in '+daysLeft+' day'+(daysLeft!==1?'s':'')+' — '+c.name
+        : '📋 Your handover checklist: covering '+entry.staffName+' — '+c.name;
+      const cc = (entry.staffEmail && entry.staffEmail !== c.email) ? [entry.staffEmail] : [];
+      log('Sending: TO='+c.email+' CC='+cc.join(','));
+      try {
+        const sent = await sendLeaveAlert([c.email], cc, subject, html, 'high', entryForC);
+        log('sendLeaveAlert result: '+sent);
+      } catch(e3) { log('sendLeaveAlert ERROR: '+e3.message+' '+e3.stack?.substring(0,200)); }
+    }
+
+    // Mark as sent
+    if (!entry.firstEmailSentAt) {
+      entry.firstEmailSentAt = now.toISOString();
+      entry.status = 'process_started';
+      if (!entry.colleagueChecklists) entry.colleagueChecklists = {};
+      colleagues.forEach(c=>{ if(c.email && !entry.colleagueChecklists[c.email]) entry.colleagueChecklists[c.email]={name:c.name,checklist:{}}; });
+      saveLeaveState(state);
+      log('Status updated to process_started');
+    }
+    res.json({success:true, logs, entry:{id:entry.id,status:entry.status,firstEmailSentAt:entry.firstEmailSentAt}});
+  } catch(e) {
+    log('FATAL ERROR: '+e.message+' '+e.stack?.substring(0,300));
+    res.status(500).json({error:e.message, logs});
+  }
+});
+
+// Manually trigger reply scan and 3pm update for a specific leave entry
+app.post('/leave/:id/process-replies', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    const beforeChecklist = JSON.stringify(entry.checklist||{});
+    // Clear processed replies so any missed emails get a fresh scan
+    entry.processedReplies = [];
+    saveLeaveState(state);
+    // Run reply scan
+    await scanLeaveReplies(state);
+    const freshState = loadLeaveState();
+    const freshEntry = (freshState.leaveEntries||[]).find(e=>e.id===req.params.id);
+    const afterChecklist = JSON.stringify(freshEntry.checklist||{});
+    const changed = beforeChecklist !== afterChecklist;
+    const done = CHECKLIST_ITEMS.filter(i=>freshEntry.checklist&&freshEntry.checklist[i.id]).length;
+    const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
+    res.json({
+      success: true,
+      changed,
+      pct,
+      itemsDone: done,
+      itemsTotal: CHECKLIST_ITEMS.length,
+      message: changed
+        ? 'Checklist updated to '+pct+'% — email sent to covering colleagues'
+        : 'Scanned inbox and sent items from the last 7 days — no new confirmations found. Check Azure logs for [Leave] scan details.'
+    });
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+// Public tick endpoint — used from email links, secured by HMAC signature
+// URL: /leave/tick?id=ENTRY_ID&item=ITEM_ID&sig=HMAC
+app.get('/leave/tick', async (req, res) => {
+  try {
+    const { id, item, sig } = req.query;
+    if (!id || !item || !sig) return res.status(400).send(tickPage('Invalid link', 'This link is missing required parameters.', false));
+    // Verify HMAC signature
+    const expected = require('crypto').createHmac('sha256', process.env.DASHBOARD_PASSWORD||'cinderella')
+      .update(id + ':' + item).digest('hex').substring(0, 16);
+    if (sig !== expected) return res.status(403).send(tickPage('Invalid link', 'This link has expired or is invalid.', false));
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===id);
+    if (!entry) return res.status(404).send(tickPage('Not found', 'This leave entry no longer exists.', false));
+    // Find item label
+    const itemDef = CHECKLIST_ITEMS.find(i=>i.id===item);
+    if (!itemDef) return res.status(400).send(tickPage('Unknown item', 'This checklist item was not recognised.', false));
+    if (entry.checklist && entry.checklist[item]) {
+      return res.send(tickPage('Already confirmed', itemDef.label + ' was already marked as complete.', true));
+    }
+    // Tick the item
+    if (!entry.checklist) entry.checklist = {};
+    entry.checklist[item] = true;
+    entry.lastChecklistUpdateAt = new Date().toISOString();
+    entry.status = 'in_progress';
+    // Also update per-colleague checklists
+    if (entry.colleagueChecklists) {
+      Object.keys(entry.colleagueChecklists).forEach(em => {
+        if (!entry.colleagueChecklists[em].checklist) entry.colleagueChecklists[em].checklist = {};
+        entry.colleagueChecklists[em].checklist[item] = true;
+      });
+    }
+    saveLeaveState(state);
+    console.log('[Leave] Tick via link:', entry.staffName, item, 'by', req.headers['x-forwarded-for']||req.ip);
+    // Trigger update email (async — don't wait)
+    setTimeout(async () => {
+      try {
+        const freshState = loadLeaveState();
+        const freshEntry = (freshState.leaveEntries||[]).find(e=>e.id===id);
+        if (!freshEntry) return;
+        const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+        const allCoverEmails = freshEntry.coveringEmails&&freshEntry.coveringEmails.length>0 ? freshEntry.coveringEmails : freshEntry.coveringEmail?[freshEntry.coveringEmail]:[];
+        const done = CHECKLIST_ITEMS.filter(i=>freshEntry.checklist&&freshEntry.checklist[i.id]).length;
+        const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
+        const html = buildLeaveEmail('checklist_updated', freshEntry);
+        const cc = freshEntry.staffEmail ? [freshEntry.staffEmail] : [];
+        const toEmails = allCoverEmails.length ? allCoverEmails : [kandiaEmail];
+        await sendLeaveAlert(toEmails, cc,
+          '📋 Checklist updated: '+pct+'% complete — '+freshEntry.staffName+' leave handover', html, 'normal', freshEntry);
+        console.log('[Leave] Update email sent after tick:', item, pct+'%');
+      } catch(e) { console.error('[Leave] Post-tick email error:', e.message); }
+    }, 1000);
+    res.send(tickPage('Confirmed ✓', itemDef.label, true));
+  } catch(e) {
+    console.error('[Leave] Tick error:', e.message);
+    res.status(500).send(tickPage('Error', e.message, false));
+  }
+});
+
+function tickPage(title, message, success) {
+  const col = success ? '#07706B' : '#C8211E';
+  const icon = success ? '&#10003;' : '&#10007;';
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title><style>body{margin:0;font-family:Arial,sans-serif;background:#F2F1EE;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.box{background:#fff;border-radius:16px;padding:40px;max-width:480px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,0.08)}
+.icon{width:64px;height:64px;border-radius:50%;background:${col};color:#fff;font-size:32px;display:flex;align-items:center;justify-content:center;margin:0 auto 20px}
+h2{color:#111;margin:0 0 12px;font-size:22px}p{color:#666;margin:0 0 24px;line-height:1.5}
+a{color:#07706B;font-weight:600;text-decoration:none}</style></head>
+<body><div class="box"><div class="icon">${icon}</div><h2>${title}</h2>
+<p>${message}</p><p>You can close this tab.<br><a href="https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net">Open Cinderella →</a></p>
+</div></body></html>`;
 }
 
-     loadLeaveEntries();
-    } else {
-      showToast('Error: ' + (d.error || 'Failed to send'));
-    }
-  } catch(e) { showToast('Error: ' + e.message); }
+// Generate tick URL for a leave item
+function getTickUrl(entryId, itemId) {
+  const sig = require('crypto').createHmac('sha256', process.env.DASHBOARD_PASSWORD||'cinderella')
+    .update(entryId + ':' + itemId).digest('hex').substring(0, 16);
+  return `https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/leave/tick?id=${entryId}&item=${itemId}&sig=${sig}`;
 }
 
-</script>
+// Send updated checklist email with current progress + tick buttons
+app.post('/leave/:id/send-update', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    const allCoverEmails = (entry.coveringEmails&&entry.coveringEmails.length>0) ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
+    const ccEmails = entry.staffEmail ? [entry.staffEmail] : [];
+    const done = CHECKLIST_ITEMS.filter(i=>entry.checklist&&entry.checklist[i.id]).length;
+    const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
+    const html = buildLeaveEmail('checklist_updated', entry);
+    const subject = '📋 Updated checklist: '+pct+'% complete — '+entry.staffName+' leave handover';
+    const sent = await sendLeaveAlert(allCoverEmails, ccEmails, subject, html, 'normal', entry);
+    res.json({success:true, sent, pct, to:allCoverEmails.join(', '), message:'Updated checklist sent ('+pct+'% complete)'});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
 
-</body>
+// Debug: show what emails the scanner sees for a leave entry
+app.get('/leave/:id/scan-debug', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    const since = new Date(Date.now() - 7*24*60*60*1000).toISOString(); // Last 7 days
+    const kandiaEmail = await getKandiaEmail().catch(()=>'unknown');
+    const relevantAddrs = [...new Set([...(entry.coveringEmails||[]), entry.staffEmail].filter(Boolean))];
+    const firstSentAt = new Date(entry.firstEmailSentAt||0);
+    const [inboxData, sentData] = await Promise.all([
+      graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$orderby=receivedDateTime desc&$top=50&$select=id,subject,from,bodyPreview,conversationId,receivedDateTime`),
+      graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$orderby=createdDateTime desc&$top=50&$select=id,subject,from,bodyPreview,conversationId,createdDateTime`)
+    ]);
+    const seen = new Set();
+    const allMsgs = [...(inboxData.value||[]), ...(sentData.value||[])].filter(m => {
+      if (seen.has(m.id)) return false; seen.add(m.id);
+      if (!m.receivedDateTime && m.createdDateTime) m.receivedDateTime = m.createdDateTime;
+      return true;
+    });
+    const analysis = allMsgs.map(m => {
+      const addr = (m.from?.emailAddress?.address||'').toLowerCase();
+      const subj = (m.subject||'').toLowerCase();
+      const fromRelevant = relevantAddrs.some(e => addr === e.toLowerCase());
+      const afterFirst = new Date(m.receivedDateTime) > firstSentAt;
+      const hasRe = subj.startsWith('re:') || subj.startsWith('fw:') || subj.startsWith('fwd:');
+      const body = (m.bodyPreview||'').toLowerCase();
+      const isAffirmative = /(complet|done|finish|confirm|tick|checked|yes|agreed|sorted)/.test(body);
+      return {
+        from: m.from?.emailAddress?.address,
+        subject: m.subject?.substring(0,80),
+        received: m.receivedDateTime,
+        fromRelevant, afterFirst, hasRe, isAffirmative,
+        wouldProcess: fromRelevant && afterFirst && hasRe,
+        bodyPreview: m.bodyPreview?.substring(0,100)
+      };
+    }).filter(m => m.fromRelevant || m.hasRe);
+    res.json({
+      entryId: entry.id, staffName: entry.staffName,
+      relevantAddrs, firstEmailSentAt: entry.firstEmailSentAt,
+      processedReplies: entry.processedReplies||[],
+      emailsFound: analysis.length, emails: analysis
+    });
+  } catch(e) { res.status(500).json({error: e.message}); }
+});
 
-</html>
+// Debug: show a leave entry's details
+app.get('/leave/:id/debug', requireAuth, (req, res) => {
+  const state = loadLeaveState();
+  const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+  if (!entry) return res.status(404).json({error:'Not found'});
+  res.json({
+    id: entry.id,
+    staffName: entry.staffName,
+    staffEmail: entry.staffEmail || 'EMPTY - THIS IS THE PROBLEM',
+    coveringColleague: entry.coveringColleague,
+    coveringEmail: entry.coveringEmail,
+    coveringColleagues: entry.coveringColleagues,
+    coveringEmails: entry.coveringEmails,
+    startDate: entry.startDate,
+    endDate: entry.endDate,
+    status: entry.status,
+    checklistSentAt: entry.checklistSentAt,
+    notifiedKandiaAt: entry.notifiedKandiaAt
+  });
+});
+
+
+
+
+// ── COMPLIANCE EMAIL BUILDER (Outlook-safe) ────────────────────
+function buildComplianceEmail(subject, heading, items, intro, footer_note) {
+  const now = new Date();
+  const itemRows = items.map(item => {
+    const due = new Date(item.dueDate);
+    const daysOut = Math.ceil((due - now) / (24*60*60*1000));
+    const isOverdue = daysOut < 0;
+    const isUrgent = daysOut >= 0 && daysOut <= 7;
+    const statusCol = isOverdue ? '#C8211E' : isUrgent ? '#D97706' : '#0D8A62';
+    const statusBg  = isOverdue ? '#FEE2E2' : isUrgent ? '#FEF3C7' : '#F0FDF4';
+    const statusLabel = isOverdue ? 'OVERDUE' : daysOut === 0 ? 'DUE TODAY' : 'Due in '+daysOut+' day'+(daysOut!==1?'s':'');
+    return `<tr>
+      <td bgcolor="${statusBg}" style="background-color:${statusBg};padding:12px 14px;border-radius:6px;margin-bottom:8px">
+        <table cellpadding="0" cellspacing="0" width="100%"><tr>
+          <td style="vertical-align:top">
+            <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:#111">${item.title}</p>
+            ${item.category ? `<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:11px;color:#777">${item.category}${item.source ? ' &middot; Source: '+item.source : ''}</p>` : ''}
+            ${item.notes ? `<p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#444">${item.notes}</p>` : ''}
+          </td>
+          <td align="right" style="vertical-align:top;padding-left:12px;white-space:nowrap">
+            <p style="margin:0 0 2px;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;color:${statusCol}">${statusLabel}</p>
+            <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#777">${due.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})}</p>
+          </td>
+        </tr></table>
+      </td>
+    </tr><tr><td style="height:8px"></td></tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:20px;background:#F2F1EE;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #E8E6E1;">
+<tr><td bgcolor="#07706B" style="background-color:#07706B;padding:22px 28px;">
+  <table cellpadding="0" cellspacing="0" width="100%"><tr>
+    <td>
+      <table cellpadding="0" cellspacing="0"><tr>
+        <td style="width:36px;height:36px;background-color:#ffffff;border-radius:8px;text-align:center;vertical-align:middle">
+          <span style="font-family:Georgia,serif;font-size:22px;font-weight:bold;color:#07706B;line-height:36px;display:block">C</span>
+        </td>
+        <td style="padding-left:12px;vertical-align:middle">
+          <p style="margin:0;font-family:Georgia,serif;font-size:22px;font-style:italic;color:#ffffff;font-weight:bold">Cinderella</p>
+          <p style="margin:2px 0 0;font-family:Arial,sans-serif;font-size:9px;color:rgba(255,255,255,0.85);letter-spacing:2px;text-transform:uppercase">COMPLIANCE &middot; RISK 2 SOLUTION</p>
+        </td>
+      </tr></table>
+    </td>
+  </tr></table>
+</td></tr>
+<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #07706B;">
+  <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif">${heading}</p>
+</td></tr>
+<tr><td style="padding:20px 28px;">
+  <p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">${intro}</p>
+  <table cellpadding="0" cellspacing="0" width="100%">${itemRows}</table>
+  ${footer_note ? `<p style="margin:16px 0 0;font-family:Arial,sans-serif;font-size:12px;color:#666;border-top:1px solid #E8E6E1;padding-top:12px">${footer_note}</p>` : ''}
+  <table cellpadding="0" cellspacing="0" style="margin-top:18px"><tr><td style="background-color:#07706B;border-radius:6px;padding:9px 18px;">
+    <a href="https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net" style="font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#ffffff;text-decoration:none">View in Cinderella &rarr;</a>
+  </td></tr></table>
+</td></tr>
+<tr><td bgcolor="#F2F1EE" style="background-color:#F2F1EE;padding:12px 28px;border-top:1px solid #E8E6E1;">
+  <p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#777">Cinderella &middot; Executive Assistant to Kandia Du Bruyn, COO &middot; Risk 2 Solution</p>
+</td></tr>
+</table></body></html>`;
+}
+
+// Monday: items due this week
+async function sendMondayComplianceBrief() {
+  if (!tokenStore.access_token) return;
+  const { dateStr, weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.mondayComplianceWeek === weekKey) return;
+
+  await checkComplianceDeadlines(true); // Refresh items silently first
+  const freshState = loadProactiveState();
+  const items = (freshState.complianceItems||[]);
+  const now = new Date();
+  const in7 = new Date(now.getTime() + 7*24*60*60*1000);
+
+  const dueThisWeek = items.filter(i => {
+    const d = new Date(i.dueDate);
+    return d >= now && d <= in7;
+  }).sort((a,b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+  const upcoming = items.filter(i => {
+    const d = new Date(i.dueDate);
+    return d > in7;
+  }).slice(0,5);
+
+  if (!dueThisWeek.length && !upcoming.length) {
+    state.mondayComplianceWeek = weekKey;
+    saveProactiveState(state);
+    return;
+  }
+
+  const allItems = [...dueThisWeek, ...upcoming];
+  const intro = dueThisWeek.length > 0
+    ? `Good morning Kandia. You have <strong>${dueThisWeek.length} compliance item${dueThisWeek.length!==1?'s':''} due this week</strong>. Please review and action these before the end of the week.`
+    : `Good morning Kandia. No compliance items are due this week — here is a preview of what is coming up.`;
+
+  const html = buildComplianceEmail(
+    '📋 Compliance brief — week of ' + new Date().toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'}),
+    '📋 Compliance Brief — ' + new Date().toLocaleDateString('en-AU',{day:'numeric',month:'long',year:'numeric'}),
+    allItems,
+    intro,
+    'You can edit due dates and add items to your calendar in Cinderella under the Compliance tab.'
+  );
+
+  const kandiaEmail = await getKandiaEmail();
+  const token = await getValidToken();
+  const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+    method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({
+      subject: '📋 Compliance this week — ' + dueThisWeek.length + ' item' + (dueThisWeek.length!==1?'s':'')+' due',
+      importance: dueThisWeek.length > 0 ? 'high' : 'normal',
+      body: {contentType:'HTML', content:html},
+      toRecipients: [{emailAddress:{address:kandiaEmail}}]
+    })
+  });
+  const msg = await draft.json();
+  if (msg.id) {
+    const send = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',{method:'POST',headers:{Authorization:'Bearer '+token}});
+    if (send.status === 202) console.log('[Compliance] ✅ Monday brief sent');
+  }
+  state.mondayComplianceWeek = weekKey;
+  saveProactiveState(state);
+}
+
+// Friday: completed this week + preview next week
+async function sendFridayComplianceBrief() {
+  if (!tokenStore.access_token) return;
+  const { weekKey } = getBrisbaneNow();
+  const state = loadProactiveState();
+  if (state.fridayComplianceWeek === weekKey) return;
+
+  const items = (state.complianceItems||[]);
+  const now = new Date();
+  const nextWeekEnd = new Date(now.getTime() + 14*24*60*60*1000);
+  const nextWeekStart = new Date(now.getTime() + 3*24*60*60*1000); // Sun
+
+  const completedThisWeek = items.filter(i => i.completedAt && new Date(i.completedAt) >= new Date(now.getTime()-7*24*60*60*1000));
+  const nextWeek = items.filter(i => {
+    const d = new Date(i.dueDate);
+    return d >= nextWeekStart && d <= nextWeekEnd;
+  }).sort((a,b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+  const allItems = [...nextWeek];
+  if (!allItems.length && !completedThisWeek.length) {
+    state.fridayComplianceWeek = weekKey;
+    saveProactiveState(state);
+    return;
+  }
+
+  const completedList = completedThisWeek.length > 0
+    ? '<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">Completed this week</p>' +
+      completedThisWeek.map(i => '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;color:#0D8A62">&#10003;&nbsp;&nbsp;' + i.title + '</p>').join('')
+    : '';
+
+  const intro = `Good afternoon Kandia. Here is your end-of-week compliance summary.` + (completedThisWeek.length ? ` You completed <strong>${completedThisWeek.length} item${completedThisWeek.length!==1?'s':''}</strong> this week — great work.` : '') + (nextWeek.length ? ` There are <strong>${nextWeek.length} item${nextWeek.length!==1?'s':''} due next week</strong> to prepare for.` : ' Nothing due next week.');
+
+  const html = buildComplianceEmail(
+    '📋 Friday compliance wrap-up',
+    '📋 Friday Compliance Wrap-up',
+    allItems.length ? allItems : [{title:'No compliance items due next week', dueDate: new Date(nextWeekStart).toISOString().substring(0,10), notes:'All clear for next week', category:''}],
+    intro + (completedList ? '<br><br>' + completedList : ''),
+    'Have a great weekend. Cinderella will send your next compliance brief on Monday morning.'
+  );
+
+  const kandiaEmail = await getKandiaEmail();
+  const token = await getValidToken();
+  const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
+    method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({
+      subject: '📋 Compliance wrap-up — ' + completedThisWeek.length + ' completed, ' + nextWeek.length + ' due next week',
+      body: {contentType:'HTML', content:html},
+      toRecipients: [{emailAddress:{address:kandiaEmail}}]
+    })
+  });
+  const msg = await draft.json();
+  if (msg.id) await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',{method:'POST',headers:{Authorization:'Bearer '+token}});
+  state.fridayComplianceWeek = weekKey;
+  saveProactiveState(state);
+}
+
+// ── EMAIL TRACKER INTELLIGENCE ──────────────────────────────────
+app.get('/email-tracker/brief', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const since = new Date(Date.now() - 10*24*60*60*1000).toISOString(); // Last 10 days
+    const [inboxData, sentData] = await Promise.all([
+      graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$top=100&$select=id,subject,from,bodyPreview,receivedDateTime,conversationId,webLink,importance&$orderby=receivedDateTime desc`),
+      graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$top=200&$select=subject,bodyPreview,conversationId,createdDateTime`)
+    ]);
+
+    const sentMsgs = sentData.value||[];
+    const sentConvs = new Map();
+    sentMsgs.forEach(m => {
+      if (!sentConvs.has(m.conversationId)) sentConvs.set(m.conversationId, []);
+      sentConvs.get(m.conversationId).push(m.bodyPreview||'');
+    });
+
+    // Filter inbox — only meaningful emails (exclude system, Cinderella-sent, bulk)
+    const EXCLUDE = ['noreply','no-reply','donotreply','mailer-daemon','newsletter','notifications@','alerts@','cinderella','morning brief','pre-meeting brief','board report','compliance deadline','leave handover','you are covering'];
+    const meaningful = (inboxData.value||[]).filter(m => {
+      const addr = (m.from?.emailAddress?.address||'').toLowerCase();
+      const subj = (m.subject||'').toLowerCase();
+      if (EXCLUDE.some(e => addr.includes(e) || subj.includes(e))) return false;
+      return true;
+    });
+
+    // Categorise each email
+    const emailList = meaningful.slice(0,50).map(m => {
+      const replies = sentConvs.get(m.conversationId)||[];
+      const hasReply = replies.length > 0;
+      const replyText = replies.join(' ').toLowerCase();
+      // Detect "I'll look into it" replies (still open)
+      const DEFERRED_PHRASES = ['will get back','look into','will follow up','will check','will review','will action','will investigate','will discuss','noted, i','will let you know','will come back','working on','in progress','will do','will be in touch','will send','will forward','will arrange','thank you, i','thanks, i'];
+      const CLOSED_PHRASES = ['please find attached','as discussed','as per','see attached','confirmed','done','completed','approved','sent you','please see','here is','here are','resolved'];
+      const isDeferred = hasReply && DEFERRED_PHRASES.some(p => replyText.includes(p));
+      const isClosed = hasReply && CLOSED_PHRASES.some(p => replyText.includes(p)) && !isDeferred;
+      const isMissed = !hasReply;
+
+      return {
+        id: m.id,
+        conversationId: m.conversationId,
+        subject: m.subject,
+        from: m.from?.emailAddress?.name || m.from?.emailAddress?.address,
+        fromAddr: m.from?.emailAddress?.address,
+        preview: (m.bodyPreview||'').substring(0,120),
+        received: m.receivedDateTime,
+        webLink: m.webLink,
+        hasReply,
+        isDeferred,
+        isClosed,
+        isMissed,
+        importance: m.importance
+      };
+    });
+
+    // Build AI summary for the "requires attention" emails
+    const needsAttention = emailList.filter(e => (e.isMissed || e.isDeferred) && !e.isClosed);
+    if (!needsAttention.length) return res.json({requiresAttention:[], missed:[], summary:'No emails currently require your attention.'});
+
+    // Use AI to generate a brief one-line gist for each
+    const emailSummary = needsAttention.slice(0,20).map(e =>
+      'FROM: ' + e.from + ' | SUBJECT: ' + e.subject + ' | PREVIEW: ' + e.preview + ' | STATUS: ' + (e.isMissed?'NO REPLY YET':e.isDeferred?'REPLIED BUT STILL OPEN':'')
+    ).join('\n---\n');
+
+    const ai = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+      body:JSON.stringify({model:'claude-haiku-4-5', max_tokens:1500,
+        messages:[{role:'user',content:`You are Cinderella, assistant to Kandia Du Bruyn (COO, Risk 2 Solution).
+
+Analyse these emails and write a ONE-LINE action-oriented gist for each. Be specific — name the person, what they need, any deadline mentioned.
+
+${emailSummary}
+
+Return ONLY valid JSON array. No markdown:
+[
+  {
+    "conversationId": "copy the conversationId from the email",
+    "gist": "One line: what this email needs from Kandia — specific, actionable",
+    "priority": "urgent or normal",
+    "category": "decision or task or reply or information"
+  }
+]`}]})
+    });
+    const aiData = await ai.json();
+    let gists = [];
+    try {
+      const raw = (aiData.content||[]).map(c=>c.text||'').join('').replace(/^```json\s*/,'').replace(/```$/,'').trim();
+      const j = raw.indexOf('['); const k = raw.lastIndexOf(']');
+      gists = JSON.parse(j>=0&&k>j ? raw.substring(j,k+1) : '[]');
+    } catch(e) { console.warn('[EmailTracker] AI parse error:', e.message); }
+
+    const gistMap = {};
+    gists.forEach(g => { gistMap[g.conversationId] = g; });
+
+    const result = needsAttention.map(e => ({
+      id: e.id,
+      conversationId: e.conversationId,
+      subject: e.subject,
+      from: e.from,
+      fromAddr: e.fromAddr,
+      received: e.received,
+      webLink: e.webLink,
+      status: e.isMissed ? 'missed' : 'deferred',
+      importance: e.importance,
+      gist: gistMap[e.conversationId]?.gist || e.subject,
+      priority: gistMap[e.conversationId]?.priority || 'normal',
+      category: gistMap[e.conversationId]?.category || 'reply'
+    }));
+
+    const missed = result.filter(e => e.status === 'missed');
+    const deferred = result.filter(e => e.status === 'deferred');
+    res.json({requiresAttention: deferred, missed, total: result.length});
+  } catch(e) {
+    console.error('[EmailTracker] Brief error:', e.message);
+    res.status(500).json({error: e.message});
+  }
+});
+
+// Mark email as done (dismiss from tracker)
+app.post('/email-tracker/dismiss', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  if (!state.dismissedEmails) state.dismissedEmails = [];
+  state.dismissedEmails.push({id: req.body.conversationId, dismissedAt: new Date().toISOString()});
+  // Keep only last 200 dismissals
+  if (state.dismissedEmails.length > 200) state.dismissedEmails = state.dismissedEmails.slice(-200);
+  saveProactiveState(state);
+  res.json({success:true});
+});
+
+// Compliance: update due date for an item
+app.put('/compliance/items/:id', requireAuth, (req, res) => {
+  const state = loadProactiveState();
+  const item = (state.complianceItems||[]).find(i => String(i.id) === String(req.params.id));
+  if (!item) return res.status(404).json({error:'Not found'});
+  if (req.body.dueDate) item.dueDate = req.body.dueDate;
+  if (req.body.notes) item.notes = req.body.notes;
+  if (req.body.title) item.title = req.body.title;
+  if (req.body.completed !== undefined) {
+    item.completed = req.body.completed;
+    item.completedAt = req.body.completed ? new Date().toISOString() : null;
+  }
+  saveProactiveState(state);
+  res.json({success:true, item});
+});
+
+// ── THINK LOOP ──
+async function think() {
+  if (isRunning) return;
+  isRunning = true;
+  try {
+    let emails = [];
+    let calendarSummary = "No calendar data yet";
+    if (tokenStore.access_token) {
+      try {
+        const emailData = await graphGet(
+          `/me/messages?$filter=isRead eq false&$top=10&$select=subject,from,receivedDateTime`
+        );
+        emails = emailData.value.map(m => ({
+          sender: m.from?.emailAddress?.name,
+          hoursOld: Math.round((Date.now() - new Date(m.receivedDateTime)) / 3600000),
+          subject: m.subject
+        }));
+        const BRISBANE_MS = 10 * 60 * 60 * 1000;
+        const nowT = new Date();
+        const brisNow = new Date(nowT.getTime() + BRISBANE_MS);
+        const ty = brisNow.getUTCFullYear(), tm = brisNow.getUTCMonth(), td = brisNow.getUTCDate();
+        const start = new Date(Date.UTC(ty, tm, td, 0, 0, 0) - BRISBANE_MS).toISOString();
+        const end   = new Date(Date.UTC(ty, tm, td, 23, 59, 59) - BRISBANE_MS).toISOString();
+        const calData = await graphGet(`/me/calendarView?startDateTime=${start}&endDateTime=${end}&$select=subject,start,end`);
+        calendarSummary = calData.value.map(e =>
+          `${new Date(e.start.dateTime).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',timeZone:'Australia/Brisbane'})} — ${e.subject}`
+        ).join(', ') || 'No meetings today';
+      } catch(e) {
+        console.log('Graph fetch in think loop:', e.message);
+      }
+    }
+    const staff = [];
+    const prompt = `You are Cinderella, elite COO executive assistant for Risk 2 Solution Group. Risk 2 Solution Group is Australia's most awarded integrated risk management company, providing professional services in:
+- Risk Management (Presilience® programs, Business Continuity, CRO-as-a-Service, Risk Assessments)
+- Security (SoCI compliance, OVA prevention, Security consulting, CSO-as-a-Service)
+- Technology & Cybersecurity (Maturity Assessments, vCISO, SOC monitoring, Vulnerability Remediation)
+- Training & Education (RTO #4785, Postgrad qualifications, R2S Academy eLearning, bespoke programs)
+- Emergency Planning Services (EMPs, Evacuation Diagrams, Warden Training, BCP, CIM)
+- Research & Events (ASRC, ISRM, PSG Conference, Presilience® Summits)
+ISO Certified: 9001:2015, 45001:2018, 14001:2015, 18788:2015
+20+ years | 800+ clients | 150,000+ people trained
+Head Office: Murrarie QLD | Operates Australia-wide and internationally
+NOTE: Medical division has been fully divested — never reference medical personnel or medical services.
+Analyse and return ONLY raw JSON with no markdown.
+Emails: ${JSON.stringify(emails)}
+Calendar today: ${calendarSummary}
+Staff: ${JSON.stringify(staff)}
+Return: {"priorities":[{"id":"","task":"","owner":"","urgency":"low|medium|high","reason":""}],"risks":[{"risk":"","impact":"","severity":"low|medium|high"}],"actions":[{"action":"","priority":"low|medium|high","owner":"","rationale":""}]}`;
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": process.env.ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 350, messages: [{ role: "user", content: prompt }] })
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data?.content?.[0]?.text) {
+      const clean = data.content[0].text.replace(/```json/g,'').replace(/```/g,'').trim();
+      try { latestOutput = JSON.parse(clean); } catch(e) {}
+    }
+    // Check board meeting schedule (Thursdays only)
+    await checkBoardMeetingSchedule();
+
+    // ── PROACTIVE INTELLIGENCE ──
+    const { hour: bHour, minute: bMin, dayOfWeek: bDay, isWeekday } = getBrisbaneNow();
+
+    // Morning brief — 7:00-7:30am weekdays
+    if (isWeekday && bHour === 7 && bMin < 30) {
+      await sendMorningBrief();
+    }
+
+    // Pre-meeting briefs — every cycle during business hours
+    await checkPreMeetingBriefs();
+
+    // Financial intelligence — check for new Diane P&L emails
+    await checkFinancialAlerts();
+
+    // Onboarding triggers — DISABLED (too many false positives)
+    // await checkOnboardingTriggers();
+
+    // Monday morning tasks
+    if (bDay === 'Monday' && bHour >= 7 && bHour <= 9) {
+      await sendAuroraProjectAlert();
+      await draftCEOWeeklyBrief();
+      await checkCapacityTrends();
+      await checkReceivables();
+    }
+
+    // Friday 11am — automated check-in reminder to all staff
+    if (bDay === 'Friday' && bHour === 12 && bMin < 30) {
+      await sendFridayCheckInReminder();
+    }
+
+    // Compliance: Monday morning (items due this week) + Friday afternoon (completed + preview)
+    if (bDay === 'Monday' && bHour === 8 && bMin < 30) {
+      await sendMondayComplianceBrief();
+    }
+    if (bDay === 'Friday' && bHour === 15 && bMin < 30) {
+      await sendFridayComplianceBrief();
+    }
+    // Still scan for new compliance items daily (silent — no email, just updates state)
+    await checkComplianceDeadlines(true); // true = silent mode, no email
+
+
+
+    // Leave management monitoring
+    await monitorLeaveEntries();
+  } catch (err) {
+    console.error("❌ Error:", err.message);
+  } finally {
+    isRunning = false;
+  }
+}
+
+// Only runs during Brisbane business hours (7am–6pm), every 30 minutes
+function isBrisbaneBusinessHours() {
+  const hour = parseInt(
+    new Date().toLocaleString('en-AU', {
+      timeZone: 'Australia/Brisbane',
+      hour: 'numeric',
+      hour12: false
+    })
+  );
+  return hour >= 7 && hour <= 18;
+}
+
+if (isBrisbaneBusinessHours()) {
+  think();
+}
+
+setInterval(() => {
+  if (isBrisbaneBusinessHours()) {
+    think();
+  } else {
+    console.log('💤 Outside business hours — Cinderella is resting');
+  }
+}, 1800000);
+
+app.get("/status", (req, res) => {
+  res.json(Object.keys(latestOutput).length === 0 ? { status: "initialising" } : latestOutput);
+});
+
+app.listen(PORT, () => {
+  console.log(`🌙 Cinderella running on port ${PORT}`);
+});
