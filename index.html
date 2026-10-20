@@ -7590,6 +7590,7 @@ async function loadLeaveEntries() {
 
           '<button onclick="editLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">✏ Edit</button>' +
           '<button onclick="sendLeaveChecklistNow(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">📧 Send checklist email</button>' +
+          '<button data-lid="' + e.id + '" onclick="processLeaveReplies(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">&#128257; Process replies</button>' +
           '<button onclick="deleteLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px;color:var(--r)">Delete</button>' +
         '</div>' +
         '</div>';
@@ -7768,6 +7769,22 @@ async function toggleLeaveItemForColleague(leaveId, colleagueEmail, itemId) {
 async function clearReplyFlag(id) {
   await fetch('/leave/'+id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pendingReplyReview:null})});
   loadLeaveEntries();
+}
+
+
+async function processLeaveReplies(id) {
+  showToast('Scanning for replies and updating checklist...');
+  try {
+    var r = await fetch('/leave/'+id+'/process-replies', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({force: false})
+    });
+    var d = await r.json();
+    if (d.success) {
+      showToast(d.message || 'Done');
+      loadLeaveEntries();
+    } else { showToast('Error: '+(d.error||'Failed')); }
+  } catch(e) { showToast('Error: '+e.message); }
 }
 
 </script>
