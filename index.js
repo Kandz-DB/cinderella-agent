@@ -4088,7 +4088,7 @@ async function scanLeaveReplies(state) {
         } catch(e) { console.warn('[Leave] Body fetch failed, using preview'); }
 
         // Check for affirmative language
-        const isAffirmative = /(complet|done|finish|confirm|tick|checked|yes|agreed|sorted|all good|signoff|sign off|signed)/i.test(bodyText);
+        const isAffirmative = /confirm|complet|done|finish|tick|check|yes|yep|agreed|sorted|sign off|signed|handover done|handover complete/i.test(bodyText);
         if (!isAffirmative) {
           console.log('[Leave] Reply not affirmative, skipping:', (reply.subject||'').substring(0,60));
           entry.processedReplies.push(reply.id);
