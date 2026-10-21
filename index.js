@@ -4243,9 +4243,9 @@ async function scanLeaveReplies(state) {
             const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
             if (fromAddr !== c.email.toLowerCase()) return false;
             if (sids[convKey]) return m.conversationId === sids[convKey];
-            // Fallback: reply from this covering colleague about phase 2
-            const subj = (m.subject||'').toLowerCase();
-            return subj.includes('phase 2') || subj.includes('sign-off') || subj.includes('covering') || subj.includes('re:');
+            // Fallback: any reply FROM this specific covering colleague (email-based, no subject restriction)
+            // Phase 2 stays email-specific (not broadened to all R2S) so each colleague is tracked individually
+            return true; // From + date filters above are sufficient
           });
 
           let confirmed = false;
