@@ -4190,19 +4190,20 @@ async function scanLeaveReplies(state) {
       }
     }
     // ── Scan for phase sign-off replies ──
+    // Uses separate processedSignoffReplies so checklist loop doesn't block sign-off detection
     for (const entry2 of (state.leaveEntries||[])) {
       if (!entry2.phase1SignoffSentAt && !entry2.phase2SignoffSentAt && !entry2.phase3SignoffSentAt) continue;
       if (!entry2.signoffConversationIds) entry2.signoffConversationIds = {};
       const sids = entry2.signoffConversationIds;
       let sChanged = false;
       if (!entry2.checklist) entry2.checklist = {};
-      if (!entry2.processedReplies) entry2.processedReplies = [];
+      if (!entry2.processedSignoffReplies) entry2.processedSignoffReplies = [];
 
       // Check phase 1 replies — match by conversationId OR by subject pattern + sender
       if (!entry2.checklist.phase1_signed && entry2.phase1SignoffSentAt) {
         const p1SentAt = new Date(entry2.phase1SignoffSentAt);
         const p1replies = allMsgs.filter(m => {
-          if (entry2.processedReplies.includes(m.id)) return false;
+          if (entry2.processedSignoffReplies.includes(m.id)) return false;
           if (new Date(m.receivedDateTime) <= p1SentAt) return false;
           const subj = (m.subject||'').toLowerCase();
           const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
@@ -4218,7 +4219,7 @@ async function scanLeaveReplies(state) {
           // Accept any affirmative reply to a phase 1 email
           if (/confirm|approv|yes|phase\s*1|signed|done|agreed/i.test(body)) {
             entry2.checklist.phase1_signed = true;
-            entry2.processedReplies.push(r.id);
+            entry2.processedSignoffReplies.push(r.id);
             // Also store conversationId if not already stored
             if (!sids.phase1 && r.conversationId) sids.phase1 = r.conversationId;
             sChanged = true;
@@ -4238,7 +4239,7 @@ async function scanLeaveReplies(state) {
           if (entry2.phase2Confirmations[c.email]) continue; // Already confirmed
           const p2SentAt = new Date(entry2.phase2SignoffSentAt||0);
           const p2replies = allMsgs.filter(m => {
-            if (entry2.processedReplies.includes(m.id)) return false;
+            if (entry2.processedSignoffReplies.includes(m.id)) return false;
             if (new Date(m.receivedDateTime) <= p2SentAt) return false;
             const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
             if (fromAddr !== c.email.toLowerCase()) return false;
@@ -4254,7 +4255,7 @@ async function scanLeaveReplies(state) {
             if (/phase\s*2\s*(confirmed|approved|signed|done)|confirmed|approved|yes|ready/i.test(body)) {
               entry2.phase2Confirmations[c.email] = true;
               if (!entry2.processedReplies) entry2.processedReplies = [];
-              entry2.processedReplies.push(r.id);
+              entry2.processedSignoffReplies.push(r.id);
               sChanged = true;
               confirmed = true;
               console.log('[Leave] ✅ Phase 2 confirmed by', c.name);
@@ -4274,7 +4275,7 @@ async function scanLeaveReplies(state) {
         const kandiaEmailP3 = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
         const p3SentAt = new Date(entry2.phase3SignoffSentAt);
         const p3replies = allMsgs.filter(m => {
-          if (entry2.processedReplies.includes(m.id)) return false;
+          if (entry2.processedSignoffReplies.includes(m.id)) return false;
           if (new Date(m.receivedDateTime) <= p3SentAt) return false;
           const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
           if (fromAddr !== kandiaEmailP3.toLowerCase()) return false;
@@ -4287,7 +4288,7 @@ async function scanLeaveReplies(state) {
           if (/approved|phase\s*3\s*(approved|confirmed|done)|yes.*approv|approv.*yes/i.test(body)) {
             entry2.checklist.phase3_signed = true;
             if (!entry2.processedReplies) entry2.processedReplies = [];
-            entry2.processedReplies.push(r.id);
+            entry2.processedSignoffReplies.push(r.id);
             sChanged = true;
             console.log('[Leave] ✅ Phase 3 approved by Kandia');
           }
@@ -6218,9 +6219,15 @@ app.post('/leave/:id/process-replies', requireAuth, async (req, res) => {
     const beforeChecklist = JSON.stringify(entry.checklist||{});
     // Clear processed replies so any missed emails get a fresh scan
     entry.processedReplies = [];
+    entry.processedSignoffReplies = []; // Clear sign-off replies too
     saveLeaveState(state);
-    // Run reply scan
-    await scanLeaveReplies(state);
+    // Run reply scan — wrapped so any crash returns a proper JSON error
+    try {
+      await scanLeaveReplies(state);
+    } catch(scanErr) {
+      console.error('[Leave] process-replies scan error:', scanErr.message);
+      return res.status(500).json({error: 'Scan error: ' + scanErr.message});
+    }
     const freshState = loadLeaveState();
     const freshEntry = (freshState.leaveEntries||[]).find(e=>e.id===req.params.id);
     const afterChecklist = JSON.stringify(freshEntry.checklist||{});
