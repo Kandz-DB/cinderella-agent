@@ -7662,7 +7662,12 @@ async function submitAddLeave() {
     });
     var d = await r.json();
     if (d.success) {
-
+      closeModal();
+      showToast('Leave logged — handover email being sent to covering colleague(s) now');
+      loadLeaveEntries();
+    } else { showToast('Error: '+(d.error||'Failed')); }
+  } catch(e) { showToast('Error: '+e.message); }
+}
 
 async function openLeaveChecklist(id, preselectedEmail) {
   try {
@@ -7770,41 +7775,24 @@ async function clearReplyFlag(id) {
 async function processLeaveReplies(id) {
   showToast('Scanning inbox and sent items for replies...');
   try {
-    var r = await fetch('/leave/'+id+'/process-replies', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({force: false})
-    });
+    var r = await fetch('/leave/'+id+'/process-replies', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
     var d = await r.json();
     if (d.success) {
-      if (d.changed) {
-        showToast('Checklist updated to '+d.pct+'% — email sent to covering colleagues');
-      } else {
-        showToast(d.message || 'No new confirmations found');
-      }
+      showToast(d.changed ? 'Checklist updated to '+d.pct+'% — email sent' : 'No new confirmations found in the last 7 days');
       loadLeaveEntries();
     } else { showToast('Error: '+(d.error||'Failed')); }
   } catch(e) { showToast('Error: '+e.message); }
 }
-
 
 async function sendLeaveChecklistNow(id) {
   showToast('Sending nomination email...');
   try {
     var r = await fetch('/leave/'+id+'/send-checklist', {method:'POST'});
     var text = await r.text();
-    var d;
-    try { d = JSON.parse(text); } catch(e) {
-      console.error('send-checklist response:', text.substring(0,200));
-      showToast('Server error — check Azure logs');
-      return;
-    }
-    if (d.success) {
-      showToast(d.message || 'Nomination email sent');
-      loadLeaveEntries();
-    } else {
-      showToast('Error: ' + (d.error || 'Failed to send'));
-    }
-  } catch(e) { showToast('Error: ' + e.message); }
+    var d; try { d = JSON.parse(text); } catch(e) { showToast('Server error — check Azure logs'); return; }
+    if (d.success) { showToast(d.message || 'Nomination email sent'); loadLeaveEntries(); }
+    else { showToast('Error: '+(d.error||'Failed')); }
+  } catch(e) { showToast('Error: '+e.message); }
 }
 
 async function sendLeaveUpdate(id) {
@@ -7812,27 +7800,16 @@ async function sendLeaveUpdate(id) {
   try {
     var r = await fetch('/leave/'+id+'/send-update', {method:'POST'});
     var text = await r.text();
-    var d;
-    try { d = JSON.parse(text); } catch(e) {
-      showToast('Server error sending update');
-      return;
-    }
-    if (d.success) {
-      showToast(d.message || 'Updated checklist sent');
-    } else {
-      showToast('Error: ' + (d.error || 'Failed'));
-    }
-  } catch(e) { showToast('Error: ' + e.message); }
+    var d; try { d = JSON.parse(text); } catch(e) { showToast('Server error — check Azure logs'); return; }
+    if (d.success) { showToast(d.message || 'Updated checklist sent'); }
+    else { showToast('Error: '+(d.error||'Failed')); }
+  } catch(e) { showToast('Error: '+e.message); }
 }
 
 
 
-     loadLeaveEntries();
-    } else {
-      showToast('Error: ' + (d.error || 'Failed to send'));
-    }
-  } catch(e) { showToast('Error: ' + e.message); }
-}
+
+
 
 </script>
 
