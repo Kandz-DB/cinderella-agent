@@ -4171,10 +4171,17 @@ async function scanLeaveReplies(state) {
           try {
             const done = CHECKLIST_ITEMS.filter(i=>entry.checklist[i.id]).length;
             const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
-            const allCoverEmails2 = entry.coveringEmails&&entry.coveringEmails.length>0?entry.coveringEmails:entry.coveringEmail?[entry.coveringEmail]:[];
-            const cc6 = entry.staffEmail?[entry.staffEmail]:[];
-            const html6 = buildLeaveEmail('checklist_updated', entry);
-            await sendLeaveAlert(allCoverEmails2, cc6, '📋 Checklist updated: '+pct+'% complete — '+entry.staffName, html6, 'normal', entry);
+            // Send update individually to each covering colleague
+            const colleagues6 = (entry.coveringColleagues&&entry.coveringColleagues.length>0)
+              ? entry.coveringColleagues.map((name,i)=>({name,email:(entry.coveringEmails||[])[i]||''}))
+              : [{name:entry.coveringColleague||'',email:entry.coveringEmail||''}];
+            for (const c6 of colleagues6) {
+              if (!c6.email) continue;
+              const entryC6 = {...entry, coveringColleague:c6.name, coveringEmail:c6.email, coveringColleagues:[c6.name], coveringEmails:[c6.email]};
+              const cc6 = entry.staffEmail&&entry.staffEmail!==c6.email?[entry.staffEmail]:[];
+              const html6 = buildLeaveEmail('checklist_updated', entryC6);
+              await sendLeaveAlert([c6.email], cc6, '📋 Checklist updated: '+pct+'% complete — '+entry.staffName, html6, 'normal', entryC6);
+            }
           } catch(e2) { console.error('[Leave] Update email error:', e2.message); }
         }
       }
@@ -5863,35 +5870,41 @@ app.post('/leave/:id/send-reminder', requireAuth, async (req, res) => {
     const state = loadLeaveState();
     const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
     if (!entry) return res.status(404).json({error:'Not found'});
-    const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
     const now = new Date();
     const daysToStart = Math.ceil((new Date(entry.startDate)-now)/(24*60*60*1000));
     const todayStr = now.toLocaleDateString('en-CA',{timeZone:'Australia/Brisbane'});
-    const allCoverEmails = entry.coveringEmails&&entry.coveringEmails.length>0 ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
-    const staffEmail = entry.staffEmail||'';
     const urgency = daysToStart < 7 ? 'emergency' : daysToStart < 14 ? 'accelerated' : 'normal';
     const colleagues = (entry.coveringColleagues&&entry.coveringColleagues.length>0)
       ? entry.coveringColleagues.map((name,i)=>({name,email:(entry.coveringEmails||[])[i]||''}))
       : [{name:entry.coveringColleague||'',email:entry.coveringEmail||''}];
     let sent = 0;
+    // Send SEPARATELY to each covering colleague
     for (const c of colleagues) {
       if (!c.email) continue;
       const entryForC = {...entry, coveringColleague:c.name, coveringEmail:c.email, coveringColleagues:[c.name], coveringEmails:[c.email]};
-      const html = buildLeaveEmail('reminder_urgent', entryForC);
-      const subject = '🔴 URGENT: Daily handover update — '+entry.staffName+' on leave in '+daysToStart+' day'+(daysToStart!==1?'s':'')+' — '+c.name;
-      const cc = staffEmail && staffEmail !== c.email ? [staffEmail] : [];
-      const ok = await sendLeaveAlert([c.email], cc, subject, html, 'high', entryForC);
-      if (ok) sent++;
+      const emailType = urgency === 'emergency' ? 'reminder_urgent' : 'reminder_3day';
+      const subject = urgency === 'emergency'
+        ? '🔴 URGENT: Daily handover update — '+entry.staffName+' on leave in '+daysToStart+' day'+(daysToStart!==1?'s':'')+' — '+c.name
+        : '⏰ Reminder: leave handover — '+entry.staffName+' — '+c.name;
+      const html = buildLeaveEmail(emailType, entryForC);
+      const cc = entry.staffEmail && entry.staffEmail !== c.email ? [entry.staffEmail] : [];
+      const convId = await sendLeaveAlert([c.email], cc, subject, html, 'high', entryForC);
+      if (convId) {
+        if (!entry.checklistConversationIds) entry.checklistConversationIds = [];
+        if (typeof convId === 'string' && !entry.checklistConversationIds.includes(convId)) entry.checklistConversationIds.push(convId);
+        sent++;
+      }
     }
     entry.lastReminderAt = now.toISOString();
     entry.reminderSentDate = todayStr;
     entry.awaitingReply = true;
     entry.awaitingReplySince = now.toISOString();
-    entry.eightHourCheckSent = null; // Reset so 3pm check fires today
+    entry.eightHourCheckSent = null;
     saveLeaveState(state);
-    res.json({success:true, sent, colleagues:colleagues.length, urgency, daysToStart});
+    res.json({success:true, sent, colleagues:colleagues.length, urgency, daysToStart,
+      message:'Individual reminder sent to '+sent+' of '+colleagues.length+' colleague(s)'});
   } catch(e) { res.status(500).json({error:e.message}); }
-});
+});;
 
 // Manual trigger: force Stage 1 for a specific entry and return detailed logs
 app.post('/leave/:id/trigger', requireAuth, async (req, res) => {
@@ -6081,14 +6094,24 @@ app.post('/leave/:id/send-update', requireAuth, async (req, res) => {
     const state = loadLeaveState();
     const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
     if (!entry) return res.status(404).json({error:'Not found'});
-    const allCoverEmails = (entry.coveringEmails&&entry.coveringEmails.length>0) ? entry.coveringEmails : entry.coveringEmail?[entry.coveringEmail]:[];
-    const ccEmails = entry.staffEmail ? [entry.staffEmail] : [];
     const done = CHECKLIST_ITEMS.filter(i=>entry.checklist&&entry.checklist[i.id]).length;
     const pct = Math.round(done/CHECKLIST_ITEMS.length*100);
-    const html = buildLeaveEmail('checklist_updated', entry);
     const subject = '📋 Updated checklist: '+pct+'% complete — '+entry.staffName+' leave handover';
-    const sent = await sendLeaveAlert(allCoverEmails, ccEmails, subject, html, 'normal', entry);
-    res.json({success:true, sent, pct, to:allCoverEmails.join(', '), message:'Updated checklist sent ('+pct+'% complete)'});
+    const ccEmails = entry.staffEmail ? [entry.staffEmail] : [];
+    const colleagues = (entry.coveringColleagues&&entry.coveringColleagues.length>0)
+      ? entry.coveringColleagues.map((name,i)=>({name,email:(entry.coveringEmails||[])[i]||''}))
+      : [{name:entry.coveringColleague||'',email:entry.coveringEmail||''}];
+    let sent = 0;
+    // Send SEPARATELY to each covering colleague
+    for (const c of colleagues) {
+      if (!c.email) continue;
+      const entryForC = {...entry, coveringColleague:c.name, coveringEmail:c.email, coveringColleagues:[c.name], coveringEmails:[c.email]};
+      const cc = ccEmails.filter(e=>e!==c.email);
+      const html = buildLeaveEmail('checklist_updated', entryForC);
+      const ok = await sendLeaveAlert([c.email], cc, subject, html, 'normal', entryForC);
+      if (ok) sent++;
+    }
+    res.json({success:true, sent, colleagues:colleagues.length, pct, message:'Updated checklist sent individually to '+sent+' colleague(s) ('+pct+'% complete)'});
   } catch(e) { res.status(500).json({error:e.message}); }
 });
 
