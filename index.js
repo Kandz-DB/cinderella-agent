@@ -4191,24 +4191,38 @@ async function scanLeaveReplies(state) {
     }
     // ── Scan for phase sign-off replies ──
     for (const entry2 of (state.leaveEntries||[])) {
-      if (!entry2.signoffConversationIds) continue;
+      if (!entry2.phase1SignoffSentAt && !entry2.phase2SignoffSentAt && !entry2.phase3SignoffSentAt) continue;
+      if (!entry2.signoffConversationIds) entry2.signoffConversationIds = {};
       const sids = entry2.signoffConversationIds;
       let sChanged = false;
       if (!entry2.checklist) entry2.checklist = {};
+      if (!entry2.processedReplies) entry2.processedReplies = [];
 
-      // Check phase 1 conversation for "Phase 1 confirmed"
-      if (sids.phase1 && !entry2.checklist.phase1_signed) {
-        const p1replies = allMsgs.filter(m => m.conversationId === sids.phase1 &&
-          new Date(m.receivedDateTime) > new Date(entry2.phase1SignoffSentAt||0) &&
-          !((entry2.processedReplies||[]).includes(m.id)));
+      // Check phase 1 replies — match by conversationId OR by subject pattern + sender
+      if (!entry2.checklist.phase1_signed && entry2.phase1SignoffSentAt) {
+        const p1SentAt = new Date(entry2.phase1SignoffSentAt);
+        const p1replies = allMsgs.filter(m => {
+          if (entry2.processedReplies.includes(m.id)) return false;
+          if (new Date(m.receivedDateTime) <= p1SentAt) return false;
+          const subj = (m.subject||'').toLowerCase();
+          const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
+          // Match by conversationId if stored
+          if (sids.phase1 && m.conversationId === sids.phase1) return true;
+          // Fallback: any R2S staff reply about phase 1 sign-off (works for any staff member)
+          const isFromR2S = fromAddr.endsWith('@risk2solution.com');
+          const isPhase1Subject = subj.includes('phase 1') || subj.includes('sign-off') || subj.includes('signoff') || (subj.includes('re:') && (subj.includes('confirm') || subj.includes('handover')));
+          return isFromR2S && isPhase1Subject;
+        });
         for (const r of p1replies) {
           const body = (r.bodyPreview||'').toLowerCase();
-          if (/phase\s*1\s*(confirmed|approved|signed|done|yes)|confirmed.*phase\s*1/i.test(body) || /^(yes|confirmed|approved|done|sign.?off)/i.test(body.trim().substring(0,50))) {
+          // Accept any affirmative reply to a phase 1 email
+          if (/confirm|approv|yes|phase\s*1|signed|done|agreed/i.test(body)) {
             entry2.checklist.phase1_signed = true;
-            if (!entry2.processedReplies) entry2.processedReplies = [];
             entry2.processedReplies.push(r.id);
+            // Also store conversationId if not already stored
+            if (!sids.phase1 && r.conversationId) sids.phase1 = r.conversationId;
             sChanged = true;
-            console.log('[Leave] ✅ Phase 1 confirmed by', r.from?.emailAddress?.name);
+            console.log('[Leave] ✅ Phase 1 confirmed by', r.from?.emailAddress?.name, '— body:', body.substring(0,80));
           }
         }
       }
@@ -4222,10 +4236,18 @@ async function scanLeaveReplies(state) {
           if (!c.email) continue;
           const convKey = 'phase2_'+c.email;
           if (entry2.phase2Confirmations[c.email]) continue; // Already confirmed
-          if (!sids[convKey]) { allConfirmed = false; continue; }
-          const p2replies = allMsgs.filter(m => m.conversationId === sids[convKey] &&
-            new Date(m.receivedDateTime) > new Date(entry2.phase2SignoffSentAt||0) &&
-            !((entry2.processedReplies||[]).includes(m.id)));
+          const p2SentAt = new Date(entry2.phase2SignoffSentAt||0);
+          const p2replies = allMsgs.filter(m => {
+            if (entry2.processedReplies.includes(m.id)) return false;
+            if (new Date(m.receivedDateTime) <= p2SentAt) return false;
+            const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
+            if (fromAddr !== c.email.toLowerCase()) return false;
+            if (sids[convKey]) return m.conversationId === sids[convKey];
+            // Fallback: reply from this covering colleague about phase 2
+            const subj = (m.subject||'').toLowerCase();
+            return subj.includes('phase 2') || subj.includes('sign-off') || subj.includes('covering') || subj.includes('re:');
+          });
+
           let confirmed = false;
           for (const r of p2replies) {
             const body = (r.bodyPreview||'').toLowerCase();
@@ -4248,10 +4270,18 @@ async function scanLeaveReplies(state) {
       }
 
       // Check phase 3 conversation for "Approved"
-      if (sids.phase3 && !entry2.checklist.phase3_signed) {
-        const p3replies = allMsgs.filter(m => m.conversationId === sids.phase3 &&
-          new Date(m.receivedDateTime) > new Date(entry2.phase3SignoffSentAt||0) &&
-          !((entry2.processedReplies||[]).includes(m.id)));
+      if (!entry2.checklist.phase3_signed && entry2.phase3SignoffSentAt) {
+        const kandiaEmailP3 = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+        const p3SentAt = new Date(entry2.phase3SignoffSentAt);
+        const p3replies = allMsgs.filter(m => {
+          if (entry2.processedReplies.includes(m.id)) return false;
+          if (new Date(m.receivedDateTime) <= p3SentAt) return false;
+          const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
+          if (fromAddr !== kandiaEmailP3.toLowerCase()) return false;
+          if (sids.phase3) return m.conversationId === sids.phase3;
+          const subj = (m.subject||'').toLowerCase();
+          return subj.includes('phase 3') || subj.includes('approval') || subj.includes('approv') || subj.includes('re:');
+        });
         for (const r of p3replies) {
           const body = (r.bodyPreview||'').toLowerCase();
           if (/approved|phase\s*3\s*(approved|confirmed|done)|yes.*approv|approv.*yes/i.test(body)) {
