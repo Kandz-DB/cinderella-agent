@@ -4166,6 +4166,9 @@ async function scanLeaveReplies(state) {
           entry.lastChecklistUpdateAt = new Date().toISOString();
           entry.awaitingReply = false;
           changed = true;
+          // SAVE IMMEDIATELY before sending — prevents duplicate sends if loop runs twice
+          saveLeaveState(state);
+          changed = false; // Reset since we just saved
           console.log('[Leave] ✅ Ticked', tickedItems.size, 'items for', entry.staffName, 'from', replyAddr);
           // Send updated checklist immediately
           try {
@@ -4186,6 +4189,84 @@ async function scanLeaveReplies(state) {
         }
       }
     }
+    // ── Scan for phase sign-off replies ──
+    for (const entry2 of (state.leaveEntries||[])) {
+      if (!entry2.signoffConversationIds) continue;
+      const sids = entry2.signoffConversationIds;
+      let sChanged = false;
+      if (!entry2.checklist) entry2.checklist = {};
+
+      // Check phase 1 conversation for "Phase 1 confirmed"
+      if (sids.phase1 && !entry2.checklist.phase1_signed) {
+        const p1replies = allMsgs.filter(m => m.conversationId === sids.phase1 &&
+          new Date(m.receivedDateTime) > new Date(entry2.phase1SignoffSentAt||0) &&
+          !((entry2.processedReplies||[]).includes(m.id)));
+        for (const r of p1replies) {
+          const body = (r.bodyPreview||'').toLowerCase();
+          if (/phase\s*1\s*(confirmed|approved|signed|done|yes)|confirmed.*phase\s*1/i.test(body) || /^(yes|confirmed|approved|done|sign.?off)/i.test(body.trim().substring(0,50))) {
+            entry2.checklist.phase1_signed = true;
+            if (!entry2.processedReplies) entry2.processedReplies = [];
+            entry2.processedReplies.push(r.id);
+            sChanged = true;
+            console.log('[Leave] ✅ Phase 1 confirmed by', r.from?.emailAddress?.name);
+          }
+        }
+      }
+
+      // Check phase 2 conversations for "Phase 2 confirmed"
+      if (!entry2.checklist.phase2_signed) {
+        if (!entry2.phase2Confirmations) entry2.phase2Confirmations = {};
+        const cols2 = (entry2.coveringColleagues||[]).map((name,i)=>({name,email:(entry2.coveringEmails||[])[i]||''}));
+        let allConfirmed = cols2.length > 0;
+        for (const c of cols2) {
+          if (!c.email) continue;
+          const convKey = 'phase2_'+c.email;
+          if (entry2.phase2Confirmations[c.email]) continue; // Already confirmed
+          if (!sids[convKey]) { allConfirmed = false; continue; }
+          const p2replies = allMsgs.filter(m => m.conversationId === sids[convKey] &&
+            new Date(m.receivedDateTime) > new Date(entry2.phase2SignoffSentAt||0) &&
+            !((entry2.processedReplies||[]).includes(m.id)));
+          let confirmed = false;
+          for (const r of p2replies) {
+            const body = (r.bodyPreview||'').toLowerCase();
+            if (/phase\s*2\s*(confirmed|approved|signed|done)|confirmed|approved|yes|ready/i.test(body)) {
+              entry2.phase2Confirmations[c.email] = true;
+              if (!entry2.processedReplies) entry2.processedReplies = [];
+              entry2.processedReplies.push(r.id);
+              sChanged = true;
+              confirmed = true;
+              console.log('[Leave] ✅ Phase 2 confirmed by', c.name);
+            }
+          }
+          if (!confirmed) allConfirmed = false;
+        }
+        if (allConfirmed && cols2.length > 0) {
+          entry2.checklist.phase2_signed = true;
+          sChanged = true;
+          console.log('[Leave] ✅ All Phase 2 confirmations received');
+        }
+      }
+
+      // Check phase 3 conversation for "Approved"
+      if (sids.phase3 && !entry2.checklist.phase3_signed) {
+        const p3replies = allMsgs.filter(m => m.conversationId === sids.phase3 &&
+          new Date(m.receivedDateTime) > new Date(entry2.phase3SignoffSentAt||0) &&
+          !((entry2.processedReplies||[]).includes(m.id)));
+        for (const r of p3replies) {
+          const body = (r.bodyPreview||'').toLowerCase();
+          if (/approved|phase\s*3\s*(approved|confirmed|done)|yes.*approv|approv.*yes/i.test(body)) {
+            entry2.checklist.phase3_signed = true;
+            if (!entry2.processedReplies) entry2.processedReplies = [];
+            entry2.processedReplies.push(r.id);
+            sChanged = true;
+            console.log('[Leave] ✅ Phase 3 approved by Kandia');
+          }
+        }
+      }
+
+      if (sChanged) { changed = true; }
+    }
+
     if (changed) saveLeaveState(state);
   } catch(e) { console.error('[Leave] scanLeaveReplies error:', e.message); }
 }
@@ -4742,14 +4823,22 @@ function buildLeaveEmail(type, entry) {
     const _sl = item.section + '. ' + (_snames[item.section]||'');
     if (_sl !== _lastSec) { _clRows += '<tr><td style="padding:8px 0 2px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">' + _sl + '</td></tr>'; _lastSec = _sl; }
     const _d = entry.checklist && entry.checklist[item.id];
-    _clRows += '<tr><td bgcolor="' + (_d?'#F0FDF4':'#FAFAF9') + '" style="background:' + (_d?'#F0FDF4':'#FAFAF9') + ';padding:5px 8px;border-radius:4px;font-family:Arial,sans-serif;font-size:12px;color:' + (_d?'#0D8A62':'#222') + '">' +
-      '<span style="font-size:15px">' + (_d?'&#9745;':'&#9744;') + '</span>&nbsp;&nbsp;<strong>' + _inum + '.</strong>&nbsp;' + item.label + '</td></tr><tr><td style="height:2px"></td></tr>';
+    _clRows += '<tr>' +
+      '<td bgcolor="' + (_d?'#F0FDF4':'#FAFAF9') + '" style="background:' + (_d?'#F0FDF4':'#FAFAF9') + ';padding:0;border-radius:4px;overflow:hidden">' +
+        '<table cellpadding="0" cellspacing="0" width="100%"><tr>' +
+          '<td style="width:36px;padding:7px 6px 7px 10px;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:' + (_d?'#0D8A62':'#666') + ';white-space:nowrap;vertical-align:top">' + _inum + '.</td>' +
+          '<td style="padding:7px 4px;font-size:15px;width:20px;vertical-align:top">' + (_d?'&#9745;':'&#9744;') + '</td>' +
+          '<td style="padding:7px 10px 7px 4px;font-family:Arial,sans-serif;font-size:12px;color:' + (_d?'#0D8A62':'#222') + ';line-height:1.4;vertical-align:top">' + item.label + '</td>' +
+        '</tr></table>' +
+      '</td>' +
+    '</tr><tr><td style="height:3px"></td></tr>';
   });
   const inlineChecklist = '<table cellpadding="0" cellspacing="0" width="100%">' + _clRows + '</table>';
   const replyInstructions = '<table cellpadding="0" cellspacing="0" bgcolor="#EFF6FF" style="background:#EFF6FF;border-radius:8px;width:100%;margin-top:12px"><tr><td style="padding:12px 16px;border-left:3px solid #2563EB">' +
-    '<p style="margin:0 0 5px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; How to tick off completed items</p>' +
-    '<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6"><strong>Reply All</strong> to this email. Change &#9744; to &#9745; next to each completed item, then send. Cinderella updates automatically.</p>' +
-    '<p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#555;font-style:italic">Example: &#9745; 1. Key contacts listed &mdash; &#9745; 4. Status update prepared</p>' +
+    '<p style="margin:0 0 5px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; How to confirm completed items</p>' +
+    '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6"><strong>Reply All</strong> to this email and type which item numbers are done. Cinderella will update the checklist automatically.</p>' +
+    '<table cellpadding="0" cellspacing="0" bgcolor="#DBEAFE" style="background:#DBEAFE;border-radius:6px;width:100%;margin-bottom:4px"><tr><td style="padding:8px 12px;font-family:Arial,sans-serif;font-size:12px;color:#1E3A5F"><strong>Format:</strong> DONE: 1, 2, 3</td></tr></table>' +
+    '<p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#555;font-style:italic">Example: &ldquo;DONE: 1, 2, 3&rdquo; &nbsp;or&nbsp; &ldquo;All items complete&rdquo;</p>' +
   '</td></tr></table>';
 
   if (type === 'kandia_notification') {
@@ -5030,7 +5119,9 @@ function buildLeaveEmail(type, entry) {
         ${done > 0 ? `<p style="margin:12px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#0D8A62;text-transform:uppercase;letter-spacing:1px">Completed:</p><table cellpadding="0" cellspacing="0" width="100%">${doneRows}</table>` : ''}
         ${pendingItems.length > 0 ? `<p style="margin:10px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1px">Still outstanding:</p><table cellpadding="0" cellspacing="0" width="100%">${pendingRows}</table>` : ''}
       </td></tr></table>
-      ${pct < 100 ? `<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:12px;color:#666">Cinderella will continue monitoring replies and updating the checklist automatically.</p>${REPLY_INST}` : `<p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#0D8A62;font-weight:bold">&#10003; All checklist items complete &mdash; sign-off phase now begins.</p>`}
+      <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">Full checklist</p>
+      ${inlineChecklist}
+      ${replyInstructions}
     </td></tr>` + footer;
   }
 
@@ -5094,6 +5185,67 @@ function buildLeaveEmail(type, entry) {
       </td></tr></table>
       ${_allDone&&_phase1Ok&&_phase2Ok ? `<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13px;color:#0D8A62;font-weight:bold">All items complete and phases signed — please review and reply "Approved" to complete Phase 3 sign-off.</p>` : (_pendingRows ? `<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#C8211E;text-transform:uppercase;letter-spacing:1.5px">Outstanding items requiring attention:</p><table cellpadding="0" cellspacing="0" width="100%">${_pendingRows}</table>` : '')}
     </td></tr>` + footer;
+  }
+
+  // ── PHASE 1 SIGN-OFF REQUEST (to staff member going on leave) ──
+  if (type === 'phase1_signoff_request') {
+    return header + '<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #0D8A62;"><p style="margin:0;font-size:16px;font-weight:bold;color:#0D8A62;font-family:Arial,sans-serif;">&#10003; Phase 1 sign-off — action required</p></td></tr>' +
+    '<tr><td style="padding:20px 28px;">' +
+      '<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">Hi ' + staff.split(' ')[0] + ',</p>' +
+      '<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">All handover checklist items are now complete. As the staff member going on leave, you need to sign off on Phase 1 to confirm the handover is ready.</p>' +
+      detailsTable +
+      '<table cellpadding="0" cellspacing="0" bgcolor="#F0FDF4" style="background:#F0FDF4;border-radius:8px;width:100%;margin-bottom:14px"><tr><td style="padding:14px 16px;border-left:3px solid #0D8A62">' +
+        '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#0D8A62">To sign off Phase 1</p>' +
+        '<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6"><strong>Reply All</strong> to this email with: <strong>Phase 1 confirmed</strong></p>' +
+        '<p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#555;font-style:italic">Cinderella will automatically record your sign-off and notify covering colleagues to complete Phase 2.</p>' +
+      '</td></tr></table>' +
+    '</td></tr>' + footer;
+  }
+
+  // ── PHASE 2 SIGN-OFF REQUEST (to each covering colleague) ──
+  if (type === 'phase2_signoff_request') {
+    return header + '<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #0D8A62;"><p style="margin:0;font-size:16px;font-weight:bold;color:#0D8A62;font-family:Arial,sans-serif;">&#10003; Phase 2 sign-off — action required</p></td></tr>' +
+    '<tr><td style="padding:20px 28px;">' +
+      '<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">Hi ' + cover.split(',')[0].trim().split(' ')[0] + ',</p>' +
+      '<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6"><strong>' + staff + '</strong> has completed Phase 1 sign-off. As the covering colleague, you now need to confirm that you have completed the handover and are ready to cover.</p>' +
+      detailsTable +
+      '<table cellpadding="0" cellspacing="0" bgcolor="#F0FDF4" style="background:#F0FDF4;border-radius:8px;width:100%;margin-bottom:14px"><tr><td style="padding:14px 16px;border-left:3px solid #0D8A62">' +
+        '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#0D8A62">To sign off Phase 2</p>' +
+        '<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6"><strong>Reply All</strong> to this email with: <strong>Phase 2 confirmed</strong></p>' +
+        '<p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#555;font-style:italic">Once all covering colleagues have signed off, Kandia will receive the Phase 3 approval request.</p>' +
+      '</td></tr></table>' +
+    '</td></tr>' + footer;
+  }
+
+  // ── PHASE 3 APPROVAL REQUEST (to Kandia as manager) ──
+  if (type === 'phase3_signoff_request') {
+    return header + '<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #0D8A62;"><p style="margin:0;font-size:16px;font-weight:bold;color:#0D8A62;font-family:Arial,sans-serif;">&#10003; Phase 3 approval required — please approve</p></td></tr>' +
+    '<tr><td style="padding:20px 28px;">' +
+      '<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">Hi Kandia,</p>' +
+      '<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">Phases 1 and 2 of the leave handover for <strong>' + staff + '</strong> are complete and signed. As manager, your Phase 3 approval is the final step before leave is confirmed.</p>' +
+      detailsTable +
+      '<table cellpadding="0" cellspacing="0" bgcolor="#F0FDF4" style="background:#F0FDF4;border-radius:8px;width:100%;margin-bottom:14px"><tr><td style="padding:14px 16px;border-left:3px solid #0D8A62">' +
+        '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#0D8A62">To approve Phase 3</p>' +
+        '<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6"><strong>Reply All</strong> to this email with: <strong>Approved</strong></p>' +
+        '<p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#555;font-style:italic">Cinderella will record your approval and send a Handover Complete notification to all parties.</p>' +
+      '</td></tr></table>' +
+    '</td></tr>' + footer;
+  }
+
+  // ── HANDOVER COMPLETE (to all parties) ──
+  if (type === 'handover_complete') {
+    return header + '<tr><td style="padding:22px 28px 14px;border-bottom:2px solid #0D8A62;"><p style="margin:0;font-size:16px;font-weight:bold;color:#0D8A62;font-family:Arial,sans-serif;">&#127881; Handover complete — leave approved</p></td></tr>' +
+    '<tr><td style="padding:20px 28px;">' +
+      '<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">Hi all,</p>' +
+      '<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">The leave handover for <strong>' + staff + '</strong> is now fully complete. All three phases have been signed off and leave is approved. No further action is required.</p>' +
+      detailsTable +
+      '<table cellpadding="0" cellspacing="0" bgcolor="#F0FDF4" style="background:#F0FDF4;border-radius:8px;width:100%"><tr><td style="padding:14px 16px">' +
+        '<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#0D8A62;text-transform:uppercase;letter-spacing:1.5px">Sign-off summary</p>' +
+        '<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#0D8A62">&#10003; Phase 1: ' + staff + ' — signed off</p>' +
+        '<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#0D8A62">&#10003; Phase 2: ' + cover + ' — signed off</p>' +
+        '<p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#0D8A62">&#10003; Phase 3: Kandia Du Bruyn — approved</p>' +
+      '</td></tr></table>' +
+    '</td></tr>' + footer;
   }
 
   return header + `<tr><td style="padding:20px 28px;"><p style="font-family:Arial,sans-serif">Leave notification for ${staff}</p></td></tr>` + footer;
@@ -5613,20 +5765,69 @@ async function monitorLeaveEntries() {
       console.log('[Leave] Stage 2c: Kandia status report sent, pct='+pct5+'%');
     }
 
-    // ── STAGE 3: Phase complete — send to sign-off person ──
-    if (['process_started','in_progress'].includes(entry.status)) {
-      const phase1Items = CHECKLIST_ITEMS.filter(i => i.section <= 5 && i.id !== 'phase1_signed' && i.id !== 'phase2_signed' && i.id !== 'phase3_signed');
-      const phase1Done = phase1Items.every(i => entry.checklist && entry.checklist[i.id]);
-      // Phase 1 sign-off: send once when all items are done (any time of day, fires once)
-      if (phase1Done && !entry.checklist?.phase1_signed && !entry.phase1SignoffSentAt) {
+    // ── STAGE 3: Phase sign-off chain ──
+    if (['process_started','in_progress','confirmed'].includes(entry.status)) {
+      const nonSignedItems = CHECKLIST_ITEMS.filter(i => !i.id.includes('signed'));
+      const allItemsDone = nonSignedItems.every(i => entry.checklist && entry.checklist[i.id]);
+
+      // Phase 1: all items done → ask staff member to sign off
+      if (allItemsDone && !entry.checklist?.phase1_signed && !entry.phase1SignoffSentAt) {
         entry.phase1SignoffSentAt = now.toISOString();
-        changed = true;
+        changed = true; saveLeaveState(state);
+        const h1 = buildLeaveEmail('phase1_signoff_request', entry);
+        const cid1 = await sendLeaveAlert([staffEmail], [kandiaEmail],
+          '\u2705 Phase 1 sign-off required: ' + entry.staffName + ' — please confirm handover', h1, 'high', entry);
+        if (!entry.signoffConversationIds) entry.signoffConversationIds = {};
+        if (cid1 && typeof cid1 === 'string') entry.signoffConversationIds.phase1 = cid1;
         saveLeaveState(state);
-        const html = buildLeaveEmail('phase1_signoff_request', entry);
-        await sendLeaveAlert([staffEmail], [kandiaEmail],
-          '✅ All checklist items complete — please sign off Phase 1: ' + entry.staffName,
-          html, 'high', entry);
-        console.log('[Leave] Stage 3: Phase 1 sign-off request sent at 3pm to', staffEmail);
+        console.log('[Leave] Phase 1 sign-off sent to', staffEmail);
+      }
+
+      // Phase 2: phase 1 signed → ask each covering colleague
+      if (entry.checklist?.phase1_signed && !entry.phase2SignoffSentAt) {
+        entry.phase2SignoffSentAt = now.toISOString();
+        changed = true; saveLeaveState(state);
+        if (!entry.signoffConversationIds) entry.signoffConversationIds = {};
+        if (!entry.phase2Confirmations) entry.phase2Confirmations = {};
+        const cols = (entry.coveringColleagues&&entry.coveringColleagues.length>0)
+          ? entry.coveringColleagues.map((name,i)=>({name,email:(entry.coveringEmails||[])[i]||''}))
+          : [{name:entry.coveringColleague||'',email:entry.coveringEmail||''}];
+        for (const col of cols) {
+          if (!col.email) continue;
+          const eC = {...entry, coveringColleague:col.name, coveringEmail:col.email, coveringColleagues:[col.name], coveringEmails:[col.email]};
+          const h2 = buildLeaveEmail('phase2_signoff_request', eC);
+          const cc2 = [staffEmail, kandiaEmail].filter(e=>e&&e!==col.email);
+          const cid2 = await sendLeaveAlert([col.email], cc2,
+            '\u2705 Phase 2 sign-off required: ' + col.name.split(' ')[0] + ' — please confirm you are ready to cover ' + entry.staffName, h2, 'high', eC);
+          if (cid2 && typeof cid2 === 'string') entry.signoffConversationIds['phase2_'+col.email] = cid2;
+        }
+        saveLeaveState(state);
+        console.log('[Leave] Phase 2 sign-off sent to covering colleagues');
+      }
+
+      // Phase 3: all phase 2 confirmed → ask Kandia to approve
+      const allP2Done = entry.checklist?.phase2_signed;
+      if (allP2Done && !entry.checklist?.phase3_signed && !entry.phase3SignoffSentAt) {
+        entry.phase3SignoffSentAt = now.toISOString();
+        changed = true; saveLeaveState(state);
+        const h3 = buildLeaveEmail('phase3_signoff_request', entry);
+        const cid3 = await sendLeaveAlert([kandiaEmail], [staffEmail].filter(Boolean),
+          '\u2705 Phase 3 approval required: please approve leave handover — ' + entry.staffName, h3, 'high', entry);
+        if (!entry.signoffConversationIds) entry.signoffConversationIds = {};
+        if (cid3 && typeof cid3 === 'string') entry.signoffConversationIds.phase3 = cid3;
+        saveLeaveState(state);
+        console.log('[Leave] Phase 3 approval request sent to Kandia');
+      }
+
+      // All 3 phases signed → send handover complete
+      if (entry.checklist?.phase1_signed && entry.checklist?.phase2_signed && entry.checklist?.phase3_signed && !entry.completionSentAt) {
+        entry.completionSentAt = now.toISOString();
+        entry.status = 'approved';
+        changed = true; saveLeaveState(state);
+        const hC = buildLeaveEmail('handover_complete', entry);
+        const allParties = [...new Set([staffEmail, ...(allCoverEmails||[]), kandiaEmail].filter(Boolean))];
+        await sendLeaveAlert(allParties, [], '\U0001F389 Handover complete: ' + entry.staffName + ' leave approved', hC, 'normal', entry);
+        console.log('[Leave] \u2705 Handover complete email sent to all parties');
       }
     }
 
