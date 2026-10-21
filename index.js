@@ -5334,6 +5334,28 @@ async function detectLeaveFromEmails() {
 }
 
 // Helper: send a leave alert email with optional Excel checklist attachment
+// Send leave email individually to EACH covering colleague — NEVER combined
+async function sendToEachColleague(entry, emailType, subject, staffEmail, kandiaEmail, importance) {
+  const colleagues = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
+    ? entry.coveringColleagues.map((name, i) => ({ name, email: (entry.coveringEmails||[])[i]||'' }))
+    : [{ name: entry.coveringColleague||'', email: entry.coveringEmail||'' }];
+  const convIds = [];
+  for (const c of colleagues) {
+    if (!c.email) continue;
+    const entryForC = { ...entry, coveringColleague: c.name, coveringEmail: c.email, coveringColleagues: [c.name], coveringEmails: [c.email] };
+    const html = buildLeaveEmail(emailType, entryForC);
+    const subj = colleagues.length > 1 ? subject + ' — ' + c.name.split(' ')[0] : subject;
+    const cc = [staffEmail, kandiaEmail].filter(e => e && e !== c.email);
+    const convId = await sendLeaveAlert([c.email], cc, subj, html, importance || 'high', entryForC);
+    if (convId && typeof convId === 'string') convIds.push(convId);
+    console.log('[Leave] ✅ Individual email sent to', c.name, '(', c.email, ')');
+  }
+  if (convIds.length && entry.checklistConversationIds !== undefined) {
+    convIds.forEach(id => { if (!entry.checklistConversationIds.includes(id)) entry.checklistConversationIds.push(id); });
+  }
+  return convIds.length;
+}
+
 async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance, entry) {
   try {
     const token = await getValidToken();
@@ -5554,11 +5576,8 @@ async function monitorLeaveEntries() {
           saveLeaveState(state);
           const done3pm = CHECKLIST_ITEMS.filter(i=>entry.checklist&&entry.checklist[i.id]).length;
           const pct3pm = Math.round(done3pm/CHECKLIST_ITEMS.length*100);
-          const html3pm = buildLeaveEmail('checklist_updated', entry);
-          const cc3pm = staffEmail ? [staffEmail] : [];
-          await sendLeaveAlert(allCoverEmails, cc3pm,
-            '📋 Updated checklist: ' + pct3pm + '% complete — ' + entry.staffName + ' leave handover',
-            html3pm, 'normal', entry);
+          await sendToEachColleague(entry, 'checklist_updated',
+            '📋 Updated checklist: ' + pct3pm + '% complete — ' + entry.staffName, staffEmail, kandiaEmail, 'normal');
           console.log('[Leave] Stage 2: 3pm update sent (checklist changed today) at', pct3pm + '%');
         } else {
           // No replies received today — do not send, just reset for tomorrow
@@ -5618,10 +5637,8 @@ async function monitorLeaveEntries() {
       changed = true;
       saveLeaveState(state);
       if (allCoverEmails.length) {
-        const html = buildLeaveEmail('cover_activation', entry);
-        await sendLeaveAlert(allCoverEmails, [kandiaEmail],
-          '🟡 ACTIVE: ' + entry.staffName + ' is now on leave — coverage begins today',
-          html, 'high', entry);
+        await sendToEachColleague(entry, 'cover_activation',
+          '🟡 ACTIVE: ' + entry.staffName + ' is now on leave — coverage begins today', staffEmail, kandiaEmail, 'high');
       }
       console.log('[Leave] Stage 4: Leave started for', entry.staffName);
     }
@@ -5632,11 +5649,12 @@ async function monitorLeaveEntries() {
       entry.status = 'returned';
       changed = true;
       saveLeaveState(state);
-      const returnEmails = [...new Set([staffEmail, ...allCoverEmails].filter(Boolean))];
-      const html = buildLeaveEmail('return_day', entry);
-      await sendLeaveAlert(returnEmails, [kandiaEmail],
-        '✅ Welcome back: ' + entry.staffName + ' — handback process today',
-        html, 'normal');
+      // Handback: send to staff member + individually to each covering colleague
+      if (staffEmail) {
+        const retHtml = buildLeaveEmail('return_day', entry);
+        await sendLeaveAlert([staffEmail], [kandiaEmail], '✅ Welcome back: ' + entry.staffName + ' — handback process today', retHtml, 'normal');
+      }
+      await sendToEachColleague(entry, 'return_day', '✅ Handback: ' + entry.staffName + ' returns today', staffEmail, kandiaEmail, 'normal');
       console.log('[Leave] Stage 5: Return day handback sent');
     }
 
@@ -5798,30 +5816,13 @@ app.post('/leave/:id/send-checklist', requireAuth, async (req, res) => {
       });
     }
 
-    // Send to covering colleagues (TO) and staff + Kandia (CC)
-    // This is the CORRECT direction per the new process
-    const toEmails = allCoverEmails.length > 0 ? allCoverEmails : [entry.staffEmail];
-    const ccEmails = [];
-    if (entry.staffEmail && !toEmails.includes(entry.staffEmail)) ccEmails.push(entry.staffEmail);
-    if (kandiaEmail && !toEmails.includes(kandiaEmail)) ccEmails.push(kandiaEmail);
-
-    console.log('[Leave] Sending TO:', toEmails.join(','), '| CC:', ccEmails.join(','));
-
     const subject = '📋 Leave Handover Checklist — ' + entry.staffName + ' (leave from ' + new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ')';
-    const html = buildLeaveEmail('cover_nominated_briefing', entry);
-    const sent = await sendLeaveAlert(toEmails, ccEmails, subject, html, 'high', entry);
-
+    // Send INDIVIDUALLY to each covering colleague — never combined
+    const sent = await sendToEachColleague(entry, 'cover_nominated_briefing', subject, entry.staffEmail, kandiaEmail, 'high');
+    saveLeaveState(state);
     entry.checklistSentAt = new Date().toISOString();
     saveLeaveState(state);
-
-    res.json({
-      success: true,
-      sent,
-      message: sent
-        ? 'Checklist email sent to ' + toEmails.join(', ') + (ccEmails.length ? ' (CC: '+ccEmails.join(', ')+')' : '')
-        : 'Email saved to Outlook Drafts — Mail.Send permission may not be granted. Open Outlook Drafts to send manually.',
-      debug: { to: toEmails, cc: ccEmails, staffEmail: entry.staffEmail, coveringEmails: allCoverEmails }
-    });
+    res.json({ success: true, sent, message: 'Nomination email sent individually to ' + sent + ' colleague(s)' });
   } catch(e) {
     console.error('[Leave] send-checklist error:', e.message, e.stack?.substring(0,500));
     res.status(500).json({error: e.message || 'Failed to send checklist email'});
