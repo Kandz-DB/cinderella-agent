@@ -7739,6 +7739,30 @@ async function openLeaveChecklist(id, preselectedEmail) {
       '</div>' +
       '<div style="max-height:45vh;overflow-y:auto;padding-right:4px">' + rows + '</div>' +
       '<div style="display:flex;gap:8px;margin-top:14px;border-top:1px solid var(--bl);padding-top:12px">' +
+      (function() {
+        var p1 = entry.checklist && entry.checklist.phase1_signed;
+        var p2 = entry.checklist && entry.checklist.phase2_signed;
+        var p3 = entry.checklist && entry.checklist.phase3_signed;
+        var allDone = done === total;
+        var soRows = [
+          {label:'Phase 1 \u2014 ' + entry.staffName.split(' ')[0] + ' (staff member)', signed: p1, pending: allDone && !p1},
+          {label:'Phase 2 \u2014 covering colleague(s)', signed: p2, pending: p1 && !p2},
+          {label:'Phase 3 \u2014 Kandia (manager approval)', signed: p3, pending: p2 && !p3}
+        ];
+        var soHtml = '<div style="margin:12px 0 0;padding:12px 0 0;border-top:1px solid var(--bl)">';
+        soHtml += '<div style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Sign-off status</div>';
+        soRows.forEach(function(ph) {
+          var col = ph.signed ? 'var(--g)' : ph.pending ? 'var(--a)' : 'var(--t3)';
+          var icon = ph.signed ? '&#10003;' : ph.pending ? '&#9711;' : '&#9675;';
+          var txt = ph.signed ? 'Signed off' : ph.pending ? 'Awaiting reply' : 'Pending';
+          soHtml += '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:7px;background:var(--bg2);margin-bottom:5px">';
+          soHtml += '<span style="font-size:16px;color:' + col + '">' + icon + '</span>';
+          soHtml += '<div><div style="font-size:12px;font-weight:600;color:var(--t1)">' + ph.label + '</div>';
+          soHtml += '<div style="font-size:10px;color:' + col + '">' + txt + '</div></div></div>';
+        });
+        soHtml += '</div>';
+        return soHtml;
+      })() +
         '<button data-lid="'+id+'" onclick="sendLeaveChecklistNow(this.dataset.lid)" class="m-btn sec" style="flex:1;font-size:11px">Send email</button>' +
 
         '<button onclick="closeModal()" class="m-btn sec" style="flex:1;font-size:11px">Close</button>' +
@@ -7776,7 +7800,8 @@ async function processLeaveReplies(id) {
   showToast('Scanning inbox and sent items for replies...');
   try {
     var r = await fetch('/leave/'+id+'/process-replies', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
-    var d = await r.json();
+    var text = await r.text();
+    var d; try { d = JSON.parse(text); } catch(e) { showToast('Server error — check Azure logs'); return; }
     if (d.success) {
       showToast(d.changed ? 'Checklist updated to '+d.pct+'% — email sent' : 'No new confirmations found in the last 7 days');
       loadLeaveEntries();
