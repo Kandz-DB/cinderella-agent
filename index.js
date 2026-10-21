@@ -2551,9 +2551,12 @@ function getBrisbaneNow() {
   const pad = n => String(n).padStart(2,'0');
   const weekKey = `${bris.getFullYear()}-W${pad(Math.ceil((bris.getDate()-bris.getDay()+6)/7))}`;
   const dateStr = `${bris.getFullYear()}-${pad(bris.getMonth()+1)}-${pad(bris.getDate())}`;
+  const bHour = bris.getHours();
+  const bMin  = bris.getMinutes();
+  const bDay  = days[bris.getDay()];
   return {
-    hour: bris.getHours(), minute: bris.getMinutes(),
-    dayOfWeek: days[bris.getDay()], dateStr, weekKey,
+    bHour, bMin, bDay, dateStr, weekKey,
+    hour: bHour, minute: bMin, dayOfWeek: bDay,
     monthKey: `${bris.getFullYear()}-${pad(bris.getMonth()+1)}`,
     isWeekday: bris.getDay() >= 1 && bris.getDay() <= 5
   };
@@ -4103,6 +4106,22 @@ async function scanLeaveReplies(state) {
         const allDone = /all (items|sections|tasks|checklist)?.{0,20}(complete|done|confirmed|finished)/i.test(bodyText)
           || /everything.{0,20}(complete|done|confirmed|finished)/i.test(bodyText);
 
+        // PRIMARY: detect ☑/✓ tick symbols in reply — user changed ☐ to ☑
+        const ITEM_IDS = ['contacts','access','external','status','deadlines','stalling','sharepoint','sp_verified','decisions','risks','discussion','understood','emergency'];
+        const tickedBySymbol = new Set();
+        // Match by item number: ☑ 1. or ✓ 3. etc
+        const numTicks = [...bodyText.matchAll(/[☑✓✅\[x\]]\s*(\d+)\./g)];
+        numTicks.forEach(function(m) { const n = parseInt(m[1])-1; if(n>=0&&n<ITEM_IDS.length) tickedBySymbol.add(ITEM_IDS[n]); });
+        // Match by text near tick
+        const textTicks = [...bodyText.matchAll(/[☑✓✅]([^\n☐☑✓]{3,50})/g)];
+        textTicks.forEach(function(m) {
+          const t = m[1].toLowerCase();
+          if(t.match(/contact|access/)) { tickedBySymbol.add('contacts'); tickedBySymbol.add('access'); tickedBySymbol.add('external'); }
+          if(t.match(/status|current state|deadline/)) { tickedBySymbol.add('status'); tickedBySymbol.add('deadlines'); tickedBySymbol.add('stalling'); }
+          if(t.match(/sharepoint|resource|link/)) { tickedBySymbol.add('sharepoint'); tickedBySymbol.add('sp_verified'); }
+          if(t.match(/decision|risk|judgement/)) { tickedBySymbol.add('decisions'); tickedBySymbol.add('risks'); }
+          if(t.match(/discussion|handover|emergency/)) { tickedBySymbol.add('discussion'); tickedBySymbol.add('understood'); tickedBySymbol.add('emergency'); }
+        });
         const SECTION_MAP = [
           { keys:['key contacts','contacts and access','contacts & access','contacts, access','contact list'], items:['contacts','access','external'] },
           { keys:['current state','status update','project status','state of work'], items:['status','deadlines','stalling'] },
@@ -4119,6 +4138,9 @@ async function scanLeaveReplies(state) {
         const itemsToTick = new Set();
         if (allDone) {
           CHECKLIST_ITEMS.filter(i=>!i.id.includes('signed')).forEach(i=>itemsToTick.add(i.id));
+        } else if (tickedBySymbol.size > 0) {
+          tickedBySymbol.forEach(function(id){itemsToTick.add(id);});
+          console.log('[Leave] ☑ Symbols detected:', [...tickedBySymbol].join(','));
         } else {
           for (const mapping of SECTION_MAP) {
             if (mapping.keys.some(k => bodyText.includes(k))) {
@@ -4736,6 +4758,24 @@ function buildLeaveEmail(type, entry) {
     ${row('Covering colleague', cover, true)}${row('Handover due by', trigger, true)}
   </table></td></tr></table>`;
 
+  // Inline checklist for email body
+  let _clRows = ''; let _lastSec = ''; let _inum = 0;
+  const _snames = ['','Contacts & Access','Current State of Work','Resources & Links','Decisions & Judgement','Handover Discussion'];
+  CHECKLIST_ITEMS.forEach(item => {
+    _inum++;
+    const _sl = item.section + '. ' + (_snames[item.section]||'');
+    if (_sl !== _lastSec) { _clRows += '<tr><td style="padding:8px 0 2px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">' + _sl + '</td></tr>'; _lastSec = _sl; }
+    const _d = entry.checklist && entry.checklist[item.id];
+    _clRows += '<tr><td bgcolor="' + (_d?'#F0FDF4':'#FAFAF9') + '" style="background:' + (_d?'#F0FDF4':'#FAFAF9') + ';padding:5px 8px;border-radius:4px;font-family:Arial,sans-serif;font-size:12px;color:' + (_d?'#0D8A62':'#222') + '">' +
+      '<span style="font-size:15px">' + (_d?'&#9745;':'&#9744;') + '</span>&nbsp;&nbsp;<strong>' + _inum + '.</strong>&nbsp;' + item.label + '</td></tr><tr><td style="height:2px"></td></tr>';
+  });
+  const inlineChecklist = '<table cellpadding="0" cellspacing="0" width="100%">' + _clRows + '</table>';
+  const replyInstructions = '<table cellpadding="0" cellspacing="0" bgcolor="#EFF6FF" style="background:#EFF6FF;border-radius:8px;width:100%;margin-top:12px"><tr><td style="padding:12px 16px;border-left:3px solid #2563EB">' +
+    '<p style="margin:0 0 5px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; How to tick off completed items</p>' +
+    '<p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6"><strong>Reply All</strong> to this email. Change &#9744; to &#9745; next to each completed item, then send. Cinderella updates automatically.</p>' +
+    '<p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#555;font-style:italic">Example: &#9745; 1. Key contacts listed &mdash; &#9745; 4. Status update prepared</p>' +
+  '</td></tr></table>';
+
   if (type === 'kandia_notification') {
     return header + `<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ${TEAL};">
       <p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">🗓 Leave Detected — ${staff}</p>
@@ -4820,13 +4860,10 @@ function buildLeaveEmail(type, entry) {
         <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Mid-leave:</strong> Check-in from Cinderella to make sure coverage is going well</td></tr>
         <tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;<strong>Return day:</strong> Handback prompt so nothing falls through the cracks</td></tr>
       </table>
-      <p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:12px;color:#666;line-height:1.5;">The updated handover checklist is attached as an Excel file showing current progress. Please confirm with Kandia that you are able to cover during this period. Do not hesitate to contact Kandia if you have any concerns.</p>
-      <table cellpadding="0" cellspacing="0" bgcolor="#EFF6FF" style="background-color:#EFF6FF;border-radius:8px;width:100%"><tr><td style="padding:14px 16px;border-left:3px solid #2563EB">
-        <p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; How to update your checklist</p>
-        <p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6">As you complete each section, <strong>reply to this email</strong> confirming what has been done. Cinderella will automatically tick off the items and send everyone an updated checklist.</p>
-        <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:11px;color:#333;font-style:italic">Example reply: <strong>&ldquo;Confirming Section 1 (Contacts &amp; Access) is complete and Section 2 (Current State of Work) is complete.&rdquo;</strong></p>
-        <p style="margin:6px 0 0;font-family:Arial,sans-serif;font-size:11px;color:#666">When all items are done, reply: <strong>&ldquo;All checklist items are complete.&rdquo;</strong></p>
-      </td></tr></table>
+      <p style="margin:0 0 10px;font-family:Arial,sans-serif;font-size:12px;color:#666">Please confirm with Kandia you can cover during this period.</p>
+      <p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">Your handover checklist</p>
+      ${inlineChecklist}
+      ${replyInstructions}
     </td></tr>` + footer;
   }
 
@@ -5044,11 +5081,9 @@ function buildLeaveEmail(type, entry) {
         (completedItems.length > 0 ? '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#0D8A62;text-transform:uppercase">Completed:</p><table cellpadding="0" cellspacing="0" width="100%">'+doneRows2+'</table>' : '') +
         (pendingItems.length > 0 ? '<p style="margin:'+(completedItems.length>0?'10':'0')+'px 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#C8211E;text-transform:uppercase">&#9888; Still outstanding — action urgently:</p><table cellpadding="0" cellspacing="0" width="100%">'+pendingRows2+'</table>' : '') +
       '</td></tr></table>' +
-      '<table cellpadding="0" cellspacing="0" bgcolor="#EFF6FF" style="background-color:#EFF6FF;border-radius:8px;width:100%"><tr><td style="padding:14px 16px;border-left:3px solid #2563EB">' +
-        '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#1D4ED8">&#128231; Reply to confirm items complete</p>' +
-        '<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;color:#222;line-height:1.6">Reply to this email confirming which sections you have completed. Cinderella will update the checklist and send everyone a progress update within 8 hours.</p>' +
-        '<p style="margin:0;font-family:Arial,sans-serif;font-size:11px;color:#333;font-style:italic">Example: <strong>&ldquo;Section 1 (Contacts &amp; Access) is complete and Section 2 (Current State of Work) is complete.&rdquo;</strong></p>' +
-      '</td></tr></table>' +
+      '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:9px;font-weight:bold;color:#9A9693;text-transform:uppercase;letter-spacing:1.5px">Your checklist &mdash; reply to tick items</p>' +
+      inlineChecklist +
+      replyInstructions +
     '</td></tr>' + footer;
   }
 
