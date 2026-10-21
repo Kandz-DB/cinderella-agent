@@ -3997,32 +3997,7 @@ app.post('/proactive/trigger/:feature', requireAuth, async (req, res) => {
   }
 });
 
-// Generate populated Word checklist from template using Python script
-async function generatePopulatedChecklist(entry) {
-  const { execSync } = await import('child_process');
-  const data = {
-    staffName:        entry.staffName || '',
-    staffRole:        entry.staffRole || '',
-    startDate:        entry.startDate || '',
-    endDate:          entry.endDate || '',
-    coveringColleague: entry.coveringColleague || '',
-    manager:          'Kandia Du Bruyn',
-    checklist:        entry.checklist || {},
-    sharepointLinks:  entry.sharepointLinks || {}
-  };
-  const SCRIPT_PATHS = [
-    '/home/generate_checklist.py',
-    '/home/site/wwwroot/generate_checklist.py',
-  ];
-  let scriptPath = null;
-  for (const p of SCRIPT_PATHS) {
-    if (existsSync(p)) { scriptPath = p; break; }
-  }
-  if (!scriptPath) throw new Error('generate_checklist.py not found');
-  const b64 = execSync(`python3 ${scriptPath} '${JSON.stringify(data).replace(/'/g,"'\''")}' `, {timeout:15000}).toString().trim();
-  if (!b64) throw new Error('Python script returned empty output');
-  return b64;
-}
+
 
 // Parse email replies — ONLY from known checklist conversation threads
 async function scanLeaveReplies(state) {
@@ -5550,34 +5525,7 @@ async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance,
       toRecipients, ccRecipients
     };
     // Attach updated Excel checklist if entry provided
-    if (entry) {
-      try {
-        const attachB64 = await generatePopulatedChecklist(entry);
-        payload.attachments = [{
-          '@odata.type': '#microsoft.graph.fileAttachment',
-          name: 'R2S_Staff_Leave_Handover_Checklist.docx',
-          contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          contentBytes: attachB64
-        }];
-        console.log('[Leave] ✅ Populated checklist attached');
-      } catch(e) {
-        console.error('[Leave] Dynamic checklist failed:', e.message, '— trying static template');
-        try {
-          const TEMPLATE_PATHS = ['/home/leave-checklist-template.docx','/home/site/wwwroot/leave-checklist-template.docx'];
-          for (const tp of TEMPLATE_PATHS) {
-            try {
-              const buf = readFileSync(tp);
-              payload.attachments = [{'@odata.type':'#microsoft.graph.fileAttachment',
-                name:'R2S_Staff_Leave_Handover_Checklist.docx',
-                contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                contentBytes:buf.toString('base64')}];
-              console.log('[Leave] ✅ Static template attached as fallback');
-              break;
-            } catch(e2) {}
-          }
-        } catch(e3) { console.error('[Leave] All attachment methods failed'); }
-      }
-    }
+    // No attachment — checklist is shown in the email body instead
     const draft = await fetch('https://graph.microsoft.com/v1.0/me/messages', {
       method:'POST', headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
       body:JSON.stringify(payload)
