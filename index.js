@@ -34,7 +34,11 @@ let latestOutput = {};
 let isRunning = false;
 
 // ── SIMPLE PASSWORD PROTECTION ──
-const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || 'changeme';
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
+if (!DASHBOARD_PASSWORD || DASHBOARD_PASSWORD === 'changeme' || DASHBOARD_PASSWORD.length < 8) {
+  console.error('❌ FATAL: DASHBOARD_PASSWORD must be set in Azure application settings (at least 8 characters, not "changeme"). Refusing to start.');
+  process.exit(1);
+}
 const SESSION_TOKEN = crypto.randomBytes(32).toString('hex');
 // Sessions persisted to disk so restarts don't log everyone out
 const SESSIONS_PATH = '/home/sessions.json';
@@ -653,9 +657,7 @@ app.get('/debug-auth', requireAuth, (req, res) => {
   res.json({
     clientId: process.env.AZURE_CLIENT_ID || 'NOT SET',
     tenantId: process.env.AZURE_TENANT_ID || 'NOT SET',
-    secretLength: (process.env.AZURE_CLIENT_SECRET || '').length,
-    secretFirst4: (process.env.AZURE_CLIENT_SECRET || '').substring(0, 4),
-    secretLast4: (process.env.AZURE_CLIENT_SECRET || '').slice(-4),
+    secretSet: !!process.env.AZURE_CLIENT_SECRET,
     redirectUri: process.env.REDIRECT_URI || 'NOT SET',
     scopes: SCOPES
   });
@@ -6266,7 +6268,7 @@ app.get('/leave/tick', async (req, res) => {
     const { id, item, sig } = req.query;
     if (!id || !item || !sig) return res.status(400).send(tickPage('Invalid link', 'This link is missing required parameters.', false));
     // Verify HMAC signature
-    const expected = crypto.createHmac('sha256', process.env.DASHBOARD_PASSWORD||'cinderella')
+    const expected = crypto.createHmac('sha256', DASHBOARD_PASSWORD)
       .update(id + ':' + item).digest('hex').substring(0, 16);
     if (typeof sig !== 'string' || sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return res.status(403).send(tickPage('Invalid link', 'This link has expired or is invalid.', false));
     const state = loadLeaveState();
@@ -6333,7 +6335,7 @@ a{color:#07706B;font-weight:600;text-decoration:none}</style></head>
 
 // Generate tick URL for a leave item
 function getTickUrl(entryId, itemId) {
-  const sig = crypto.createHmac('sha256', process.env.DASHBOARD_PASSWORD||'cinderella')
+  const sig = crypto.createHmac('sha256', DASHBOARD_PASSWORD)
     .update(entryId + ':' + itemId).digest('hex').substring(0, 16);
   return `https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/leave/tick?id=${entryId}&item=${itemId}&sig=${sig}`;
 }
