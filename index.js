@@ -128,7 +128,7 @@ app.get('/logout', (req, res) => {
 
 // Auth middleware — protect everything except /login
 function requireAuth(req, res, next) {
-  if (req.path === '/login' || req.path === '/logout' || req.path === '/checkin' || req.path === '/checkins/submit') return next();
+  if (req.path === '/login' || req.path === '/logout' || req.path === '/checkin' || req.path === '/checkins/submit' || req.path === '/leave/tick') return next(); // /leave/tick is protected by its signed HMAC link
   const cookie = req.headers.cookie || '';
   const match = cookie.match(/cin_session=([^;]+)/);
   if (match && activeSessions.has(match[1])) return next();
@@ -6266,9 +6266,9 @@ app.get('/leave/tick', async (req, res) => {
     const { id, item, sig } = req.query;
     if (!id || !item || !sig) return res.status(400).send(tickPage('Invalid link', 'This link is missing required parameters.', false));
     // Verify HMAC signature
-    const expected = require('crypto').createHmac('sha256', process.env.DASHBOARD_PASSWORD||'cinderella')
+    const expected = crypto.createHmac('sha256', process.env.DASHBOARD_PASSWORD||'cinderella')
       .update(id + ':' + item).digest('hex').substring(0, 16);
-    if (sig !== expected) return res.status(403).send(tickPage('Invalid link', 'This link has expired or is invalid.', false));
+    if (typeof sig !== 'string' || sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return res.status(403).send(tickPage('Invalid link', 'This link has expired or is invalid.', false));
     const state = loadLeaveState();
     const entry = (state.leaveEntries||[]).find(e=>e.id===id);
     if (!entry) return res.status(404).send(tickPage('Not found', 'This leave entry no longer exists.', false));
@@ -6333,7 +6333,7 @@ a{color:#07706B;font-weight:600;text-decoration:none}</style></head>
 
 // Generate tick URL for a leave item
 function getTickUrl(entryId, itemId) {
-  const sig = require('crypto').createHmac('sha256', process.env.DASHBOARD_PASSWORD||'cinderella')
+  const sig = crypto.createHmac('sha256', process.env.DASHBOARD_PASSWORD||'cinderella')
     .update(entryId + ':' + itemId).digest('hex').substring(0, 16);
   return `https://cinderella-agent-abbacse9gbhcaqeu.australiaeast-01.azurewebsites.net/leave/tick?id=${entryId}&item=${itemId}&sig=${sig}`;
 }
