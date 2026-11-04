@@ -1765,7 +1765,7 @@ function renderLiveCalendar() {
 
     var badge = inProgress ? '<span style="font-size:9px;background:var(--g);color:#fff;padding:1px 6px;border-radius:8px;margin-left:6px">In progress</span>' : '';
 
-    return '<div class="row"><div class="mtime">'+time+'</div><div><div class="mt">'+e.subject+badge+'</div><div class="mm">'+endTime+' · '+durationMins+' min'+(e.location?' · '+e.location:'')+'</div></div></div>';
+    return '<div class="row"><div class="mtime">'+time+'</div><div><div class="mt">'+escHtml(e.subject)+badge+'</div><div class="mm">'+endTime+' · '+durationMins+' min'+(e.location?' · '+e.location:'')+'</div></div></div>';
 
   }).join('');
 
@@ -1797,7 +1797,7 @@ function renderLiveEmails() {
 
     html += '<div class="erow" style="position:relative">'+
       '<div onclick="openEmailView('+idx+')" style="flex:1;display:flex;align-items:center;gap:8px;cursor:pointer">'+
-        '<div class="ei"><div class="ef" style="display:flex;align-items:center">'+unread+e.from+attach+'</div><div class="es">'+e.subject+'</div></div>'+
+        '<div class="ei"><div class="ef" style="display:flex;align-items:center">'+unread+escHtml(e.from)+attach+'</div><div class="es">'+escHtml(e.subject)+'</div></div>'+
         '<div class="ea">'+e.hoursOld+'h '+overdueTag+'</div>'+
       '</div>'+
       '<button onclick="addEmailToTracker('+idx+')" title="Add to Open Actions" style="flex-shrink:0;background:none;border:1px solid var(--bl);border-radius:6px;padding:2px 6px;font-size:10px;color:var(--t3);cursor:pointer;font-family:var(--f);margin-left:4px">+ Track</button>'+
@@ -3504,7 +3504,7 @@ function buildModals() {
 
       d.innerHTML = (checkInMeetings.length>0 ?
 
-        '<div class="alert-box ok"><div class="ab-title">📅 Check-in meeting today: '+checkInMeetings[0].subject+'</div></div>' :
+        '<div class="alert-box ok"><div class="ab-title">📅 Check-in meeting today: '+escHtml(checkInMeetings[0].subject)+'</div></div>' :
 
         '<div class="alert-box warn"><div class="ab-title">No check-in meetings today</div><div class="ab-text">Consider scheduling 1:1s with your team.</div></div>') +
 
@@ -3552,7 +3552,7 @@ function buildModals() {
 
           return '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid rgba(0,0,0,0.08)">'+
 
-            '<span><strong>'+e.from+'</strong><br><span style="font-size:10px">'+e.subject+'</span></span>'+
+            '<span><strong>'+escHtml(e.from)+'</strong><br><span style="font-size:10px">'+escHtml(e.subject)+'</span></span>'+
 
             '<div style="display:flex;gap:4px;margin-left:8px"><button onclick="openOutlook()" style="font-size:9px;padding:2px 8px;border-radius:8px;background:#0078D4;color:#fff;border:none;cursor:pointer">Open</button>'+
 
@@ -3562,7 +3562,7 @@ function buildModals() {
 
         '<div class="alert-box warn"><div class="ab-title">No finance emails from Diane or Nicole this week</div><div class="ab-text">Consider requesting a P&L update.</div></div>') +
 
-        (financeMeetings.length>0?'<div class="alert-box ok"><div class="ab-title">📅 Finance meeting: '+financeMeetings[0].subject+'</div></div>':'');
+        (financeMeetings.length>0?'<div class="alert-box ok"><div class="ab-title">📅 Finance meeting: '+escHtml(financeMeetings[0].subject)+'</div></div>':'');
 
       var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
 
@@ -3586,7 +3586,7 @@ function buildModals() {
 
       var thisMonth = new Date().toLocaleString('en-AU',{month:'long',year:'numeric'});
 
-      d.innerHTML = (boardMeetings.length>0?'<div class="alert-box ok"><div class="ab-title">📅 Board meeting: '+boardMeetings[0].subject+'</div><div class="ab-text">Prepare your board report before this meeting.</div></div>':'') +
+      d.innerHTML = (boardMeetings.length>0?'<div class="alert-box ok"><div class="ab-title">📅 Board meeting: '+escHtml(boardMeetings[0].subject)+'</div><div class="ab-text">Prepare your board report before this meeting.</div></div>':'') +
 
         '<div class="mfield"><div class="mfl">Report scope</div><div class="mfv">Month prior: <strong>'+lastMonth+'</strong><br>Month ahead: <strong>'+thisMonth+'</strong><br>Format: Succinct, 2 pages max</div></div>';
 
@@ -3640,7 +3640,7 @@ function buildModals() {
 
       d.innerHTML = '<div id="mondayStatus"><div style="font-size:12px;color:var(--t2);padding:8px 0;display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:var(--a);flex-shrink:0"></span><span>Loading Monday.com project data...</span></div></div>' +
 
-        (clientEmails.length>0?'<div class="alert-box ok" style="margin-top:8px"><div class="ab-title">📧 '+clientEmails.length+' client-related email'+(clientEmails.length>1?'s':'')+' this week</div><div class="ab-text">'+clientEmails.slice(0,3).map(function(e){return e.from+': '+e.subject;}).join('<br>')+'</div></div>':'');
+        (clientEmails.length>0?'<div class="alert-box ok" style="margin-top:8px"><div class="ab-title">📧 '+clientEmails.length+' client-related email'+(clientEmails.length>1?'s':'')+' this week</div><div class="ab-text">'+clientEmails.slice(0,3).map(function(e){return escHtml(e.from)+': '+escHtml(e.subject);}).join('<br>')+'</div></div>':'');
 
       var hr=document.createElement('hr');hr.className='m-divider';d.appendChild(hr);
 
@@ -7836,6 +7836,33 @@ async function sendLeaveUpdate(id) {
 
 
 
+
+function escHtml(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function safeUrl(u){u=String(u||'');return /^https:\/\//i.test(u)?u:'#';}
+async function loadEmailTrackerBrief(){
+  var box=document.getElementById('emailTrackerBrief'); if(!box) return;
+  box.innerHTML='<div style="font-size:11px;color:var(--t3);padding:6px 0">Analysing last week\'s inbox and your replies…</div>';
+  try{
+    var r=await fetch('/email-tracker/brief'); var t=await r.text(); var d;
+    try{d=JSON.parse(t);}catch(e){box.innerHTML='<div style="font-size:11px">Could not read response.</div>';return;}
+    if(d.error){box.innerHTML='<div style="font-size:11px">'+escHtml(d.error)+'</div>';return;}
+    function row(e){
+      var pri=e.priority==='urgent'?'<span style="color:#c0392b;font-weight:700"> ● URGENT</span>':'';
+      return '<div style="padding:8px 0;border-bottom:1px solid #e5e5e5">'+
+        '<a href="'+escHtml(safeUrl(e.webLink))+'" target="_blank" rel="noopener" style="font-size:12px;font-weight:600;color:inherit;text-decoration:none">Email from '+escHtml(e.from)+': '+escHtml(e.gist)+'</a>'+pri+
+        '<div style="font-size:10px;color:var(--t3);margin-top:2px">'+escHtml(e.subject)+' · '+escHtml(new Date(e.received).toLocaleDateString('en-AU'))+
+        ' · <a href="#" data-cid="'+escHtml(e.conversationId)+'" onclick="dismissEmailTracker(this.dataset.cid);return false;">Mark done</a></div></div>';
+    }
+    box.innerHTML='<div style="font-size:11px;font-weight:700;margin:4px 0">Requires your attention ('+d.requiresAttention.length+')</div>'+
+      (d.requiresAttention.length?d.requiresAttention.map(row).join(''):'<div style="font-size:11px;color:var(--t3)">Nothing open.</div>')+
+      '<div style="font-size:11px;font-weight:700;margin:12px 0 4px">Missed emails — no reply from you ('+d.missed.length+')</div>'+
+      (d.missed.length?d.missed.map(row).join(''):'<div style="font-size:11px;color:var(--t3)">Nothing missed.</div>');
+  }catch(e){box.innerHTML='<div style="font-size:11px">'+escHtml(e.message)+'</div>';}
+}
+async function dismissEmailTracker(cid){
+  try{await fetch('/email-tracker/dismiss',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:cid})});}catch(e){}
+  loadEmailTrackerBrief();
+}
 </script>
 
 </body>
