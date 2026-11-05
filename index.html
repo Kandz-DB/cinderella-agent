@@ -255,6 +255,36 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 .think span:nth-child(3){animation-delay:.4s}
 @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
 
+
+.ng{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.4);padding:16px 14px 5px}
+/* ── Ask Cinderella: clean chat layout ── */
+#pnl-chat{display:flex;flex-direction:column;align-items:center;overflow:hidden;padding:22px 32px 26px;background:var(--bg2)}
+#pnl-chat > *{width:100%;max-width:880px;box-sizing:border-box}
+#pnl-chat .ch{height:auto;overflow:visible;flex:0 0 auto;flex-direction:row;align-items:center;gap:12px;padding:0 4px 16px}
+#pnl-chat .ch .sdot{flex:0 0 auto;width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,#0A7A7A,#5DCFC9);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:18px;animation:none}
+#pnl-chat .ch .sdot::after{content:"C"}
+#pnl-chat .ch-title{font-size:18px;font-weight:600;color:var(--t1);display:flex;align-items:center;gap:8px}
+#pnl-chat .m365{font-size:10px;font-weight:600;letter-spacing:.04em;color:#0A7A7A;background:#DCEEE6;border-radius:20px;padding:2px 9px}
+#pnl-chat .ch-sub{font-size:12.5px;color:var(--t3);margin-top:2px}
+#pnl-chat .msgs{flex:1 1 auto;min-height:0;overflow-y:auto;background:#fff;border:1px solid var(--bl);border-radius:18px;box-shadow:0 2px 14px rgba(0,0,0,.05);padding:24px 28px;display:flex;flex-direction:column;gap:18px}
+#pnl-chat .msgs:empty::before{content:"Ask me anything about your emails, calendar, team, projects or finances.";margin:auto;color:var(--t3);font-size:14px;text-align:center}
+#pnl-chat .msg{display:flex;flex-direction:column;gap:5px;max-width:100%}
+#pnl-chat .msg.u{align-items:flex-end}
+#pnl-chat .msg .sndr{min-width:0;max-width:none;overflow:visible;font-size:11px;font-weight:600;letter-spacing:.03em;color:var(--t3);padding:0 4px}
+#pnl-chat .bub{font-size:14px;line-height:1.6;color:var(--t1);padding:13px 17px;border-radius:16px;max-width:90%;word-wrap:break-word;overflow-wrap:anywhere}
+#pnl-chat .bub.u{background:#E4F3EF;border-top-right-radius:5px;white-space:normal}
+#pnl-chat .bub.a{background:#fff;border:1px solid #E2E8E8;border-top-left-radius:5px;box-shadow:0 1px 4px rgba(0,0,0,.04)}
+#pnl-chat .think span{background:#0D8A62}
+#pnl-chat .attach-bar{flex:0 0 auto;padding:10px 4px 0}
+#pnl-chat .cin-wrap{flex:0 0 auto;display:flex;align-items:flex-end;gap:10px;margin-top:14px;background:#fff;border:1px solid var(--bm);border-radius:18px;box-shadow:0 2px 14px rgba(0,0,0,.06);padding:12px 12px 12px 14px;transition:border-color .15s,box-shadow .15s}
+#pnl-chat .cin-wrap:focus-within{border-color:#0D8A62;box-shadow:0 0 0 3px rgba(13,138,98,.12),0 2px 14px rgba(0,0,0,.06)}
+#pnl-chat .catt{flex:0 0 auto;width:38px;height:38px;border:none;border-radius:50%;background:var(--bg2);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center}
+#pnl-chat .catt:hover{background:var(--bg3)}
+#pnl-chat .cin{flex:1 1 auto;min-width:0;border:none;outline:none;resize:none;background:transparent;font-family:var(--f);font-size:14.5px;line-height:1.5;color:var(--t1);padding:8px 4px;min-height:24px;max-height:180px}
+#pnl-chat .cin::placeholder{color:var(--t3)}
+#pnl-chat .csend{flex:0 0 auto;padding:10px 22px;border-radius:12px;font-size:13.5px}
+#pnl-chat .csend:disabled{opacity:.5;cursor:default}
+
 /* Staff grid */
 .staff-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
 .smatch-head{font-size:10.5px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.07em;margin:14px 0 6px}
@@ -5342,7 +5372,7 @@ function qa(text){
 
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
 
-function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,90)+'px';}
+function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,180)+'px';}
 
 function tick(){document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',weekday:'short',day:'numeric',month:'short'});}
 
