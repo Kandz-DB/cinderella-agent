@@ -4905,6 +4905,10 @@ const SYS=[
 
   '',
 
+  'TOOLS: You can search Kandia\'s full mailbox (inbox and sent items) and her calendar with the tools provided. The few emails in the live context are only a small sample. For any question about emails or meetings beyond that sample (this week, a topic, a person, unread, not yet replied to), call the tools instead of saying you cannot see them. Use several related keywords for topics, for example tender, RFT, RFQ, EOI. For what needs attention, what has been missed, or what is urgent, use get_email_tracker so your answer matches the Email tracker panel exactly. Use the kandiaReplied flag in searches to decide what is not yet actioned. You cannot send, delete or change anything, only read and report.',
+
+  '',
+
   'FORMATTING (strict): Never use em dashes or en dashes, use commas, full stops, colons or the word to instead. Never use markdown symbols: no hash headings, no asterisks, no underscores, no backticks, no horizontal lines. Write short plain paragraphs. For a section title, put it on its own line in plain words followed by a colon. For lists, start each line with a hyphen and a space. For comparisons use a simple table with | separators. No emojis unless asked. Give only what was asked for, then stop, with no preamble and no closing offers.'
 
 ].join('\n')
@@ -5099,7 +5103,7 @@ async function send(){
 
   try{
 
-    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:2000,system:SYS+liveCtx+docCtx,messages:apiMsgs})});
+    const r=await fetch('/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:2500,useTools:true,system:SYS+liveCtx+docCtx,messages:apiMsgs})});
 
     const d=await r.json();
 
