@@ -529,6 +529,8 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
 
     <button class="ni" onclick="show('skills',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l2 4h4l-3 3 1 4-4-2-4 2 1-4-3-3h4z"/></svg>Skill matching<span class="nb nb-a" id="matchBadge" style="display:none">0</span></button>
 
+    <button class="ni" onclick="show('teach',this);loadMemory()"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 3h8a2 2 0 012 2v8H4a2 2 0 01-2-2z"/><path d="M12 6h2v7h-2"/></svg>Teach Cinderella</button>
+
     <button class="ni" onclick="show('coo',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2L2 6v8h4v-4h4v4h4V6z"/></svg>COO duties<span class="nb nb-a">2</span></button>
     <button class="ni" id="actionTrackerBtn" onclick="show('tracker',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M5 8l2 2 4-4"/></svg>Open actions<span class="nb nb-r" id="trackerBadge" style="display:none">0</span></button>
     <button class="ni" id="auroraNavBtn" onclick="show('aurora',this)"><svg class="ni-ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2l1.5 4.5H14l-3.5 2.5 1.5 4.5L8 11l-4 2.5 1.5-4.5L2 6.5h4.5z"/></svg>Aurora projects<span class="nb nb-a" id="auroraBadge" style="display:none">0</span></button>
@@ -1286,6 +1288,29 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
         </div>
       </div>
       <div id="trackerList"><div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Loading...</div></div>
+    </div>
+
+    <div class="pnl" id="pnl-teach">
+      <div class="sec"><span>Teach Cinderella</span></div>
+      <div class="card">
+        <div class="ct">Add a rule</div>
+        <div style="font-size:11px;color:var(--t3);margin-bottom:8px">Rules are added to everything Cinderella writes or analyses with AI (briefs, tracker, finance, chat). Only you can add them, from here. You can also type <b>remember: …</b>, <b>always: …</b> or <b>never: …</b> in the chat.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <select id="teach-cat" style="font-size:12px;padding:6px 8px;border:1px solid var(--bl);border-radius:8px"></select>
+          <input id="teach-text" maxlength="300" placeholder="e.g. Keep emails short and put the dollar figure first" style="flex:1;min-width:220px;font-size:12px;padding:6px 10px;border:1px solid var(--bl);border-radius:8px">
+          <button onclick="addMemoryRule()" style="font-size:12px;padding:6px 14px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer">Add rule</button>
+        </div>
+      </div>
+      <div id="teach-rules"><div style="font-size:12px;color:var(--t3);padding:12px 0">Loading…</div></div>
+      <div class="card">
+        <div class="ct">Give feedback</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input id="fb-text" maxlength="500" placeholder="e.g. Today's brief was too long" style="flex:1;min-width:220px;font-size:12px;padding:6px 10px;border:1px solid var(--bl);border-radius:8px">
+          <button onclick="submitGeneralFeedback()" style="font-size:12px;padding:6px 14px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer">Save feedback</button>
+        </div>
+        <div class="ct" style="margin-top:12px">Recent feedback</div>
+        <div id="teach-feedback" style="font-size:11px;color:var(--t2)"></div>
+      </div>
     </div>
 
     <div class="pnl-chat" id="pnl-chat">
@@ -5023,6 +5048,7 @@ async function send(){
   if((!text&&chatAttachments.length===0)||busy)return;
 
   inp.value='';resize(inp);
+  if(chatAttachments.length===0 && typeof handleTeachCommand==='function' && handleTeachCommand(text)) return;
   var pendingAtts=chatAttachments.slice();chatAttachments=[];renderChatAttachments();
 
   // Build live context from real M365 data + staff check-ins
@@ -7851,7 +7877,9 @@ async function loadEmailTrackerBrief(){
       return '<div style="padding:8px 0;border-bottom:1px solid #e5e5e5">'+
         '<a href="'+escHtml(safeUrl(e.webLink))+'" target="_blank" rel="noopener" style="font-size:12px;font-weight:600;color:inherit;text-decoration:none">Email from '+escHtml(e.from)+': '+escHtml(e.gist)+'</a>'+pri+
         '<div style="font-size:10px;color:var(--t3);margin-top:2px">'+escHtml(e.subject)+' · '+escHtml(new Date(e.received).toLocaleDateString('en-AU'))+
-        ' · <a href="#" data-cid="'+escHtml(e.conversationId)+'" onclick="dismissEmailTracker(this.dataset.cid);return false;">Mark done</a></div></div>';
+        ' · <a href="#" data-cid="'+escHtml(e.conversationId)+'" onclick="dismissEmailTracker(this.dataset.cid);return false;">Mark done</a>'+
+        ' · <a href="#" data-ref="'+escHtml(('Email from '+e.from+': '+e.gist).substring(0,180))+'" onclick="giveFeedback(\'email-tracker\',this.dataset.ref,\'up\');return false;" title="Useful">&#128077;</a>'+
+        ' <a href="#" data-ref="'+escHtml(('Email from '+e.from+': '+e.gist).substring(0,180))+'" onclick="giveFeedback(\'email-tracker\',this.dataset.ref,\'down\');return false;" title="Not useful">&#128078;</a></div></div>';
     }
     box.innerHTML='<div style="font-size:11px;font-weight:700;margin:4px 0">Requires your attention ('+d.requiresAttention.length+')</div>'+
       (d.requiresAttention.length?d.requiresAttention.map(row).join(''):'<div style="font-size:11px;color:var(--t3)">Nothing open.</div>')+
@@ -7862,6 +7890,66 @@ async function loadEmailTrackerBrief(){
 async function dismissEmailTracker(cid){
   try{await fetch('/email-tracker/dismiss',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:cid})});}catch(e){}
   loadEmailTrackerBrief();
+}
+
+var MEM_CATS={};
+async function loadMemory(){
+  var box=document.getElementById('teach-rules'); if(!box) return;
+  try{
+    var r=await fetch('/memory'); var t=await r.text(); var d=JSON.parse(t);
+    MEM_CATS=d.categories||{};
+    var sel=document.getElementById('teach-cat');
+    if(sel && !sel.options.length) Object.keys(MEM_CATS).forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=MEM_CATS[k];sel.appendChild(o);});
+    var html='';
+    Object.keys(MEM_CATS).forEach(function(k){
+      var rs=(d.rules||[]).filter(function(x){return x.category===k;});
+      html+='<div class="card"><div class="ct">'+escHtml(MEM_CATS[k])+' <span style="color:var(--t3);font-weight:400">('+rs.length+')</span></div>';
+      if(!rs.length) html+='<div style="font-size:11px;color:var(--t3)">Nothing yet.</div>';
+      rs.forEach(function(x){
+        html+='<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #eee;'+(x.active===false?'opacity:.5':'')+'">'+
+          '<div style="flex:1;font-size:12px">'+escHtml(x.text)+'</div>'+
+          '<a href="#" data-id="'+escHtml(x.id)+'" data-on="'+(x.active===false?'0':'1')+'" onclick="toggleMemoryRule(this.dataset.id,this.dataset.on);return false;" style="font-size:11px">'+(x.active===false?'Turn on':'Turn off')+'</a>'+
+          '<a href="#" data-id="'+escHtml(x.id)+'" onclick="deleteMemoryRule(this.dataset.id);return false;" style="font-size:11px;color:#c0392b">Delete</a></div>';
+      });
+      html+='</div>';
+    });
+    box.innerHTML=html;
+    var fb=document.getElementById('teach-feedback');
+    if(fb) fb.innerHTML=(d.feedback||[]).length?(d.feedback||[]).map(function(f){
+      return '<div style="padding:3px 0">'+(f.rating==='up'?'&#128077; ':f.rating==='down'?'&#128078; ':'&#9998; ')+escHtml(f.source)+(f.ref?': '+escHtml(f.ref):'')+(f.note?' — '+escHtml(f.note):'')+' <span style="color:var(--t3)">'+escHtml(new Date(f.at).toLocaleDateString('en-AU'))+'</span></div>';
+    }).join(''):'<div style="color:var(--t3)">No feedback yet.</div>';
+  }catch(e){box.innerHTML='<div style="font-size:12px;color:var(--t3)">Could not load rules: '+escHtml(e.message)+'</div>';}
+}
+async function memCall(url,method,body){
+  var r=await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+  var t=await r.text(); var d={}; try{d=JSON.parse(t);}catch(e){}
+  if(!r.ok) throw new Error(d.error||('Request failed ('+r.status+')'));
+  return d;
+}
+async function addMemoryRule(){
+  var cat=document.getElementById('teach-cat').value, inp=document.getElementById('teach-text');
+  if(!inp.value.trim()) return;
+  try{await memCall('/memory','POST',{category:cat,text:inp.value}); inp.value=''; showToast('Rule saved — Cinderella will follow it from now on'); loadMemory();}
+  catch(e){showToast(e.message);}
+}
+async function toggleMemoryRule(id,on){try{await memCall('/memory/'+encodeURIComponent(id),'PUT',{active:on!=='1'});loadMemory();}catch(e){showToast(e.message);}}
+async function deleteMemoryRule(id){if(!confirm('Delete this rule?'))return;try{await memCall('/memory/'+encodeURIComponent(id),'DELETE');loadMemory();}catch(e){showToast(e.message);}}
+async function giveFeedback(source,ref,rating){
+  var note=''; if(rating==='down'){note=prompt('What was wrong? (optional)')||'';}
+  try{await memCall('/memory/feedback','POST',{source:source,ref:ref,rating:rating,note:note}); showToast('Thanks — feedback saved');}catch(e){showToast(e.message);}
+}
+async function submitGeneralFeedback(){
+  var i=document.getElementById('fb-text'); if(!i.value.trim()) return;
+  try{await memCall('/memory/feedback','POST',{source:'general',rating:'note',note:i.value}); i.value=''; loadMemory();}catch(e){showToast(e.message);}
+}
+function handleTeachCommand(text){
+  var m=text.match(/^\s*(remember|always|never|don'?t)\s*:\s*([\s\S]{3,300})$/i);
+  if(!m) return false;
+  var kw=m[1].toLowerCase(), cat=kw==='remember'?'work':(kw==='always'?'do':'dont');
+  var body=m[2].trim();
+  var rule=(kw==='never'||kw.indexOf('don')===0)&&!/^(never|don'?t|do not)\b/i.test(body)?'Never '+body:body;
+  memCall('/memory','POST',{category:cat,text:rule}).then(function(){showToast('Saved to my rulebook: '+rule.substring(0,80));}).catch(function(e){showToast(e.message);});
+  return true;
 }
 </script>
 
