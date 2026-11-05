@@ -11,7 +11,8 @@ const MEMORY_PATH = '/home/cinderella-memory.json';
 const FEEDBACK_PATH = '/home/cinderella-feedback.json';
 const MEMORY_CATEGORIES = {
   work: 'How I like to work', look: 'How I like things to look', dont: 'What NOT to do',
-  do: 'What to do', preempt: 'What to pre-empt', predict: 'What to help predict', analyse: 'What to help analyse'
+  do: 'What to do', preempt: 'What to pre-empt', predict: 'What to help predict', analyse: 'What to help analyse',
+  board: 'Board reports (used only when writing the board report)'
 };
 function loadMemory() {
   try { const j = JSON.parse(readFileSync(MEMORY_PATH, 'utf8')); return Array.isArray(j.rules) ? j.rules : []; } catch (e) { return []; }
@@ -22,7 +23,7 @@ function loadFeedback() {
 }
 function memoryPromptBlock() {
   try {
-    const rules = loadMemory().filter(r => r.active !== false).slice(0, 40);
+    const rules = loadMemory().filter(r => r.active !== false && r.category !== 'board').slice(0, 40);
     if (!rules.length) return '';
     let out = "KANDIA'S STANDING PREFERENCES (set personally by Kandia; follow them in everything you write, analyse or recommend, except where they would conflict with the SECURITY RULE):";
     for (const [key, label] of Object.entries(MEMORY_CATEGORIES)) {
@@ -49,8 +50,31 @@ globalThis.fetch = function(url, opts) {
       opts = Object.assign({}, opts, { body: JSON.stringify(b) });
     }
   } catch (e) { /* fall through unchanged */ }
-  return _origFetch(url, opts);
+  const p = _origFetch(url, opts);
+  try {
+    if (typeof url === 'string' && url.startsWith('https://api.anthropic.com/') && opts && typeof opts.body === 'string') {
+      const model = JSON.parse(opts.body).model || 'unknown';
+      p.then(r => r.clone().json().then(d => recordAiUsage(model, d && d.usage)).catch(() => {})).catch(() => {});
+    }
+  } catch (e) {}
+  return p;
 };
+const USAGE_PATH = '/home/ai-usage.json';
+function recordAiUsage(model, u) {
+  if (!u) return;
+  try {
+    let st = {}; try { st = JSON.parse(readFileSync(USAGE_PATH, 'utf8')); } catch (e) {}
+    if (!st.days) st.days = {};
+    const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' });
+    if (!st.days[day]) st.days[day] = {};
+    const m = st.days[day][model] || (st.days[day][model] = { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    m.calls++; m.input += u.input_tokens || 0; m.output += u.output_tokens || 0;
+    m.cacheRead += u.cache_read_input_tokens || 0; m.cacheWrite += u.cache_creation_input_tokens || 0;
+    const keys = Object.keys(st.days).sort();
+    while (keys.length > 60) delete st.days[keys.shift()];
+    writeFileSync(USAGE_PATH, JSON.stringify(st));
+  } catch (e) {}
+}
 
 // In-memory log of AI calls
 const aiCallLog = [];
@@ -788,10 +812,14 @@ async function execChatTool(name, input) {
 // Runs the chat with tools: the model may call the read-only tools above, up to 6 rounds
 async function runChatWithTools(body) {
   const payload = { ...body, tools: CHAT_TOOLS };
+  // Prompt caching: the big, repeated part (tools + system context) is billed at a fraction on later rounds
+  if (typeof payload.system === 'string' && payload.system.length > 3000) {
+    payload.system = [{ type: 'text', text: payload.system, cache_control: { type: 'ephemeral' } }];
+  }
   payload.max_tokens = Math.min(payload.max_tokens || 2000, 3000);
   let messages = [...(body.messages || [])];
   let data = null;
-  for (let round = 0; round < 6; round++) {
+  for (let round = 0; round < 4; round++) {
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
@@ -805,7 +833,7 @@ async function runChatWithTools(body) {
       let out;
       try { out = await execChatTool(blk.name, blk.input); console.log('[ChatTool]', blk.name, JSON.stringify(blk.input).substring(0, 160)); }
       catch (e) { out = { error: e.message }; console.warn('[ChatTool] error', blk.name, e.message); }
-      results.push({ type: 'tool_result', tool_use_id: blk.id, content: JSON.stringify(out).substring(0, 60000) });
+      results.push({ type: 'tool_result', tool_use_id: blk.id, content: JSON.stringify(out).substring(0, 30000) });
     }
     messages.push({ role: 'user', content: results });
   }
@@ -1839,7 +1867,7 @@ ${context}`;
   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
     headers:{'Content-Type':'application/json','x-api-key':process.env.ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
-    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:6000,system:sysP,messages:[{role:'user',content:usrP}]})
+    body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:6000,system:sysP + boardLearningBlock(),messages:[{role:'user',content:usrP}]})
   });
   if (!aiRes.ok) {
     const errText = await aiRes.text();
@@ -3703,6 +3731,14 @@ async function checkFinancialAlerts(forceRun) {
       console.log('[FinanceAlert] No newer finance email since last snapshot (' + state.financialSnapshot.sourceLatestAt + ') — skipping.');
       return { found: true, skipped: true };
     }
+
+    // Never re-run the AI for the same newest email (stops repeated spend when a run found no figures)
+    if (!forceRun && state.financeAttemptedFor === newestAt) {
+      console.log('[FinanceAlert] Already analysed up to', newestAt, '- skipping until a newer email arrives or you force a refresh.');
+      return { found: !!hasGoodResult, skipped: true };
+    }
+    state.financeAttemptedFor = newestAt;
+    saveProactiveState(state);
 
     // Read spreadsheet attachments (newest emails first, de-duplicated by name+size)
     const attachTexts = [];
@@ -7149,6 +7185,162 @@ app.post('/memory/feedback', requireAuth, (req, res) => {
   const fb = loadFeedback(); fb.push(entry);
   try { writeFileSync(FEEDBACK_PATH, JSON.stringify(fb.slice(-300))); } catch (e) {}
   res.json({ success: true });
+});
+
+// ── BOARD REPORT LEARNING ───────────────────────────────────────
+const BOARD_LEARN_PATH = '/home/board-learning.json';
+function loadBoardLearning() {
+  try { const j = JSON.parse(readFileSync(BOARD_LEARN_PATH, 'utf8')); return { pairs: j.pairs || {}, model: j.model || null }; } catch (e) { return { pairs: {}, model: null }; }
+}
+function saveBoardLearning(st) { writeFileSync(BOARD_LEARN_PATH, JSON.stringify(st)); }
+function boardLearningBlock() {
+  try {
+    const rules = loadMemory().filter(r => r.category === 'board' && r.active !== false).slice(0, 25);
+    const model = loadBoardLearning().model;
+    let out = '';
+    if (rules.length) out += "\n\nKANDIA'S BOARD REPORT RULES (learned from her edits to past reports; follow them):\n" + rules.map(r => '- ' + r.text).join('\n');
+    if (model && model.text) out += '\n\nMODEL REPORT: Kandia finished and approved this report (' + model.name + '). Match its emphasis, level of detail, length, wording style and way of presenting figures. Do NOT copy its facts or numbers; use only the DATA provided.\n<model_report>\n' + model.text.substring(0, 7000) + '\n</model_report>';
+    return out;
+  } catch (e) { return ''; }
+}
+function docxToText(buf) {
+  const read = zipReader(buf);
+  const xml = (read('word/document.xml') || Buffer.alloc(0)).toString('utf8');
+  const x = xml.replace(/<\/w:p>\s*<\/w:tc>/g, '</w:tc>').replace(/<w:tab\/>/g, ' ').replace(/<\/w:tc>/g, ' | ').replace(/<\/w:tr>/g, '\n').replace(/<\/w:p>/g, '\n').replace(/<w:br\/>/g, '\n').replace(/<[^>]+>/g, '');
+  return xmlDec(x).replace(/[ \t]+/g, ' ').replace(/ \| \n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+function htmlDocToText(html) {
+  return String(html).replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(td|th)>/gi, ' | ').replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+    .replace(/[ \t]+/g, ' ').replace(/ \| \n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+function extractUploadText(buf, filename) {
+  const isZip = buf.length > 4 && buf.readUInt32LE(0) === 0x04034b50;
+  if (isZip) return docxToText(buf);
+  if (/\.pdf$/i.test(filename) || buf.slice(0, 4).toString() === '%PDF') throw new Error('PDF is not supported. Please save the report as a Word document (.docx) and upload that.');
+  const text = buf.toString('utf8');
+  return /<(html|body|p|div|table)\b/i.test(text) ? htmlDocToText(text) : text.trim();
+}
+async function readLibraryDraft(month) {
+  const name = 'board-report-' + month + '.doc';
+  try {
+    const cc = await getBlobContainer();
+    if (cc) { const bc = cc.getBlockBlobClient(name); if (await bc.exists()) return { name, buf: await bc.downloadToBuffer() }; }
+    else if (existsSync(pathJoin(DOCS_LOCAL, name))) return { name, buf: readFileSync(pathJoin(DOCS_LOCAL, name)) };
+  } catch (e) { console.warn('[BoardLearn] Library draft lookup:', e.message); }
+  return null;
+}
+const validMonth = m => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(m || ''));
+
+app.get('/board-learning', requireAuth, (req, res) => {
+  const st = loadBoardLearning();
+  const pairs = Object.values(st.pairs).sort((a, b) => b.month.localeCompare(a.month)).map(p => ({
+    month: p.month, finalName: p.finalName, draftName: p.draftName || null, hasDraft: !!p.draftText,
+    uploadedAt: p.uploadedAt, analysis: p.analysis || null
+  }));
+  res.json({ pairs, model: st.model ? { month: st.model.month, name: st.model.name, setAt: st.model.setAt } : null });
+});
+
+app.post('/board-learning/upload', requireAuth, express.raw({ type: '*/*', limit: '20mb' }), (req, res) => {
+  try {
+    const month = String(req.query.month || ''); const role = req.query.role === 'draft' ? 'draft' : 'final';
+    if (!validMonth(month)) return res.status(400).json({ error: 'Choose the month this report is for.' });
+    const filename = decodeURIComponent(req.headers['x-filename'] || 'upload');
+    const text = extractUploadText(req.body, filename);
+    if (text.length < 200) return res.status(400).json({ error: 'Could not read any text from that file.' });
+    const st = loadBoardLearning();
+    const pair = st.pairs[month] || (st.pairs[month] = { month });
+    if (role === 'draft') { pair.draftText = text.substring(0, 30000); pair.draftName = filename; }
+    else { pair.finalText = text.substring(0, 30000); pair.finalName = filename; }
+    pair.uploadedAt = new Date().toISOString();
+    pair.analysis = null;
+    saveBoardLearning(st);
+    res.json({ success: true, chars: text.length });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/board-learning/analyse', requireAuth, async (req, res) => {
+  try {
+    const month = String(req.body?.month || '');
+    const st = loadBoardLearning(); const pair = st.pairs[month];
+    if (!pair || !pair.finalText) return res.status(400).json({ error: 'Upload your edited report for that month first.' });
+    if (!pair.draftText) {
+      const d = await readLibraryDraft(month);
+      if (d) { pair.draftText = extractUploadText(d.buf, d.name).substring(0, 30000); pair.draftName = d.name + ' (from library)'; }
+    }
+    if (!pair.draftText) return res.status(400).json({ error: "I could not find Cinderella's draft for " + month + " in the library. Please upload the draft as well." });
+
+    const prompt = `Below are two versions of the same monthly COO board report for Risk 2 Solution: the DRAFT written by Cinderella (an AI assistant) and the FINAL version after Kandia Du Bruyn (COO) edited it.
+Work out what Kandia changed and why, then write reusable rules so future drafts need fewer edits.
+
+Look at: sections cut, shortened or reordered; wording and tone changes; content she added that the draft missed; content she removed as irrelevant or noise; how figures are shown or rounded; formatting and layout corrections; corrected facts.
+
+<draft>
+${pair.draftText.substring(0, 14000)}
+</draft>
+<final>
+${pair.finalText.substring(0, 14000)}
+</final>
+
+Return ONLY JSON, no markdown:
+{"summary":"2 to 3 sentences on the overall pattern of her edits","changes":["up to 8 short plain descriptions of specific edits"],"rules":["up to 8 reusable rules"]}
+Rules must be general instructions that apply to every future report (structure, length, wording, what to include or leave out, how to present figures), each under 220 characters, written as direct instructions. Never write rules about one month's specific facts or numbers. Never use em dashes or en dashes.`;
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] })
+    });
+    const d = await r.json();
+    const raw = (d.content || []).map(c => c.text || '').join('');
+    const j = raw.indexOf('{'), k = raw.lastIndexOf('}');
+    const parsed = JSON.parse(raw.substring(j, k + 1));
+    const clean = t => String(t || '').replace(/[–—]/g, ',').replace(/\s+/g, ' ').trim();
+    pair.analysis = {
+      summary: clean(parsed.summary).substring(0, 500),
+      changes: (parsed.changes || []).slice(0, 8).map(c => clean(c).substring(0, 250)),
+      rules: (parsed.rules || []).slice(0, 8).map((t, i) => ({ id: 'r' + i, text: clean(t).substring(0, 220), status: 'proposed' })).filter(x => x.text.length > 5),
+      analysedAt: new Date().toISOString()
+    };
+    saveBoardLearning(st);
+    res.json({ success: true, analysis: pair.analysis });
+  } catch (e) { console.error('[BoardLearn] analyse error:', e.message); res.status(500).json({ error: 'Analysis failed: ' + e.message }); }
+});
+
+app.post('/board-learning/rule', requireAuth, (req, res) => {
+  const { month, id, action } = req.body || {};
+  const st = loadBoardLearning(); const rule = (st.pairs[month]?.analysis?.rules || []).find(r => r.id === id);
+  if (!rule) return res.status(404).json({ error: 'Not found' });
+  if (action === 'approve') {
+    const rules = loadMemory();
+    if (rules.length >= 60) return res.status(400).json({ error: 'Rulebook is full. Delete some rules first.' });
+    if (!rules.some(r => r.category === 'board' && r.text.toLowerCase() === rule.text.toLowerCase())) {
+      rules.push({ id: 'm_' + Date.now() + '_' + Math.floor(Math.random() * 1000), category: 'board', text: rule.text, active: true, createdAt: new Date().toISOString(), source: 'board-learning ' + month });
+      saveMemory(rules);
+    }
+    rule.status = 'approved';
+  } else rule.status = 'rejected';
+  saveBoardLearning(st);
+  res.json({ success: true });
+});
+
+app.post('/board-learning/model', requireAuth, (req, res) => {
+  const st = loadBoardLearning();
+  if (req.body?.clear) { st.model = null; saveBoardLearning(st); return res.json({ success: true }); }
+  const pair = st.pairs[String(req.body?.month || '')];
+  if (!pair || !pair.finalText) return res.status(400).json({ error: 'Upload your edited report for that month first.' });
+  st.model = { month: pair.month, name: pair.finalName, text: pair.finalText.substring(0, 9000), setAt: new Date().toISOString() };
+  saveBoardLearning(st);
+  res.json({ success: true });
+});
+
+app.get('/usage', requireAuth, (req, res) => {
+  let st = {}; try { st = JSON.parse(readFileSync(USAGE_PATH, 'utf8')); } catch (e) {}
+  const days = Object.keys(st.days || {}).sort().reverse().slice(0, 14);
+  const n = v => Number(v || 0).toLocaleString('en-AU');
+  let rows = '';
+  for (const d of days) for (const [model, m] of Object.entries(st.days[d])) rows += `<tr><td>${d}</td><td>${model}</td><td>${n(m.calls)}</td><td>${n(m.input)}</td><td>${n(m.output)}</td><td>${n(m.cacheRead)}</td></tr>`;
+  res.send(`<!doctype html><meta charset="utf-8"><title>AI usage</title><body style="font-family:Arial,sans-serif;padding:24px;color:#222"><h2>Cinderella AI usage (last 14 days)</h2><p style="color:#666">Tokens per day and model, counted since this feature was added. Compare with your Anthropic Console for cost.</p><table cellpadding="8" style="border-collapse:collapse;font-size:13px"><tr style="background:#eef5f5;text-align:left"><th>Day</th><th>Model</th><th>Calls</th><th>Input tokens</th><th>Output tokens</th><th>Cached input</th></tr>${rows || '<tr><td colspan="6">No usage recorded yet.</td></tr>'}</table></body>`);
 });
 
 // Mark email as done (dismiss from tracker)
