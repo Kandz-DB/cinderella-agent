@@ -1331,6 +1331,18 @@ body{font-family:var(--f);font-size:13px;color:var(--t1);background:var(--bg2);l
           <button onclick="addMemoryRule()" style="font-size:12px;padding:6px 14px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer">Add rule</button>
         </div>
       </div>
+      <div class="card" id="board-learn">
+        <div class="ct">Board report learning</div>
+        <div style="font-size:11px;color:var(--t3);margin-bottom:8px">Upload the board report you edited. Cinderella compares it with her draft (found in the document library, or upload it too), then proposes rules for you to approve. Approved rules and your model report are used the next time she writes a board report.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <label style="font-size:11px;color:var(--t2)">Report month<br><input type="month" id="bl-month" style="font-size:12px;padding:5px 8px;border:1px solid var(--bl);border-radius:8px"></label>
+          <label style="font-size:11px;color:var(--t2)">Your edited report (.docx)<br><input type="file" id="bl-final" accept=".docx,.doc,.html,.htm,.txt,.md" style="font-size:11px"></label>
+          <label style="font-size:11px;color:var(--t2)">Her draft (optional)<br><input type="file" id="bl-draft" accept=".docx,.doc,.html,.htm,.txt,.md" style="font-size:11px"></label>
+          <button onclick="uploadBoardPair()" style="font-size:12px;padding:6px 14px;background:var(--b);color:#fff;border:none;border-radius:8px;cursor:pointer">Upload and compare</button>
+        </div>
+        <div id="bl-status" style="font-size:11px;color:var(--t2);margin-top:8px"></div>
+        <div id="bl-list" style="margin-top:8px"></div>
+      </div>
       <div id="teach-rules"><div style="font-size:12px;color:var(--t3);padding:12px 0">Loading…</div></div>
       <div class="card">
         <div class="ct">Give feedback</div>
@@ -7814,6 +7826,7 @@ async function dismissEmailTracker(cid){
 var MEM_CATS={};
 async function loadMemory(){
   var box=document.getElementById('teach-rules'); if(!box) return;
+  loadBoardLearning();
   try{
     var r=await fetch('/memory'); var t=await r.text(); var d=JSON.parse(t);
     MEM_CATS=d.categories||{};
@@ -7870,6 +7883,57 @@ function handleTeachCommand(text){
   memCall('/memory','POST',{category:cat,text:rule}).then(function(){showToast('Saved to my rulebook: '+rule.substring(0,80));}).catch(function(e){showToast(e.message);});
   return true;
 }
+
+async function blCall(url,method,body){
+  var r=await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+  var t=await r.text(); var d={}; try{d=JSON.parse(t);}catch(e){}
+  if(!r.ok) throw new Error(d.error||('Request failed ('+r.status+')'));
+  return d;
+}
+async function uploadBoardPair(){
+  var st=document.getElementById('bl-status'), month=document.getElementById('bl-month').value;
+  var fin=document.getElementById('bl-final').files[0], dr=document.getElementById('bl-draft').files[0];
+  if(!month||!fin){st.textContent='Choose the month and your edited report first.';return;}
+  try{
+    async function up(f,role){
+      var r=await fetch('/board-learning/upload?month='+encodeURIComponent(month)+'&role='+role,{method:'POST',headers:{'x-filename':encodeURIComponent(f.name),'Content-Type':'application/octet-stream'},body:f});
+      var t=await r.text(); var d={}; try{d=JSON.parse(t);}catch(e){}
+      if(!r.ok) throw new Error(d.error||'Upload failed');
+    }
+    st.textContent='Uploading…'; await up(fin,'final'); if(dr) await up(dr,'draft');
+    st.textContent='Comparing your version with her draft. This takes up to a minute…';
+    await blCall('/board-learning/analyse','POST',{month:month});
+    st.textContent='Done. Review the proposed rules below.';
+    loadBoardLearning();
+  }catch(e){st.textContent=e.message;}
+}
+async function loadBoardLearning(){
+  var box=document.getElementById('bl-list'); if(!box) return;
+  try{
+    var r=await fetch('/board-learning'); var d=JSON.parse(await r.text());
+    var html=d.model?'<div style="font-size:11px;margin-bottom:8px">Model report: <b>'+escHtml(d.model.name)+'</b> ('+escHtml(d.model.month)+') <a href="#" onclick="clearBoardModel();return false;" style="margin-left:6px">Remove</a></div>':'<div style="font-size:11px;color:var(--t3);margin-bottom:8px">No model report chosen yet.</div>';
+    (d.pairs||[]).forEach(function(p){
+      html+='<div style="border-top:1px solid #eee;padding:8px 0"><div style="font-size:12px;font-weight:600">'+escHtml(p.month)+' <span style="font-weight:400;color:var(--t3)">'+escHtml(p.finalName||'')+'</span> '+
+        '<a href="#" data-m="'+escHtml(p.month)+'" onclick="setBoardModel(this.dataset.m);return false;" style="font-size:11px;font-weight:400;margin-left:8px">Use as model report</a></div>';
+      var a=p.analysis;
+      if(!a){html+='<div style="font-size:11px;color:var(--t3)">Not compared yet.</div>';}
+      else{
+        html+='<div style="font-size:11px;color:var(--t2);margin:4px 0">'+escHtml(a.summary)+'</div>';
+        if(a.changes&&a.changes.length) html+='<ul style="margin:4px 0 6px 18px;padding:0;font-size:11px;color:var(--t2)">'+a.changes.map(function(c){return '<li>'+escHtml(c)+'</li>';}).join('')+'</ul>';
+        (a.rules||[]).forEach(function(rl){
+          html+='<div style="display:flex;gap:8px;align-items:center;padding:4px 0;font-size:12px">'+
+            '<div style="flex:1;'+(rl.status==='rejected'?'opacity:.45;text-decoration:line-through':'')+'">'+escHtml(rl.text)+'</div>'+
+            (rl.status==='proposed'?'<a href="#" data-m="'+escHtml(p.month)+'" data-id="'+escHtml(rl.id)+'" onclick="boardRuleAction(this.dataset.m,this.dataset.id,\'approve\');return false;" style="font-size:11px">Approve</a><a href="#" data-m="'+escHtml(p.month)+'" data-id="'+escHtml(rl.id)+'" onclick="boardRuleAction(this.dataset.m,this.dataset.id,\'reject\');return false;" style="font-size:11px;color:#c0392b">Skip</a>':'<span style="font-size:11px;color:var(--t3)">'+escHtml(rl.status)+'</span>')+'</div>';
+        });
+      }
+      html+='</div>';
+    });
+    box.innerHTML=html;
+  }catch(e){box.innerHTML='<div style="font-size:11px;color:var(--t3)">Could not load: '+escHtml(e.message)+'</div>';}
+}
+async function boardRuleAction(m,id,action){try{await blCall('/board-learning/rule','POST',{month:m,id:id,action:action});loadBoardLearning();if(action==='approve')loadMemory();}catch(e){showToast(e.message);}}
+async function setBoardModel(m){try{await blCall('/board-learning/model','POST',{month:m});showToast('Model report set');loadBoardLearning();}catch(e){showToast(e.message);}}
+async function clearBoardModel(){try{await blCall('/board-learning/model','POST',{clear:true});loadBoardLearning();}catch(e){showToast(e.message);}}
 </script>
 
 </body>
