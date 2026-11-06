@@ -7548,6 +7548,7 @@ async function loadLeaveEntries() {
           '<button onclick="editLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px">✏ Edit</button>' +
           '<button data-lid="' + e.id + '" onclick="sendLeaveChecklistNow(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">Send nomination email</button>' +
           '<button data-lid="' + e.id + '" onclick="sendLeaveUpdate(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">Send updated checklist</button>' +
+          (e.status === 'on_leave' ? '<button data-lid="' + e.id + '" onclick="sendLeaveCheckin(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">Send check-in</button>' : '') +
           '<button data-lid="' + e.id + '" onclick="processLeaveReplies(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">&#128257; Process replies</button>' +
           '<button onclick="deleteLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px;color:var(--r)">Delete</button>' +
         '</div>' +
@@ -7777,6 +7778,16 @@ async function sendLeaveChecklistNow(id) {
   } catch(e) { showToast('Error: '+e.message); }
 }
 
+async function sendLeaveCheckin(id) {
+  showToast('Sending check-in...');
+  try {
+    var r = await fetch('/leave/'+id+'/send-checkin', {method:'POST'});
+    var text = await r.text();
+    var d; try { d = JSON.parse(text); } catch(e) { showToast('Server error, check Azure logs'); return; }
+    if (d.success) { showToast(d.message || 'Check-in sent'); }
+    else { showToast('Error: '+(d.error||'Failed')); }
+  } catch(e) { showToast('Error: '+e.message); }
+}
 async function sendLeaveUpdate(id) {
   showToast('Sending updated checklist...');
   try {
