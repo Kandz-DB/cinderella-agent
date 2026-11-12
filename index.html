@@ -7695,6 +7695,83 @@ async function deleteLeaveEntry(id) {
   } catch(err) { showToast('Error: ' + err.message); }
 }
 
+// ── Edit a confirmed / in-progress leave entry ──
+async function editLeaveEntry(id) {
+  try {
+    var r = await fetch('/leave');
+    var entries = await r.json();
+    var e = entries.find(function(x){ return x.id === id; });
+    if (!e) { showToast('Leave entry not found — refresh and try again'); return; }
+    var first = (e.staffName||'').toLowerCase().split(' ')[0];
+    var current = (e.coveringEmails||[]).map(function(x){ return (x||'').toLowerCase(); });
+    var coverOptions = LEAVE_STAFF_LIST
+      .filter(function(s){ return s.name.toLowerCase().split(' ')[0] !== first; })
+      .concat([{name:'Kandia Du Bruyn', email:'kandia@risk2solution.com'}])
+      .map(function(s){
+        var sel = current.indexOf(s.email.toLowerCase()) >= 0 ? ' selected' : '';
+        return '<option value="'+s.name+'|'+s.email+'"'+sel+'>'+s.name+'</option>';
+      }).join('');
+    var started = e.status !== 'confirmed' && e.status !== 'pending_confirmation';
+    var inp = 'width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)';
+    openModal('Edit leave — ' + e.staffName, 'Correct the dates, cover or notes',
+      '<div style="display:grid;gap:10px">' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+          '<div><div class="mfl">Leave start date *</div><input id="el_start" type="date" value="'+(e.startDate||'').substring(0,10)+'" style="'+inp+'"></div>' +
+          '<div><div class="mfl">Leave end date *</div><input id="el_end" type="date" value="'+(e.endDate||'').substring(0,10)+'" style="'+inp+'"></div>' +
+        '</div>' +
+        '<div><div class="mfl">Covering colleague(s) * <span style="font-weight:400;color:var(--t3)">(hold Ctrl/Cmd to select multiple)</span></div><select id="el_cover" multiple style="'+inp+';height:110px">'+coverOptions+'</select></div>' +
+        '<div><div class="mfl">Notes</div><textarea id="el_notes" rows="3" style="'+inp+';resize:vertical">'+(e.notes||'').replace(/</g,'&lt;')+'</textarea></div>' +
+        (started
+          ? '<label style="display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--t1);line-height:1.5"><input id="el_notify" type="checkbox" checked style="margin-top:3px"> Email covering colleagues the corrected details. Anyone newly added gets their own handover checklist; existing cover gets an update.</label>'
+          : '') +
+      '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:14px">' +
+        '<button class="m-btn" onclick="submitEditLeave(\''+id+'\')" style="flex:1">Save changes</button>' +
+        '<button class="m-btn sec" onclick="closeModal()" style="flex:1">Cancel</button>' +
+      '</div>'
+    );
+    window._editLeaveBefore = { start:(e.startDate||'').substring(0,10), end:(e.endDate||'').substring(0,10), emails:current, started:started };
+  } catch(err) { showToast('Error: ' + err.message); }
+}
+
+async function submitEditLeave(id) {
+  var start = (document.getElementById('el_start')||{}).value;
+  var end   = (document.getElementById('el_end')||{}).value;
+  var notes = (document.getElementById('el_notes')||{}).value || '';
+  var notifyEl = document.getElementById('el_notify');
+  if (!start || !end) { showToast('Please enter both dates'); return; }
+  if (end < start) { showToast('End date is before start date'); return; }
+  var names = [], emails = [];
+  Array.from((document.getElementById('el_cover')||{}).selectedOptions||[]).forEach(function(opt){
+    var p = opt.value.split('|'); if (p[0]) names.push(p[0]); if (p[1]) emails.push(p[1]);
+  });
+  if (!names.length) { showToast('Please select at least one covering colleague'); return; }
+  var before = window._editLeaveBefore || {emails:[]};
+  try {
+    var r = await fetch('/leave/' + encodeURIComponent(id), {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ startDate:start, endDate:end, coveringColleagues:names, coveringEmails:emails, notes:notes })
+    });
+    var d = await r.json();
+    if (!d.success) { showToast('Error: ' + (d.error||'Failed')); return; }
+    if (d.entry && (d.entry.startDate||'').substring(0,10) !== start) { showToast('Warning: the start date did not save — please try again'); loadLeaveEntries(); return; }
+    var msg = 'Leave updated';
+    if (notifyEl && notifyEl.checked) {
+      var added = emails.filter(function(x){ return before.emails.indexOf(x.toLowerCase()) < 0; });
+      var changedDetails = start !== before.start || end !== before.end;
+      if (added.length) {
+        await fetch('/leave/' + encodeURIComponent(id) + '/send-checklist', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({onlyEmails:added})});
+        msg += ' — checklist sent to ' + added.length + ' new colleague' + (added.length>1?'s':'');
+      }
+      if (changedDetails) {
+        await fetch('/leave/' + encodeURIComponent(id) + '/send-update', {method:'POST'});
+        msg += ' — corrected dates emailed to cover';
+      }
+    }
+    closeModal(); showToast(msg); loadLeaveEntries();
+  } catch(err) { showToast('Error: ' + err.message); }
+}
+
 async function openLeaveChecklist(id, preselectedEmail) {
   try {
     var r = await fetch('/leave');
