@@ -6494,13 +6494,33 @@ app.get('/leave', requireAuth, (req, res) => {
 });
 
 // Kandia confirms leave — starts the process
+// Send the person going on leave a summary of their handover (dates, cover, checklist), CC Kandia
+app.post('/leave/:id/notify-staff', requireAuth, async (req, res) => {
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    if (!entry.staffEmail) return res.status(400).json({error:'No email address saved for '+entry.staffName+' — edit the entry and choose the staff member first'});
+    const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+    const html = buildLeaveEmail('checklist_updated', entry);
+    const ok = await sendLeaveAlert([entry.staffEmail], [kandiaEmail].filter(e=>e&&e!==entry.staffEmail),
+      '📋 Your leave handover: ' + entry.staffName + ' — cover: ' + (entry.coveringColleague||'TBC'), html, 'normal', entry);
+    if (!ok) return res.status(500).json({error:'Email send failed — check the server log'});
+    entry.staffNotifiedAt = new Date().toISOString();
+    saveLeaveState(state);
+    res.json({success:true, message:'Handover summary sent to '+entry.staffEmail});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
 app.post('/leave/:id/confirm', requireAuth, async (req, res) => {
   try {
     const state = loadLeaveState();
     const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
     if (!entry) return res.status(404).json({error:'Not found'});
-    const { coveringColleagues, coveringEmails, startDate, endDate, notes } = req.body;
+    const { coveringColleagues, coveringEmails, startDate, endDate, notes, staffName, staffEmail } = req.body;
     // Update entry with confirmed details
+    if (staffName) entry.staffName = staffName;
+    if (staffEmail) entry.staffEmail = staffEmail;
     if (coveringColleagues) { entry.coveringColleagues = coveringColleagues; entry.coveringColleague = coveringColleagues.join(', '); }
     if (coveringEmails) { entry.coveringEmails = coveringEmails; entry.coveringEmail = coveringEmails[0]||''; }
     if (startDate) { entry.startDate = startDate; entry.triggerDate = new Date(new Date(startDate).getTime()-14*24*60*60*1000).toISOString().substring(0,10); }
