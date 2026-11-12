@@ -7628,6 +7628,22 @@ async function submitAddLeave() {
   } catch(e) { showToast('Error: '+e.message); }
 }
 
+
+// Staff picker for leave modals — matches the detected entry by email, then by first name
+function leaveStaffSelectHtml(e, selId, inp) {
+  var em = (e.staffEmail||'').toLowerCase(), first = (e.staffName||'').toLowerCase().split(' ')[0];
+  var match = LEAVE_STAFF_LIST.find(function(s){ return em && s.email.toLowerCase() === em; })
+           || LEAVE_STAFF_LIST.find(function(s){ return s.name.toLowerCase().split(' ')[0] === first; });
+  var opts = '<option value="">— choose —</option>' + LEAVE_STAFF_LIST.map(function(s){
+    return '<option value="'+s.name+'|'+s.email+'"'+(match && match.email===s.email?' selected':'')+'>'+s.name+' ('+s.email+')</option>';
+  }).join('');
+  return '<div><div class="mfl">Staff member on leave * <span style="font-weight:400;color:var(--t3)">(they are CC&rsquo;d on the handover emails)</span></div><select id="'+selId+'" style="'+inp+'">'+opts+'</select></div>';
+}
+function readLeaveStaff(selId) {
+  var v = ((document.getElementById(selId)||{}).value||'').split('|');
+  return v[0] ? {name:v[0], email:v[1]||''} : null;
+}
+
 // ── Confirm an auto-detected (pending_confirmation) leave entry ──
 async function showConfirmLeave(id) {
   try {
@@ -7645,7 +7661,7 @@ async function showConfirmLeave(id) {
       }).join('');
     var inp = 'width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)';
     openModal('Confirm leave — ' + e.staffName, 'Check the dates, choose cover, then confirm',
-      '<div style="display:grid;gap:10px">' +
+      '<div style="display:grid;gap:10px">' + leaveStaffSelectHtml(e,'cl_staff',inp) +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
           '<div><div class="mfl">Leave start date *</div><input id="cl_start" type="date" value="'+(e.startDate||'').substring(0,10)+'" style="'+inp+'"></div>' +
           '<div><div class="mfl">Leave end date *</div><input id="cl_end" type="date" value="'+(e.endDate||'').substring(0,10)+'" style="'+inp+'"></div>' +
@@ -7673,10 +7689,12 @@ async function submitConfirmLeave(id) {
     var p = opt.value.split('|'); if (p[0]) names.push(p[0]); if (p[1]) emails.push(p[1]);
   });
   if (!names.length) { showToast('Please select at least one covering colleague'); return; }
+  var staff = readLeaveStaff('cl_staff');
+  if (!staff) { showToast('Please choose the staff member going on leave'); return; }
   try {
     var r = await fetch('/leave/' + encodeURIComponent(id) + '/confirm', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ startDate:start, endDate:end, coveringColleagues:names, coveringEmails:emails, notes:notes })
+      body: JSON.stringify({ startDate:start, endDate:end, coveringColleagues:names, coveringEmails:emails, notes:notes, staffName:staff.name, staffEmail:staff.email })
     });
     var d = await r.json();
     if (d.success) { closeModal(); showToast('Leave confirmed — handover emails going out now'); loadLeaveEntries(); }
@@ -7714,7 +7732,7 @@ async function editLeaveEntry(id) {
     var started = e.status !== 'confirmed' && e.status !== 'pending_confirmation';
     var inp = 'width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)';
     openModal('Edit leave — ' + e.staffName, 'Correct the dates, cover or notes',
-      '<div style="display:grid;gap:10px">' +
+      '<div style="display:grid;gap:10px">' + leaveStaffSelectHtml(e,'el_staff',inp) +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
           '<div><div class="mfl">Leave start date *</div><input id="el_start" type="date" value="'+(e.startDate||'').substring(0,10)+'" style="'+inp+'"></div>' +
           '<div><div class="mfl">Leave end date *</div><input id="el_end" type="date" value="'+(e.endDate||'').substring(0,10)+'" style="'+inp+'"></div>' +
@@ -7730,7 +7748,7 @@ async function editLeaveEntry(id) {
         '<button class="m-btn sec" onclick="closeModal()" style="flex:1">Cancel</button>' +
       '</div>'
     );
-    window._editLeaveBefore = { start:(e.startDate||'').substring(0,10), end:(e.endDate||'').substring(0,10), emails:current, started:started };
+    window._editLeaveBefore = { start:(e.startDate||'').substring(0,10), end:(e.endDate||'').substring(0,10), emails:current, started:started, staffEmail:(e.staffEmail||'').toLowerCase() };
   } catch(err) { showToast('Error: ' + err.message); }
 }
 
@@ -7747,10 +7765,12 @@ async function submitEditLeave(id) {
   });
   if (!names.length) { showToast('Please select at least one covering colleague'); return; }
   var before = window._editLeaveBefore || {emails:[]};
+  var staff = readLeaveStaff('el_staff');
+  if (!staff) { showToast('Please choose the staff member going on leave'); return; }
   try {
     var r = await fetch('/leave/' + encodeURIComponent(id), {
       method:'PUT', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ startDate:start, endDate:end, coveringColleagues:names, coveringEmails:emails, notes:notes })
+      body: JSON.stringify({ startDate:start, endDate:end, coveringColleagues:names, coveringEmails:emails, notes:notes, staffName:staff.name, staffEmail:staff.email })
     });
     var d = await r.json();
     if (!d.success) { showToast('Error: ' + (d.error||'Failed')); return; }
@@ -7766,6 +7786,12 @@ async function submitEditLeave(id) {
       if (changedDetails) {
         await fetch('/leave/' + encodeURIComponent(id) + '/send-update', {method:'POST'});
         msg += ' — corrected dates emailed to cover';
+      }
+      // Staff member had no email on file before, so missed the CC on earlier emails — send them a summary now
+      if (staff.email && staff.email.toLowerCase() !== before.staffEmail) {
+        var ns = await fetch('/leave/' + encodeURIComponent(id) + '/notify-staff', {method:'POST'});
+        var nd = await ns.json().catch(function(){ return {}; });
+        msg += nd.success ? ' — handover summary sent to ' + staff.name.split(' ')[0] : ' — could not email ' + staff.name.split(' ')[0] + ': ' + (nd.error||'error');
       }
     }
     closeModal(); showToast(msg); loadLeaveEntries();
