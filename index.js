@@ -85,15 +85,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Headers", "*");
   next();
 });
-// Chat can carry PDF and image attachments (the page allows PDFs up to 20MB, about 27MB once encoded),
-// so /proxy gets a larger limit. Every other route, including the public check-in form, keeps the small default.
-app.use('/proxy', express.json({ limit: '30mb' }));
 app.use(express.json());
-
-// Safety net: an error in any async route or background task is logged instead of stopping the whole app.
-process.on('unhandledRejection', (reason) => {
-  console.error('[Unhandled] Async error caught (app kept running):', reason && reason.stack ? reason.stack.substring(0, 800) : reason);
-});
 
 const PORT = process.env.PORT || 3000;
 let latestOutput = {};
@@ -234,13 +226,7 @@ function loadSavedToken() {
         console.log('✅ Loaded M365 token from disk (expires', new Date(data.expires_at).toLocaleString(), ')');
         return data;
       }
-      // The short-lived access token has expired, but the refresh token lasts much longer.
-      // Keep it: the first Microsoft call will refresh silently, so no reconnect is needed after a restart.
-      if (data.refresh_token) {
-        console.log('✅ Loaded M365 refresh token from disk (access token will be refreshed on first use)');
-        return { access_token: data.access_token || 'expired', refresh_token: data.refresh_token, expires_at: 0 };
-      }
-      console.log('⚠ Saved token expired and no refresh token, please reconnect at /auth/login');
+      console.log('⚠ Saved token expired');
     }
   } catch(e) { console.warn('Token load error:', e.message); }
   return { access_token: null, refresh_token: null, expires_at: null };
@@ -311,15 +297,9 @@ app.get('/auth/status', (req, res) => {
 });
 
 // ── AUTH: Refresh token if expired ──
-// Only one refresh runs at a time; parallel callers wait for the same result.
-let _tokenRefreshing = null;
 async function getValidToken() {
-  if (!tokenStore.access_token) throw new Error('Not connected, visit /auth/login to connect Microsoft 365');
+  if (!tokenStore.access_token) throw new Error('Not connected — visit /auth/login to connect Microsoft 365');
   if (Date.now() < tokenStore.expires_at - 60000) return tokenStore.access_token;
-  if (!_tokenRefreshing) _tokenRefreshing = refreshAccessToken().finally(() => { _tokenRefreshing = null; });
-  return _tokenRefreshing;
-}
-async function refreshAccessToken() {
   const response = await fetch(
     `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token`,
     {
@@ -334,15 +314,10 @@ async function refreshAccessToken() {
     }
   );
   const data = await response.json();
-  if (data.error) {
-    // invalid_grant means the refresh token was revoked or has expired: show "not connected" so Kandia reconnects
-    if (data.error === 'invalid_grant') { tokenStore.access_token = null; tokenStore.expires_at = null; }
-    throw new Error(`Token refresh failed: ${data.error_description}`);
-  }
+  if (data.error) throw new Error(`Token refresh failed: ${data.error_description}`);
   tokenStore.access_token  = data.access_token;
   tokenStore.refresh_token = data.refresh_token || tokenStore.refresh_token;
   tokenStore.expires_at    = Date.now() + (data.expires_in * 1000);
-  persistToken(tokenStore); // save the refreshed tokens so a restart or deploy does not disconnect Microsoft 365
   return tokenStore.access_token;
 }
 
@@ -868,25 +843,17 @@ async function runChatWithTools(body) {
 app.options('/proxy', (req, res) => res.sendStatus(200));
 app.post('/proxy', async (req, res) => {
 
-  try {
-    // Log every AI call. Message content is either plain text or a list of parts (text, PDF, image)
-    // when files are attached, so only the text parts are logged.
-    const callTime = new Date().toLocaleString('en-AU', {timeZone: 'Australia/Brisbane'});
-    const msgs = Array.isArray(req.body?.messages) ? req.body.messages : [];
-    const lastContent = msgs[msgs.length-1]?.content;
-    let lastMsg = 'unknown';
-    if (typeof lastContent === 'string') lastMsg = lastContent.substring(0, 150);
-    else if (Array.isArray(lastContent)) {
-      const files = lastContent.filter(p => p && (p.type === 'document' || p.type === 'image')).length;
-      const txt = lastContent.filter(p => p && p.type === 'text').map(p => String(p.text || '')).join(' ');
-      lastMsg = (files ? '[' + files + ' file(s)] ' : '') + txt.substring(0, 150);
-    }
-    const logEntry = `${callTime} | msgs:${msgs.length} | "${lastMsg.replace(/\s+/g, ' ')}"`;
-    aiCallLog.push(logEntry);
-    if (aiCallLog.length > 100) aiCallLog.shift();
-    try { appendFileSync(LOG_PATH, logEntry + '\n'); } catch(e) {}
-    console.log('[AI CALL]', logEntry);
+  // Log every AI call
+  const callTime = new Date().toLocaleString('en-AU', {timeZone: 'Australia/Brisbane'});
+  const msgs = req.body?.messages || [];
+  const lastMsg = msgs[msgs.length-1]?.content?.substring(0, 150) || 'unknown';
+  const logEntry = `${callTime} | msgs:${msgs.length} | "${lastMsg}"`;
+  aiCallLog.push(logEntry);
+  if (aiCallLog.length > 100) aiCallLog.shift();
+  try { appendFileSync(LOG_PATH, logEntry + '\n'); } catch(e) {}
+  console.log('[AI CALL]', logEntry);
 
+  try {
     const body = { ...req.body };
 
     // ── Trim conversation history ──
@@ -4514,46 +4481,6 @@ async function replyIsTrusted(msg, processedList, label) {
   return false;
 }
 
-// ── READING LEAVE REPLIES SAFELY ───────────────────────────────
-// Replies must be judged ONLY on the words the person actually wrote. Outlook quotes the original
-// email under a reply, and our emails contain example text ("DONE: 1, 2, 3", "All items complete"),
-// so the quoted history is always removed before anything is read.
-const REPLY_PREFIX = /^\s*(re|aw|sv|antw|r)\s*:/i;
-const NEGATIVE_WORDS = /\b(not|cannot|can't|cant|unable|won't|wont|haven't|havent|hasn't|hasnt|isn't|isnt|aren't|arent|don't|doesn't|yet to)\b/i;
-
-// A message from Kandia's own address that is not a reply is one of Cinderella's own emails
-// (the Sent Items copy, or the copy Kandia receives when she is cc'd). It is never a confirmation.
-function isOwnGeneratedEmail(m, kandiaEmail) {
-  const from = (m.from?.emailAddress?.address || '').toLowerCase();
-  return !!from && from === String(kandiaEmail || '').toLowerCase() && !REPLY_PREFIX.test(m.subject || '');
-}
-
-// Cut the quoted original out of a reply and return the person's own words as plain lower case text.
-function stripQuotedReply(html) {
-  let h = String(html || '');
-  const htmlMarkers = [/<div[^>]+id=["']?appendonsend/i, /<div[^>]+id=["']?divRplyFwdMsg/i, /<div[^>]+class=["']?gmail_quote/i, /<blockquote/i, /<hr[\s>\/]/i];
-  for (const re of htmlMarkers) { const i = h.search(re); if (i >= 0) h = h.substring(0, i); }
-  let t = h.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|tr|li)>/gi, '\n').replace(/<[^>]+>/g, ' ')
-    .replace(/&#(\d+);/g, (m, n) => { try { return String.fromCodePoint(+n); } catch (e) { return ' '; } })
-    .replace(/&#x([0-9a-f]+);/gi, (m, n) => { try { return String.fromCodePoint(parseInt(n, 16)); } catch (e) { return ' '; } })
-    .replace(/&amp;/g, '&').replace(/&(ldquo|rdquo|quot);/g, '"').replace(/&(lsquo|rsquo|apos|#39);/g, "'").replace(/&[a-z]+;/gi, ' ');
-  const textMarkers = [/-{2,}\s*original message\s*-{2,}/i, /_{10,}/, /\bfrom:\s[^\n]{0,200}?\b(sent|date):/i, /\bon\s[^\n]{5,200}?\swrote:/i];
-  for (const re of textMarkers) { const i = t.search(re); if (i >= 0) t = t.substring(0, i); }
-  return t.replace(/[\u2018\u2019]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-// Fetch only the new part of a reply (Graph uniqueBody), with quoted text stripped as a second safeguard.
-// Returns null if the message could not be read, so the caller can try again next cycle.
-async function getReplyOwnText(msg) {
-  try {
-    const full = await graphGet(`/me/messages/${msg.id}?$select=uniqueBody,body`);
-    return stripQuotedReply(full.uniqueBody?.content || full.body?.content || '');
-  } catch (e) {
-    console.warn('[Leave] Could not read reply text:', e.message);
-    return null;
-  }
-}
-
 async function scanLeaveReplies(state) {
   if (!tokenStore.access_token) return;
   try {
@@ -4591,8 +4518,6 @@ async function scanLeaveReplies(state) {
       // STRICT: only process replies in known checklist conversation threads
       // This prevents general business emails triggering false updates
       const replies = allMsgs.filter(m => {
-        // Never read Cinderella's own emails (Sent Items copy or Kandia's cc copy) as a reply
-        if (isOwnGeneratedEmail(m, kandiaEmail)) return false;
         // Must be in a known checklist conversation
         if (knownConvIds.length > 0 && !knownConvIds.includes(m.conversationId)) return false;
         // If no conversationIds stored yet, fall back to sender+subject+date filtering
@@ -4616,10 +4541,13 @@ async function scanLeaveReplies(state) {
 
       for (const reply of replies) {
         if (!(await replyIsTrusted(reply, entry.processedReplies, 'checklist'))) { changed = true; continue; }
-        // Read ONLY the words the person wrote. The quoted original contains example text
-        // ("DONE: 1, 2, 3", "All items complete") that must never count as a confirmation.
-        const bodyText = await getReplyOwnText(reply);
-        if (bodyText === null) continue; // could not read it, try again next cycle
+        // Fetch full body
+        let bodyText = (reply.bodyPreview||'').toLowerCase();
+        try {
+          const full = await graphGet(`/me/messages/${reply.id}?$select=body`);
+          const raw = (full.body?.content||'');
+          bodyText = raw.replace(/<[^>]+>/g,' ').replace(/&[a-z#0-9]+;/gi,' ').replace(/\s+/g,' ').toLowerCase();
+        } catch(e) {}
 
         // Affirmative check
         const isAffirmative = /confirm|complet|done|finish|tick|check|yes|yep|sorted|all good|sign off|signed/i.test(bodyText);
@@ -4649,9 +4577,8 @@ async function scanLeaveReplies(state) {
         }
 
         // Method 3: "all complete" or "all done" — tick everything
-        const allDone = !NEGATIVE_WORDS.test(bodyText) && (
-                        /all (items|sections|tasks|checklist)?.{0,10}(complete|done|confirmed|finished)/i.test(bodyText) ||
-                        /everything.{0,10}(complete|done|confirmed|finished)/i.test(bodyText));
+        const allDone = /all (items|sections|tasks|checklist)?.{0,10}(complete|done|confirmed|finished)/i.test(bodyText) ||
+                        /everything.{0,10}(complete|done|confirmed|finished)/i.test(bodyText);
         if (allDone) CHECKLIST_ITEMS.filter(i=>!i.id.includes('signed')).forEach(i=>tickedItems.add(i.id));
 
         // Method 4: fallback keyword matching (only if no other method found items)
@@ -4720,9 +4647,7 @@ async function scanLeaveReplies(state) {
       }
     }
     // ── Scan for phase sign-off replies ──
-    // Policy: Phase 1 is signed by the staff member going on leave, Phase 2 by each covering colleague,
-    // Phase 3 by Kandia. Each phase only accepts a reply FROM that person, sent AFTER the request went out,
-    // never one of Cinderella's own emails, and only the person's own words are read (quoted history removed).
+    // Uses separate processedSignoffReplies so checklist loop doesn't block sign-off detection
     for (const entry2 of (state.leaveEntries||[])) {
       if (!entry2.phase1SignoffSentAt && !entry2.phase2SignoffSentAt && !entry2.phase3SignoffSentAt) continue;
       if (!entry2.signoffConversationIds) entry2.signoffConversationIds = {};
@@ -4730,86 +4655,106 @@ async function scanLeaveReplies(state) {
       let sChanged = false;
       if (!entry2.checklist) entry2.checklist = {};
       if (!entry2.processedSignoffReplies) entry2.processedSignoffReplies = [];
-      const handled = id => entry2.processedSignoffReplies.includes(id);
-      const markHandled = id => { if (!handled(id)) entry2.processedSignoffReplies.push(id); sChanged = true; };
 
-      // Replies that could be this phase's sign-off. Thread match when the request's thread is known;
-      // for older entries with no saved thread, a reply whose subject names the phase.
-      const candidates = (sentAtIso, fromEmail, threadId, phaseRe) => {
-        const sentAt = new Date(sentAtIso);
-        const who = String(fromEmail||'').toLowerCase();
-        if (!who || isNaN(sentAt)) return [];
-        return allMsgs.filter(m => {
-          if (handled(m.id)) return false;
-          if (isOwnGeneratedEmail(m, kandiaEmail)) return false;
-          if (new Date(m.receivedDateTime) <= sentAt) return false;
-          if ((m.from?.emailAddress?.address||'').toLowerCase() !== who) return false;
-          if (threadId) return m.conversationId === threadId;
-          return REPLY_PREFIX.test(m.subject||'') && phaseRe.test(m.subject||'');
-        });
-      };
-      // true = sign-off, false = not a sign-off (marked handled), null = could not read it (retry next cycle)
-      const isSignoff = async (r, label, yesRe) => {
-        if (!(await replyIsTrusted(r, entry2.processedSignoffReplies, label))) { sChanged = true; return false; }
-        const own = await getReplyOwnText(r);
-        if (own === null) return null;
-        markHandled(r.id);
-        const ok = yesRe.test(own) && !NEGATIVE_WORDS.test(own);
-        console.log('[Leave]', label, ok ? 'sign-off accepted from' : 'reply is not a sign-off, from', r.from?.emailAddress?.address, '|', own.substring(0, 80));
-        return ok;
-      };
-
-      // Phase 1: the staff member going on leave
+      // Check phase 1 replies — match by conversationId OR by subject pattern + sender
       if (!entry2.checklist.phase1_signed && entry2.phase1SignoffSentAt) {
-        for (const r of candidates(entry2.phase1SignoffSentAt, entry2.staffEmail, sids.phase1, /phase\s*1/i)) {
-          if (await isSignoff(r, 'phase 1', /\b(confirm\w*|approv\w*|yes|signed|sign off|agreed|done|complete\w*)\b/i)) {
+        const p1SentAt = new Date(entry2.phase1SignoffSentAt);
+        const p1replies = allMsgs.filter(m => {
+          if (entry2.processedSignoffReplies.includes(m.id)) return false;
+          if (new Date(m.receivedDateTime) <= p1SentAt) return false;
+          const subj = (m.subject||'').toLowerCase();
+          const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
+          // Match by conversationId if stored
+          if (sids.phase1) return m.conversationId === sids.phase1; // strict once the thread is known
+          // Fallback: any R2S staff reply about phase 1 sign-off (works for any staff member)
+          const isFromR2S = fromAddr.endsWith('@risk2solution.com');
+          const isPhase1Subject = subj.includes('phase 1') || subj.includes('sign-off') || subj.includes('signoff') || (subj.includes('re:') && (subj.includes('confirm') || subj.includes('handover')));
+          return isFromR2S && isPhase1Subject;
+        });
+        for (const r of p1replies) {
+          if (!(await replyIsTrusted(r, entry2.processedSignoffReplies, 'phase 1'))) { sChanged = true; continue; }
+          const body = (r.bodyPreview||'').toLowerCase();
+          // Accept any affirmative reply to a phase 1 email
+          if (/confirm|approv|yes|phase\s*1|signed|done|agreed/i.test(body)) {
             entry2.checklist.phase1_signed = true;
+            entry2.processedSignoffReplies.push(r.id);
+            // Also store conversationId if not already stored
             if (!sids.phase1 && r.conversationId) sids.phase1 = r.conversationId;
             sChanged = true;
-            console.log('[Leave] ✅ Phase 1 signed by', r.from?.emailAddress?.name);
-            break;
+            console.log('[Leave] ✅ Phase 1 confirmed by', r.from?.emailAddress?.name, '— body:', body.substring(0,80));
           }
         }
       }
 
-      // Phase 2: each covering colleague individually. Only looked at once the Phase 2 request has gone out.
-      if (!entry2.checklist.phase2_signed && entry2.phase2SignoffSentAt) {
+      // Check phase 2 conversations for "Phase 2 confirmed"
+      if (!entry2.checklist.phase2_signed) {
         if (!entry2.phase2Confirmations) entry2.phase2Confirmations = {};
-        const cols2 = (entry2.coveringColleagues||[]).map((name,i)=>({name,email:(entry2.coveringEmails||[])[i]||''})).filter(c => c.email);
+        const cols2 = (entry2.coveringColleagues||[]).map((name,i)=>({name,email:(entry2.coveringEmails||[])[i]||''}));
         let allConfirmed = cols2.length > 0;
         for (const c of cols2) {
-          if (entry2.phase2Confirmations[c.email]) continue; // already confirmed
+          if (!c.email) continue;
+          const convKey = 'phase2_'+c.email;
+          if (entry2.phase2Confirmations[c.email]) continue; // Already confirmed
+          const p2SentAt = new Date(entry2.phase2SignoffSentAt||0);
+          const p2replies = allMsgs.filter(m => {
+            if (entry2.processedSignoffReplies.includes(m.id)) return false;
+            if (new Date(m.receivedDateTime) <= p2SentAt) return false;
+            const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
+            if (fromAddr !== c.email.toLowerCase()) return false;
+            if (sids[convKey]) return m.conversationId === sids[convKey];
+            // Fallback: any reply FROM this specific covering colleague (email-based, no subject restriction)
+            // Phase 2 stays email-specific (not broadened to all R2S) so each colleague is tracked individually
+            return true; // From + date filters above are sufficient
+          });
+
           let confirmed = false;
-          for (const r of candidates(entry2.phase2SignoffSentAt, c.email, sids['phase2_'+c.email], /phase\s*2/i)) {
-            if (await isSignoff(r, 'phase 2', /\b(confirm\w*|approv\w*|yes|ready|signed|agreed|happy to cover)\b/i)) {
+          for (const r of p2replies) {
+          if (!(await replyIsTrusted(r, entry2.processedSignoffReplies, 'phase 2'))) { sChanged = true; continue; }
+            const body = (r.bodyPreview||'').toLowerCase();
+            if (/phase\s*2\s*(confirmed|approved|signed|done)|confirmed|approved|yes|ready/i.test(body)) {
               entry2.phase2Confirmations[c.email] = true;
-              if (!sids['phase2_'+c.email] && r.conversationId) sids['phase2_'+c.email] = r.conversationId;
-              sChanged = true; confirmed = true;
+              if (!entry2.processedReplies) entry2.processedReplies = [];
+              entry2.processedSignoffReplies.push(r.id);
+              sChanged = true;
+              confirmed = true;
               console.log('[Leave] ✅ Phase 2 confirmed by', c.name);
-              break;
             }
           }
           if (!confirmed) allConfirmed = false;
         }
-        if (allConfirmed) {
+        if (allConfirmed && cols2.length > 0) {
           entry2.checklist.phase2_signed = true;
           sChanged = true;
           console.log('[Leave] ✅ All Phase 2 confirmations received');
         }
       }
 
-      // Phase 3: Kandia. Her reply is in Sent Items; Cinderella's own request email is excluded above.
+      // Check phase 3 conversation for "Approved"
       if (!entry2.checklist.phase3_signed && entry2.phase3SignoffSentAt) {
-        for (const r of candidates(entry2.phase3SignoffSentAt, kandiaEmail, sids.phase3, /phase\s*3/i)) {
-          if (await isSignoff(r, 'phase 3', /\bapprov(e|ed|al granted)\b/i)) {
+        const kandiaEmailP3 = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
+        const p3SentAt = new Date(entry2.phase3SignoffSentAt);
+        const p3replies = allMsgs.filter(m => {
+          if (entry2.processedSignoffReplies.includes(m.id)) return false;
+          if (new Date(m.receivedDateTime) <= p3SentAt) return false;
+          const fromAddr = (m.from?.emailAddress?.address||'').toLowerCase();
+          if (fromAddr !== kandiaEmailP3.toLowerCase()) return false;
+          if (sids.phase3) return m.conversationId === sids.phase3;
+          const subj = (m.subject||'').toLowerCase();
+          return subj.includes('phase 3') || subj.includes('approval') || subj.includes('approv') || subj.includes('re:');
+        });
+        for (const r of p3replies) {
+          if (!(await replyIsTrusted(r, entry2.processedSignoffReplies, 'phase 3'))) { sChanged = true; continue; }
+          const body = (r.bodyPreview||'').toLowerCase();
+          if (/approved|phase\s*3\s*(approved|confirmed|done)|yes.*approv|approv.*yes/i.test(body)) {
             entry2.checklist.phase3_signed = true;
-            if (!sids.phase3 && r.conversationId) sids.phase3 = r.conversationId;
+            if (!entry2.processedReplies) entry2.processedReplies = [];
+            entry2.processedSignoffReplies.push(r.id);
             sChanged = true;
             console.log('[Leave] ✅ Phase 3 approved by Kandia');
-            break;
           }
         }
       }
+
       if (sChanged) { changed = true; }
     }
 
@@ -5290,8 +5235,32 @@ function loadLeaveState() {
   try { return JSON.parse(readFileSync(LEAVE_STATE_PATH,'utf8')||'{"leaveEntries":[]}'); }
   catch(e) { return { leaveEntries: [] }; }
 }
+// Fields only Kandia changes (via confirm / edit). Background jobs hold a copy of the state while they
+// await email sends and AI calls; without this merge, saving that stale copy wiped out edits made meanwhile.
+const LEAVE_USER_FIELDS = ['staffName','staffEmail','staffRole','startDate','endDate','triggerDate',
+  'coveringColleague','coveringEmail','coveringColleagues','coveringEmails','notes','leaveType','confirmedAt'];
 function saveLeaveState(s) {
-  try { writeFileSync(LEAVE_STATE_PATH, JSON.stringify(s,null,2)); } catch(e) {}
+  try {
+    let disk = null;
+    try { disk = JSON.parse(readFileSync(LEAVE_STATE_PATH,'utf8')||'{}'); } catch(e) {}
+    if (disk && Array.isArray(disk.leaveEntries) && Array.isArray(s.leaveEntries)) {
+      const deleted = new Set([...(disk.deletedLeaveIds||[]), ...(s.deletedLeaveIds||[])]);
+      s.deletedLeaveIds = [...deleted].slice(-500);
+      s.leaveEntries = s.leaveEntries.filter(e => !deleted.has(e.id));
+      const mine = new Map(s.leaveEntries.map(e => [e.id, e]));
+      for (const d of disk.leaveEntries) {
+        if (deleted.has(d.id)) continue;
+        const m = mine.get(d.id);
+        if (!m) { s.leaveEntries.push(d); continue; }            // entry added while we were busy — keep it
+        if ((d.editedAt||'') > (m.editedAt||'')) {               // Kandia edited it while we were busy — keep her edit
+          for (const f of LEAVE_USER_FIELDS) if (f in d) m[f] = d[f];
+          m.editedAt = d.editedAt;
+          if (m.status === 'pending_confirmation' && d.status !== 'pending_confirmation') m.status = d.status;
+        }
+      }
+    }
+    writeFileSync(LEAVE_STATE_PATH, JSON.stringify(s,null,2));
+  } catch(e) { console.error('[Leave] saveLeaveState failed:', e.message); }
 }
 
 const CHECKLIST_ITEMS = [
@@ -6133,7 +6102,6 @@ async function sendToEachColleague(entry, emailType, subject, staffEmail, kandia
     ? entry.coveringColleagues.map((name, i) => ({ name, email: (entry.coveringEmails||[])[i]||'' }))
     : [{ name: entry.coveringColleague||'', email: entry.coveringEmail||'' }];
   const convIds = [];
-  let sentCount = 0;
   for (const c of colleagues) {
     if (!c.email) continue;
     const entryForC = { ...entry, coveringColleague: c.name, coveringEmail: c.email, coveringColleagues: [c.name], coveringEmails: [c.email] };
@@ -6141,15 +6109,13 @@ async function sendToEachColleague(entry, emailType, subject, staffEmail, kandia
     const subj = colleagues.length > 1 ? subject + ' — ' + c.name.split(' ')[0] : subject;
     const cc = [staffEmail, kandiaEmail].filter(e => e && e !== c.email);
     const convId = await sendLeaveAlert([c.email], cc, subj, html, importance || 'high', entryForC);
-    if (convId) { sentCount++; console.log('[Leave] ✅ Individual email sent to', c.name, '(', c.email, ')'); }
-    else console.warn('[Leave] Email to', c.name, '(', c.email, ') was NOT sent');
     if (convId && typeof convId === 'string') convIds.push(convId);
+    console.log('[Leave] ✅ Individual email sent to', c.name, '(', c.email, ')');
   }
-  if (trackReplies && convIds.length) {
-    if (!entry.checklistConversationIds) entry.checklistConversationIds = [];
+  if (trackReplies && convIds.length && entry.checklistConversationIds !== undefined) {
     convIds.forEach(id => { if (!entry.checklistConversationIds.includes(id)) entry.checklistConversationIds.push(id); });
   }
-  return sentCount; // number of emails actually sent
+  return convIds.length;
 }
 
 async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance, entry) {
@@ -6173,10 +6139,14 @@ async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance,
     const send = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',
       {method:'POST',headers:{Authorization:'Bearer '+token}});
     if (send.status === 202) {
-      console.log('[Leave] ✅ Email sent to', toEmails.filter(Boolean).join(','), '|', subject.substring(0, 80));
-      // Return the conversationId for reply tracking. It is on the draft we created (the draft id
-      // itself stops working once the message moves to Sent Items). true still means "sent".
-      return msg.conversationId || true;
+      console.log('[Leave] ✅ Email sent to', validTo.join(','));
+      // Return conversationId for reply tracking
+      try {
+        const sentMsg = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'?$select=conversationId',
+          {headers:{Authorization:'Bearer '+token}});
+        const sm = await sentMsg.json();
+        return sm.conversationId || true;
+      } catch(e) { return true; }
     }
     const errBody = await send.json().catch(()=>({}));
     if ((errBody.error||{}).code === 'ErrorAccessDenied') {
@@ -6460,7 +6430,7 @@ async function monitorLeaveEntries() {
       saveLeaveState(state);
       if (allCoverEmails.length) {
         await sendToEachColleague(entry, 'cover_activation',
-          '🟡 ACTIVE: ' + entry.staffName + ' is now on leave — coverage begins today', staffEmail, kandiaEmail, 'high', false); // not a checklist thread
+          '🟡 ACTIVE: ' + entry.staffName + ' is now on leave — coverage begins today', staffEmail, kandiaEmail, 'high');
       }
       console.log('[Leave] Stage 4: Leave started for', entry.staffName);
     }
@@ -6496,7 +6466,7 @@ async function monitorLeaveEntries() {
         const retHtml = buildLeaveEmail('return_day', entry);
         await sendLeaveAlert([staffEmail], [kandiaEmail], '✅ Welcome back: ' + entry.staffName + ' — handback process today', retHtml, 'normal');
       }
-      await sendToEachColleague(entry, 'return_day', '✅ Handback: ' + entry.staffName + ' returns today', staffEmail, kandiaEmail, 'normal', false); // not a checklist thread
+      await sendToEachColleague(entry, 'return_day', '✅ Handback: ' + entry.staffName + ' returns today', staffEmail, kandiaEmail, 'normal');
       console.log('[Leave] Stage 5: Return day handback sent');
     }
 
@@ -6538,6 +6508,7 @@ app.post('/leave/:id/confirm', requireAuth, async (req, res) => {
     if (notes) entry.notes = notes;
     entry.status = 'confirmed';
     entry.confirmedAt = new Date().toISOString();
+    entry.editedAt = entry.confirmedAt;
     saveLeaveState(state);
     // Trigger monitoring immediately so Stage 1 email goes out
     setTimeout(() => monitorLeaveEntries(), 500);
@@ -6594,6 +6565,10 @@ app.put('/leave/:id', requireAuth, (req, res) => {
     const idx = (state.leaveEntries||[]).findIndex(e=>e.id===req.params.id);
     if (idx < 0) return res.status(404).json({error:'Not found'});
     Object.assign(state.leaveEntries[idx], req.body);
+    const ed = state.leaveEntries[idx];
+    if (Array.isArray(req.body.coveringColleagues)) ed.coveringColleague = req.body.coveringColleagues.join(', ');
+    if (Array.isArray(req.body.coveringEmails)) ed.coveringEmail = req.body.coveringEmails[0] || '';
+    if (LEAVE_USER_FIELDS.some(f => f in req.body)) ed.editedAt = new Date().toISOString();
     // Recalculate trigger if dates changed
     if (req.body.startDate) {
       const start = new Date(req.body.startDate);
@@ -6607,6 +6582,7 @@ app.put('/leave/:id', requireAuth, (req, res) => {
 app.delete('/leave/:id', requireAuth, (req, res) => {
   const state = loadLeaveState();
   state.leaveEntries = (state.leaveEntries||[]).filter(e=>e.id!==req.params.id);
+  state.deletedLeaveIds = [...(state.deletedLeaveIds||[]), req.params.id];
   saveLeaveState(state);
   res.json({success:true});
 });
@@ -6660,7 +6636,18 @@ app.post('/leave/:id/send-checklist', requireAuth, async (req, res) => {
 
     const subject = '📋 Leave Handover Checklist — ' + entry.staffName + ' (leave from ' + new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ')';
     // Send INDIVIDUALLY to each covering colleague — never combined
-    const sent = await sendToEachColleague(entry, 'cover_nominated_briefing', subject, entry.staffEmail, kandiaEmail, 'high');
+    // Optional: send only to specific (e.g. newly added) colleagues, so existing cover isn't emailed twice
+    let target = entry;
+    const only = Array.isArray(req.body && req.body.onlyEmails) ? req.body.onlyEmails.map(x=>String(x).toLowerCase()) : null;
+    if (only && only.length) {
+      const names = [], emails = [];
+      (entry.coveringEmails||[]).forEach((em,i)=>{ if (only.includes((em||'').toLowerCase())) { emails.push(em); names.push((entry.coveringColleagues||[])[i]||''); } });
+      if (!emails.length) return res.status(400).json({error:'None of those emails are covering colleagues on this entry'});
+      if (!entry.colleagueChecklists) entry.colleagueChecklists = {};
+      emails.forEach((em,i)=>{ if (!entry.colleagueChecklists[em]) entry.colleagueChecklists[em] = {name:names[i], checklist:{}}; });
+      target = {...entry, coveringColleagues:names, coveringEmails:emails, coveringColleague:names.join(', '), coveringEmail:emails[0]};
+    }
+    const sent = await sendToEachColleague(target, 'cover_nominated_briefing', subject, entry.staffEmail, kandiaEmail, 'high');
     saveLeaveState(state);
     entry.checklistSentAt = new Date().toISOString();
     saveLeaveState(state);
@@ -6944,10 +6931,8 @@ app.post('/leave/:id/send-checkin', requireAuth, async (req, res) => {
     const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
     if (!entry) return res.status(404).json({error:'Not found'});
     const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
-    const hasCoverEmail = (entry.coveringEmails||[]).some(Boolean) || !!entry.coveringEmail;
-    if (!hasCoverEmail) return res.json({success:false, error:'No covering colleague email on this entry'});
     const n = await sendLeaveCheckin(entry, kandiaEmail);
-    if (!n) return res.json({success:false, error:'The check-in could not be sent. Check Log stream for [Leave] errors.'});
+    if (!n) return res.json({success:false, error:'No covering colleague email on this entry'});
     entry.lastCheckinAt = new Date().toISOString();
     entry.lastCheckinDate = getBrisbaneNow().dateStr;
     entry.checkinCount = (entry.checkinCount||0) + 1;
