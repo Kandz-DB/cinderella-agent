@@ -7627,6 +7627,73 @@ async function submitAddLeave() {
   } catch(e) { showToast('Error: '+e.message); }
 }
 
+// ── Confirm an auto-detected (pending_confirmation) leave entry ──
+async function showConfirmLeave(id) {
+  try {
+    var r = await fetch('/leave');
+    var entries = await r.json();
+    var e = entries.find(function(x){ return x.id === id; });
+    if (!e) { showToast('Leave entry not found — refresh and try again'); return; }
+    var first = (e.staffName||'').toLowerCase().split(' ')[0];
+    var coverOptions = LEAVE_STAFF_LIST
+      .filter(function(s){ return s.name.toLowerCase().split(' ')[0] !== first; })
+      .concat([{name:'Kandia Du Bruyn', email:'kandia@risk2solution.com'}])
+      .map(function(s){
+        var sel = (e.coveringEmails||[]).indexOf(s.email) >= 0 ? ' selected' : '';
+        return '<option value="'+s.name+'|'+s.email+'"'+sel+'>'+s.name+'</option>';
+      }).join('');
+    var inp = 'width:100%;padding:8px 10px;border:1px solid var(--bl);border-radius:6px;font-size:12px;font-family:var(--f);background:var(--bg)';
+    openModal('Confirm leave — ' + e.staffName, 'Check the dates, choose cover, then confirm',
+      '<div style="display:grid;gap:10px">' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+          '<div><div class="mfl">Leave start date *</div><input id="cl_start" type="date" value="'+(e.startDate||'').substring(0,10)+'" style="'+inp+'"></div>' +
+          '<div><div class="mfl">Leave end date *</div><input id="cl_end" type="date" value="'+(e.endDate||'').substring(0,10)+'" style="'+inp+'"></div>' +
+        '</div>' +
+        '<div><div class="mfl">Covering colleague(s) * <span style="font-weight:400;color:var(--t3)">(hold Ctrl/Cmd to select multiple)</span></div><select id="cl_cover" multiple style="'+inp+';height:110px">'+coverOptions+'</select></div>' +
+        '<div><div class="mfl">Notes</div><textarea id="cl_notes" rows="2" style="'+inp+';resize:vertical">'+(e.notes||'').replace(/</g,'&lt;')+'</textarea></div>' +
+        '<div style="background:#DCEEE6;border-radius:8px;padding:10px 12px;font-size:12px;color:#111;line-height:1.5"><b>What happens next:</b> once you confirm, Cinderella emails each covering colleague their own handover checklist, with '+e.staffName+' CC&rsquo;d.</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:14px">' +
+        '<button class="m-btn" onclick="submitConfirmLeave(\''+id+'\')" style="flex:1">✓ Confirm &amp; start handover</button>' +
+        '<button class="m-btn sec" onclick="closeModal()" style="flex:1">Cancel</button>' +
+      '</div>'
+    );
+  } catch(err) { showToast('Error: ' + err.message); }
+}
+
+async function submitConfirmLeave(id) {
+  var start = (document.getElementById('cl_start')||{}).value;
+  var end   = (document.getElementById('cl_end')||{}).value;
+  var notes = (document.getElementById('cl_notes')||{}).value || '';
+  if (!start || !end) { showToast('Please enter both dates'); return; }
+  if (end < start) { showToast('End date is before start date'); return; }
+  var names = [], emails = [];
+  Array.from((document.getElementById('cl_cover')||{}).selectedOptions||[]).forEach(function(opt){
+    var p = opt.value.split('|'); if (p[0]) names.push(p[0]); if (p[1]) emails.push(p[1]);
+  });
+  if (!names.length) { showToast('Please select at least one covering colleague'); return; }
+  try {
+    var r = await fetch('/leave/' + encodeURIComponent(id) + '/confirm', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ startDate:start, endDate:end, coveringColleagues:names, coveringEmails:emails, notes:notes })
+    });
+    var d = await r.json();
+    if (d.success) { closeModal(); showToast('Leave confirmed — handover emails going out now'); loadLeaveEntries(); }
+    else showToast('Error: ' + (d.error||'Failed'));
+  } catch(err) { showToast('Error: ' + err.message); }
+}
+
+// ── Dismiss / delete a leave entry ──
+async function deleteLeaveEntry(id) {
+  if (!confirm('Remove this leave entry? This cannot be undone.')) return;
+  try {
+    var r = await fetch('/leave/' + encodeURIComponent(id), {method:'DELETE'});
+    var d = await r.json();
+    if (d.success) { showToast('Leave entry removed'); loadLeaveEntries(); }
+    else showToast('Error: ' + (d.error||'Failed'));
+  } catch(err) { showToast('Error: ' + err.message); }
+}
+
 async function openLeaveChecklist(id, preselectedEmail) {
   try {
     var r = await fetch('/leave');
