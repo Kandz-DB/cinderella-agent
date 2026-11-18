@@ -7442,34 +7442,118 @@ const CHECKLIST_ITEMS_CLIENT = [
 
 const STATUS_LABELS = {
   detected:'Detected',notified:'Notified',checklist_sent:'Checklist Sent',
-  in_progress:'In Progress',approved:'Approved',on_leave:'On Leave',returned:'Returned',cancelled:'Cancelled'
+  in_progress:'In Progress',approved:'Approved',on_leave:'On Leave',returned:'Leave ended',cancelled:'Cancelled',
+  handback_pending:'Handback due',archived:'Archived'
 };
 const STATUS_COLORS = {
   detected:'var(--a)',notified:'var(--b)',checklist_sent:'var(--b)',
-  in_progress:'var(--a)',approved:'var(--g)',on_leave:'var(--r)',returned:'var(--t3)',cancelled:'var(--t3)'
+  in_progress:'var(--a)',approved:'var(--g)',on_leave:'var(--r)',returned:'var(--t3)',cancelled:'var(--t3)',
+  handback_pending:'var(--a)',archived:'var(--t3)'
 };
-
-async function fetchLeaveEntries() {
-  var r = await fetch('/leave');
-  var text = await r.text();
-  if (r.status === 401 || r.redirected || text.trim().charAt(0) === '<') {
-    var err = new Error('SESSION_EXPIRED'); throw err;
+var leaveArchiveOpen = false;
+function lvDate(v) {
+  if (!v) return '';
+  var str = String(v);
+  var d = /^\d{4}-\d{2}-\d{2}$/.test(str) ? new Date(str + 'T00:00:00') : new Date(str);
+  return isNaN(d) ? '' : d.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+}
+function toggleLeaveArchive() { leaveArchiveOpen = !leaveArchiveOpen; loadLeaveEntries(); }
+async function archiveLeaveEntry(id, isHandback) {
+  var msg = isHandback ? 'Mark the handover back as complete and move this leave to the archive?' : 'Move this leave to the archive?';
+  if (!confirm(msg)) return;
+  try {
+    var r = await fetch('/leave/' + id + '/archive', {method:'POST'});
+    var d = await r.json();
+    if (d.success) { showToast('Leave moved to the archive'); loadLeaveEntries(); }
+    else showToast('Error: ' + (d.error || 'could not archive'));
+  } catch(e) { showToast('Error: ' + e.message); }
+}
+async function unarchiveLeaveEntry(id) {
+  try {
+    var r = await fetch('/leave/' + id + '/unarchive', {method:'POST'});
+    var d = await r.json();
+    if (d.success) { showToast('Leave restored from the archive'); loadLeaveEntries(); }
+    else showToast('Error: ' + (d.error || 'could not restore'));
+  } catch(e) { showToast('Error: ' + e.message); }
+}
+function renderLeaveHandbackCard(e) {
+  var statusCol = STATUS_COLORS[e.status] || 'var(--t3)';
+  var todayYmd = new Date().toLocaleDateString('en-CA',{timeZone:'Australia/Brisbane'});
+  var overdue = e.status === 'handback_pending' && e.handbackDueDate && todayYmd > e.handbackDueDate;
+  var info;
+  if (e.status === 'handback_pending') {
+    info = 'Handback email sent ' + lvDate(e.handbackSentAt) + ' &nbsp;&middot;&nbsp; Due <strong>' + lvDate(e.handbackDueDate) + '</strong>' +
+      (overdue ? ' &nbsp;&middot;&nbsp; <span style="color:var(--r);font-weight:600">Overdue</span>' : '') +
+      '<br>Waiting for a reply saying the handover back is completed. It will move to the archive automatically.';
+  } else {
+    info = 'Back on <strong>' + lvDate(e.returnDate) + '</strong>. The handback email goes out that morning to ' +
+      (e.coveringColleague ? e.coveringColleague + ' and ' : '') + e.staffName.split(' ')[0] + '.';
   }
-  return JSON.parse(text);
+  return '<div class="card" style="margin-bottom:12px;border-left:3px solid ' + (overdue ? 'var(--r)' : 'var(--a)') + '">' +
+    '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">' +
+      '<div><div style="font-size:13px;font-weight:700;color:var(--t1)">' + e.staffName + '</div>' +
+        '<div style="font-size:11px;color:var(--t3);margin-top:2px">Leave ' + lvDate(e.startDate) + ' to ' + lvDate(e.endDate) +
+          (e.coveringColleague ? ' &nbsp;&middot;&nbsp; Cover: <strong>' + e.coveringColleague + '</strong>' : '') + '</div></div>' +
+      '<span style="font-size:9.5px;font-weight:700;padding:2px 10px;border-radius:999px;background:var(--bg2);color:' + statusCol + '">' + (STATUS_LABELS[e.status]||e.status).toUpperCase() + '</span>' +
+    '</div>' +
+    '<div style="font-size:11.5px;color:var(--t2);line-height:1.6;margin-bottom:10px">' + info + '</div>' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+      '<button data-lid="' + e.id + '" onclick="archiveLeaveEntry(this.dataset.lid,true)" class="m-btn" style="font-size:11px;padding:5px 12px">&#10003; Mark handover complete</button>' +
+      (e.status === 'handback_pending' ? '<button data-lid="' + e.id + '" onclick="processLeaveReplies(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">&#128257; Check replies</button>' : '') +
+      '<button data-lid="' + e.id + '" onclick="openLeaveChecklist(this.dataset.lid)" class="m-btn sec" style="font-size:11px;padding:5px 12px">View checklist</button>' +
+      '<button onclick="deleteLeaveEntry(\'' + e.id + '\')" class="m-btn sec" style="font-size:11px;padding:5px 12px;color:var(--r)">Delete</button>' +
+    '</div>' +
+  '</div>';
+}
+function renderLeaveArchive(list) {
+  if (!list.length) return '';
+  list = list.slice().sort(function(a,b){ return String(b.endDate||'').localeCompare(String(a.endDate||'')); });
+  var out = '<div style="margin-top:22px;padding-top:4px">' +
+    '<div onclick="toggleLeaveArchive()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:6px 0;margin-bottom:8px">' +
+      '<span style="font-size:9px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.1em">Archive: completed leave (' + list.length + ')</span>' +
+      '<span style="font-size:11px;color:var(--t3)">' + (leaveArchiveOpen ? 'Hide &#9650;' : 'Show &#9660;') + '</span>' +
+    '</div>';
+  if (leaveArchiveOpen) {
+    list.forEach(function(e) {
+      var closed = e.handbackCompletedAt ? 'Handover back completed ' + lvDate(e.handbackCompletedAt) + (e.handbackCompletedBy ? ' by ' + e.handbackCompletedBy : '')
+        : (e.archiveReason || (e.status === 'cancelled' ? 'Cancelled' : 'Archived'));
+      out += '<div class="card" style="margin-bottom:8px;padding:10px 14px;background:var(--bg2)">' +
+        '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">' +
+          '<div style="min-width:0">' +
+            '<div style="font-size:12.5px;font-weight:700;color:var(--t1)">' + e.staffName + '</div>' +
+            '<div style="font-size:11px;color:var(--t2);margin-top:2px">Leave ' + lvDate(e.startDate) + ' to ' + lvDate(e.endDate) +
+              (e.returnDate ? ' &nbsp;&middot;&nbsp; Back ' + lvDate(e.returnDate) : '') +
+              (e.coveringColleague ? ' &nbsp;&middot;&nbsp; Cover: ' + e.coveringColleague : '') + '</div>' +
+            '<div style="font-size:10.5px;color:var(--t3);margin-top:3px">' + closed + '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;flex-shrink:0">' +
+            '<button data-lid="' + e.id + '" onclick="openLeaveChecklist(this.dataset.lid)" class="m-btn sec" style="font-size:10.5px;padding:4px 10px">Checklist</button>' +
+            (e.status === 'archived' ? '<button data-lid="' + e.id + '" onclick="unarchiveLeaveEntry(this.dataset.lid)" class="m-btn sec" style="font-size:10.5px;padding:4px 10px">Restore</button>' : '') +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    });
+  }
+  return out + '</div>';
 }
 
 async function loadLeaveEntries() {
   var el = document.getElementById('leaveList');
   if (!el) return;
   try {
-    var entries = await fetchLeaveEntries();
+    var r = await fetch('/leave');
+    var entries = await r.json();
 
     // Badge shows non-returned entries
     var badge = document.getElementById('leaveBadge');
-    var active = entries.filter(function(e){ return e.status !== 'returned' && e.status !== 'cancelled'; });
+    var active = entries.filter(function(e){ return e.status !== 'archived' && e.status !== 'cancelled'; });
     if (badge) { badge.textContent = active.length; badge.style.display = active.length > 0 ? 'inline-block' : 'none'; }
 
-    if (!entries.length) {
+    var archived = entries.filter(function(e){ return e.status === 'archived' || e.status === 'cancelled'; });
+    var handback = entries.filter(function(e){ return e.status === 'returned' || e.status === 'handback_pending'; });
+    entries = entries.filter(function(e){ return archived.indexOf(e) < 0 && handback.indexOf(e) < 0; });
+
+    if (!entries.length && !handback.length && !archived.length) {
       el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:24px 0;text-align:center">No leave entries yet.<br>Click + Add leave to log a staff member\'s leave and start the handover process.</div>';
       return;
     }
@@ -7564,10 +7648,20 @@ async function loadLeaveEntries() {
       });
     }
 
+    // ── Handover back section (leave has ended) ──
+    if (handback.length) {
+      out += '<div style="font-size:9px;font-weight:700;color:var(--a);text-transform:uppercase;letter-spacing:.1em;margin:' + (out ? '18px' : '0') + ' 0 8px">Back from leave: handover back (' + handback.length + ')</div>';
+      handback.forEach(function(e){ out += renderLeaveHandbackCard(e); });
+    }
+
+    if (!entries.length && !handback.length) out += '<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">No current leave. Completed leave is in the archive below.</div>';
+
+    // ── Archive section ──
+    out += renderLeaveArchive(archived);
+
     el.innerHTML = out || '<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">No leave entries</div>';
 
   } catch(e) {
-    if (el && e.message === 'SESSION_EXPIRED') { el.innerHTML = '<div style="font-size:12px;color:var(--t3);padding:16px 0;text-align:center">Your login has expired. <a href="/login" style="color:var(--b)">Click here to log in again</a>. Your leave data is safe.</div>'; return; }
     if (el) el.innerHTML = '<div style="font-size:12px;color:var(--r)">Error: ' + e.message + '</div>';
   }
 }
@@ -7638,7 +7732,8 @@ async function submitAddLeave() {
 
 async function openLeaveChecklist(id, preselectedEmail) {
   try {
-    var entries = await fetchLeaveEntries();
+    var r = await fetch('/leave');
+    var entries = await r.json();
     var entry = entries.find(function(e){ return e.id === id; });
     if (!entry) { showToast('Leave entry not found'); return; }
 
@@ -7743,7 +7838,8 @@ async function openLeaveChecklist(id, preselectedEmail) {
 // Per-colleague checklist item toggle
 async function toggleLeaveItemForColleague(leaveId, colleagueEmail, itemId) {
   try {
-    var entries2 = await fetchLeaveEntries();
+    var r2 = await fetch('/leave');
+    var entries2 = await r2.json();
     var e2 = entries2.find(function(x){ return x.id === leaveId; });
     if (!e2) return;
     var cl2 = (e2.colleagueChecklists && e2.colleagueChecklists[colleagueEmail] && e2.colleagueChecklists[colleagueEmail].checklist)
