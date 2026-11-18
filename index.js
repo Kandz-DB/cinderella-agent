@@ -172,7 +172,7 @@ app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
     activeSessions.add(token);
     saveActiveSessions(activeSessions);
     console.log('[Sessions] New session saved for', token.substring(0,8)+'...');
-    res.setHeader('Set-Cookie', `cin_session=${token}; Path=/; HttpOnly; Max-Age=604800`);
+    res.setHeader('Set-Cookie', `cin_session=${token}; Path=/; HttpOnly; Max-Age=86400`);
     res.redirect('/');
   } else {
     res.redirect('/login?error=1');
@@ -195,7 +195,7 @@ function requireAuth(req, res, next) {
   const match = cookie.match(/cin_session=([^;]+)/);
   if (match && activeSessions.has(match[1])) return next();
   // API routes get JSON 401 (not HTML redirect) so the dashboard handles it gracefully
-  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status') || req.path.startsWith('/openactions') || req.path.startsWith('/generate') || req.path.startsWith('/docs') || req.path.startsWith('/checkins') || req.path.startsWith('/aurora') || req.path.startsWith('/board-report') || req.path.startsWith('/leave')) {
+  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status') || req.path.startsWith('/openactions') || req.path.startsWith('/generate') || req.path.startsWith('/docs') || req.path.startsWith('/checkins') || req.path.startsWith('/aurora') || req.path.startsWith('/board-report')) {
     return res.status(401).json({ error: { message: 'Session expired — please refresh the page and log in again.' } });
   }
   res.redirect('/login');
@@ -4490,22 +4490,9 @@ async function scanLeaveReplies(state) {
     // Fetch recent inbox AND sent items
     let allMsgs = [];
     try {
-      // Follow paging so busy weeks do not push replies out of view (up to 1000 inbox / 300 sent)
-      const fetchPaged = async (path, maxPages) => {
-        let out = [];
-        let data = await graphGet(path);
-        out = out.concat(data.value || []);
-        let pages = 1;
-        while (data['@odata.nextLink'] && pages < maxPages) {
-          data = await graphGet(data['@odata.nextLink'].replace('https://graph.microsoft.com/v1.0', ''));
-          out = out.concat(data.value || []);
-          pages++;
-        }
-        return { value: out };
-      };
       const [inboxData, sentData] = await Promise.all([
-        fetchPaged(`/me/messages?$filter=receivedDateTime ge ${since}&$orderby=receivedDateTime desc&$top=250&$select=id,subject,from,bodyPreview,conversationId,receivedDateTime`, 4),
-        fetchPaged(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$orderby=createdDateTime desc&$top=100&$select=id,subject,from,bodyPreview,conversationId,createdDateTime`, 3)
+        graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$orderby=receivedDateTime desc&$top=100&$select=id,subject,from,bodyPreview,conversationId,receivedDateTime`),
+        graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$orderby=createdDateTime desc&$top=50&$select=id,subject,from,bodyPreview,conversationId,createdDateTime`)
       ]);
       const seen = new Set();
       allMsgs = [...(inboxData.value||[]), ...(sentData.value||[]).map(m => Object.assign(m, {_fromSent:true}))].filter(m => {
@@ -4531,18 +4518,16 @@ async function scanLeaveReplies(state) {
       // STRICT: only process replies in known checklist conversation threads
       // This prevents general business emails triggering false updates
       const replies = allMsgs.filter(m => {
-        // Accept replies in a known checklist conversation, OR a reply from the staff member or a
-        // covering colleague to any leave email about this staff member (for example the staff
-        // member's own handover email, whose thread is not always saved)
-        const inKnownThread = knownConvIds.includes(m.conversationId);
-        if (!inKnownThread) {
+        // Must be in a known checklist conversation
+        if (knownConvIds.length > 0 && !knownConvIds.includes(m.conversationId)) return false;
+        // If no conversationIds stored yet, fall back to sender+subject+date filtering
+        if (knownConvIds.length === 0) {
           const addr = (m.from?.emailAddress?.address||'').toLowerCase();
           const subj = (m.subject||'').toLowerCase();
-          const relevantAddrs = [...new Set([...(entry.coveringEmails||[]), entry.coveringEmail, entry.staffEmail].filter(Boolean).map(e => e.toLowerCase()))];
-          if (!relevantAddrs.includes(addr)) return false;
-          if (!/^(re|aw|antw)\s*:/i.test((m.subject||'').trim())) return false;
+          const relevantAddrs = [...new Set([...(entry.coveringEmails||[]), entry.staffEmail].filter(Boolean))];
+          if (!relevantAddrs.some(e => addr === e.toLowerCase())) return false;
+          if (!subj.includes('re:')) return false;
           if (!subj.includes('checklist') && !subj.includes('covering') && !subj.includes('urgent') && !subj.includes('handover')) return false;
-          if (entry.staffName && !subj.includes(entry.staffName.toLowerCase())) return false;
         }
         // Must arrive after first checklist email was sent
         if (new Date(m.receivedDateTime) <= firstSentAt) return false;
@@ -4771,6 +4756,47 @@ async function scanLeaveReplies(state) {
       }
 
       if (sChanged) { changed = true; }
+    }
+
+    // ── Scan for handback completion replies ──
+    // Any trusted reply in a handback thread that says it is completed closes and archives the leave.
+    for (const hb of (state.leaveEntries||[])) {
+      if (hb.status !== 'handback_pending' || !hb.handbackSentAt) continue;
+      if (!hb.processedHandbackReplies) hb.processedHandbackReplies = [];
+      const hbSentAt = new Date(hb.handbackSentAt);
+      const hbConv = hb.handbackConversationIds || [];
+      const hbFirst = (hb.staffName||'').toLowerCase().split(' ')[0];
+      const hbReplies = allMsgs.filter(m => {
+        if (hb.processedHandbackReplies.includes(m.id)) return false;
+        if (new Date(m.receivedDateTime) <= hbSentAt) return false;
+        const subj = (m.subject||'').toLowerCase();
+        if (!/^\s*(re|aw|antw|sv)\s*:/i.test(subj)) return false; // replies only, never the original
+        if (hbConv.length) return hbConv.includes(m.conversationId);
+        return subj.includes('handover back to') && (!hbFirst || subj.includes(hbFirst));
+      }).sort((a,b) => new Date(a.receivedDateTime) - new Date(b.receivedDateTime));
+      for (const r of hbReplies) {
+        if (!(await replyIsTrusted(r, hb.processedHandbackReplies, 'handback'))) { changed = true; continue; }
+        // Only the new text of the reply, not the quoted original (which itself says "once completed")
+        let text = (r.bodyPreview||'');
+        try {
+          const full = await graphGet(`/me/messages/${r.id}?$select=uniqueBody`);
+          if (full.uniqueBody?.content) text = full.uniqueBody.content;
+        } catch(e) {}
+        text = text.replace(/<[^>]+>/g,' ').replace(/&[a-z#0-9]+;/gi,' ').replace(/\s+/g,' ').toLowerCase();
+        text = text.split(/\bfrom:|-----original|\bon .{0,80} wrote:/)[0];
+        hb.processedHandbackReplies.push(r.id);
+        changed = true;
+        const negative = /\b(not|n't|yet to|haven't|hasn't|incomplete|still)\b.{0,25}\b(complet|done|finish)/.test(text) || /\bincomplete\b/.test(text);
+        const positive = /\b(complet\w*|done|finished|handed (it )?back|handback (is )?(done|complete)|all good|sorted)\b/.test(text);
+        if (negative || !positive) { console.log('[Leave] Handback reply not a completion, skipping:', text.substring(0,80)); continue; }
+        const who = r.from?.emailAddress?.name || r.from?.emailAddress?.address || (r._fromSent ? 'Kandia' : 'unknown');
+        hb.handbackCompletedAt = r.receivedDateTime || new Date().toISOString();
+        hb.handbackCompletedBy = who;
+        archiveLeaveEntry(hb, 'Handover back completed (confirmed by ' + who + ')');
+        saveLeaveState(state);
+        console.log('[Leave] ✅ Handback complete for', hb.staffName, '- confirmed by', who, '- archived');
+        break;
+      }
     }
 
     if (changed) saveLeaveState(state);
@@ -5254,6 +5280,69 @@ function saveLeaveState(s) {
   try { writeFileSync(LEAVE_STATE_PATH, JSON.stringify(s,null,2)); } catch(e) {}
 }
 
+// ── BUSINESS DAYS (Brisbane) ──
+// Queensland public holidays that apply in Brisbane. Add the next year's dates each December.
+const QLD_PUBLIC_HOLIDAYS = new Set([
+  // 2026
+  '2026-01-01','2026-01-26','2026-04-03','2026-04-04','2026-04-05','2026-04-06','2026-04-25',
+  '2026-05-04','2026-08-12','2026-10-05','2026-12-25','2026-12-26','2026-12-28',
+  // 2027
+  '2027-01-01','2027-01-26','2027-03-26','2027-03-27','2027-03-28','2027-03-29','2027-04-26',
+  '2027-05-03','2027-08-11','2027-10-04','2027-12-27','2027-12-28'
+]);
+function ymdAddDays(ymd, n) { const d = new Date(ymd + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().substring(0,10); }
+function isBrisBusinessDay(ymd) { const wd = new Date(ymd + 'T00:00:00Z').getUTCDay(); return wd >= 1 && wd <= 5 && !QLD_PUBLIC_HOLIDAYS.has(ymd); }
+function nextBusinessDay(ymd) { let d = ymdAddDays(ymd, 1); while (!isBrisBusinessDay(d)) d = ymdAddDays(d, 1); return d; }
+function addBusinessDays(ymd, n) { let d = ymd; for (let i = 0; i < n; i++) d = nextBusinessDay(d); return d; }
+// Leave dates are stored as YYYY-MM-DD (or an ISO string). Return the Brisbane calendar date.
+function leaveYmd(v) {
+  const str = String(v || '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  const d = new Date(str);
+  return isNaN(d) ? '' : d.toLocaleDateString('en-CA', { timeZone: 'Australia/Brisbane' });
+}
+function fmtYmdLong(ymd) { return new Date(ymd + 'T00:00:00Z').toLocaleDateString('en-AU', { weekday:'long', day:'numeric', month:'long', year:'numeric', timeZone:'UTC' }); }
+
+// Archive a leave entry (handback done, or closed manually). Keeps the full record.
+function archiveLeaveEntry(entry, reason, byName) {
+  entry.statusBeforeArchive = entry.status;
+  entry.status = 'archived';
+  entry.archivedAt = new Date().toISOString();
+  entry.archiveReason = reason || 'Archived';
+  if (byName) entry.archivedBy = byName;
+}
+
+// Return day handback: one email per covering colleague (staff member and Kandia copied). Never combined.
+// If there is no covering colleague with an email, it goes to the staff member alone.
+async function sendHandbackEmails(entry, kandiaEmail) {
+  const colleagues = (entry.coveringColleagues && entry.coveringColleagues.length > 0)
+    ? entry.coveringColleagues.map((name, i) => ({ name, email: (entry.coveringEmails||[])[i]||'' }))
+    : [{ name: entry.coveringColleague||'', email: entry.coveringEmail||'' }];
+  const withEmail = colleagues.filter(c => c.email);
+  const staffEmail = entry.staffEmail || '';
+  const subject = 'Action required: handover back to ' + entry.staffName + ' (due ' + fmtYmdLong(entry.handbackDueDate) + ')';
+  const convIds = [];
+  let sent = 0;
+  if (withEmail.length) {
+    for (const c of withEmail) {
+      const entryForC = { ...entry, coveringColleague: c.name, coveringEmail: c.email, coveringColleagues: [c.name], coveringEmails: [c.email] };
+      const html = buildLeaveEmail('handback_request', entryForC);
+      const subj = withEmail.length > 1 ? subject + ' - ' + c.name.split(' ')[0] : subject;
+      const cc = [staffEmail, kandiaEmail].filter(e => e && e.toLowerCase() !== c.email.toLowerCase());
+      const convId = await sendLeaveAlert([c.email], cc, subj, html, 'high', entryForC);
+      if (convId) sent++;
+      if (convId && typeof convId === 'string') convIds.push(convId);
+    }
+  } else if (staffEmail) {
+    const html = buildLeaveEmail('handback_request', entry);
+    const convId = await sendLeaveAlert([staffEmail], [kandiaEmail].filter(Boolean), subject, html, 'high', entry);
+    if (convId) sent++;
+    if (convId && typeof convId === 'string') convIds.push(convId);
+  }
+  entry.handbackConversationIds = [...new Set([...(entry.handbackConversationIds||[]), ...convIds])];
+  return sent;
+}
+
 const CHECKLIST_ITEMS = [
   { id:'contacts',       section:1, label:'Key contacts listed for each active project/relationship (name, role, contact details)' },
   { id:'access',         section:1, label:'Instructions provided for covering colleague to obtain system/drive/account access' },
@@ -5580,6 +5669,33 @@ function buildLeaveEmail(type, entry) {
       <p style="margin:0 0 12px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;">Just reply to this email and Kandia will see it.</p>
       <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;color:#666">${sFirst} is due to return on ${endStr}.</p>
     </td></tr>` + footer;
+  }
+
+  // Return day handback request (sent on the first business day after leave ends)
+  if (type === 'handback_request') {
+    const sFirst = staff.split(' ')[0];
+    const cFirst = (cover && cover !== 'To be confirmed') ? cover.split(' ')[0] : '';
+    const due = entry.handbackDueDate ? fmtYmdLong(entry.handbackDueDate) : 'within 2 business days';
+    const lastDay = fmtYmdLong(leaveYmd(entry.endDate));
+    const p = (t, extra) => '<p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6;' + (extra||'') + '">' + t + '</p>';
+    return header + '<tr><td style="padding:22px 28px 14px;border-bottom:2px solid ' + TEAL + ';">' +
+      '<p style="margin:0;font-size:16px;font-weight:bold;color:#111;font-family:Arial,sans-serif;">Welcome back ' + sFirst + ': handover back to ' + staff + '</p>' +
+    '</td></tr><tr><td style="padding:20px 28px;">' +
+      p('Hi ' + sFirst + (cFirst ? ' and ' + cFirst : '') + ',') +
+      p('Welcome back ' + sFirst + '. Your leave ended on ' + lastDay + ', and today is your first day back.') +
+      '<table cellpadding="0" cellspacing="0" bgcolor="#E6F4F3" style="background:#E6F4F3;border-radius:8px;width:100%;margin-bottom:16px"><tr><td style="padding:14px 16px">' +
+        '<p style="margin:0 0 6px;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;color:' + TEAL + '">Action: conduct handover back to ' + staff + '</p>' +
+        '<p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#222;line-height:1.6">This should be completed within 2 days, by <strong>' + due + '</strong>.</p>' +
+      '</td></tr></table>' +
+      '<p style="margin:0 0 8px;font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#444;">Please cover:</p>' +
+      '<table cellpadding="0" cellspacing="0" style="margin-bottom:16px">' +
+        '<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Work in progress, decisions made and anything still to action</td></tr>' +
+        '<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Client and stakeholder contact during the leave</td></tr>' +
+        '<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Deadlines coming up in the next two weeks</td></tr>' +
+        '<tr><td style="font-family:Arial,sans-serif;font-size:12px;color:#222;padding:3px 0">&bull;&nbsp;&nbsp;Anything that needs Kandia\'s attention</td></tr>' +
+      '</table>' +
+      p('<strong>Please reply to this email once completed.</strong> A reply from any of you saying the handover is completed will close this leave record.', 'margin-bottom:0') +
+    '</td></tr>' + footer;
   }
 
   // Return day
@@ -6049,7 +6165,7 @@ async function detectLeaveCandidates() {
       const staffName = String(r.staffName || c.name || '').replace(/[<>]/g,'').trim().substring(0,80);
       if (!staffName) continue;
       const first = staffName.toLowerCase().split(' ')[0];
-      const dup = state.leaveEntries.some(e => !['cancelled','returned'].includes(e.status) && (e.staffName||'').toLowerCase().split(' ')[0] === first && new Date(e.endDate) >= new Date(Date.now()-24*60*60*1000));
+      const dup = state.leaveEntries.some(e => !['cancelled','returned','handback_pending','archived'].includes(e.status) && (e.staffName||'').toLowerCase().split(' ')[0] === first && new Date(e.endDate) >= new Date(Date.now()-24*60*60*1000));
       if (dup) continue;
 
       let staffEmail = c.email;
@@ -6130,7 +6246,7 @@ async function sendLeaveAlert(toEmails, ccEmails, subject, htmlBody, importance,
     const send = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'/send',
       {method:'POST',headers:{Authorization:'Bearer '+token}});
     if (send.status === 202) {
-      console.log('[Leave] ✅ Email sent to', validTo.join(','));
+      console.log('[Leave] ✅ Email sent to', toEmails.filter(Boolean).join(','));
       // Return conversationId for reply tracking
       try {
         const sentMsg = await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msg.id+'?$select=conversationId',
@@ -6158,6 +6274,40 @@ async function sendLeaveCheckin(entry, kandiaEmail) {
   return await sendToEachColleague(entry, 'mid_leave_checkin', subject, '', kandiaEmail, 'normal', false);
 }
 
+// ── STAGE 6: Handback on return day ──
+// Sends one handback email on the first business day after leave ends (from 8am Brisbane),
+// then waits for a reply saying it is completed (scanLeaveReplies archives the entry).
+async function runHandbackStage(entry, state, todayYmd, bHour, kandiaEmail) {
+  if (entry.status !== 'returned' || entry.handbackSentAt) return false;
+  const endYmd = leaveYmd(entry.endDate);
+  if (!endYmd) return false;
+  const returnYmd = entry.returnDate || nextBusinessDay(endYmd);
+  entry.returnDate = returnYmd;
+  // Entries closed by the old flow (welcome back email already sent on the last day) go straight to the archive
+  if (entry.returnAlertAt) {
+    archiveLeaveEntry(entry, 'Closed before handback tracking was added');
+    saveLeaveState(state);
+    return true;
+  }
+  if (todayYmd < returnYmd || !isBrisBusinessDay(todayYmd)) return false;
+  // Too late to send a useful handback email (more than 3 business days after return): archive instead
+  if (todayYmd > addBusinessDays(returnYmd, 3)) {
+    archiveLeaveEntry(entry, 'Leave ended without a handback email being sent');
+    saveLeaveState(state);
+    return true;
+  }
+  if (bHour < 8) return false;
+  entry.handbackSentAt = new Date().toISOString();
+  entry.handbackDueDate = addBusinessDays(todayYmd, 2);
+  entry.status = 'handback_pending';
+  saveLeaveState(state); // flag before sending to avoid duplicates
+  const n = await sendHandbackEmails(entry, kandiaEmail);
+  entry.handbackEmailCount = n;
+  saveLeaveState(state);
+  console.log('[Leave] Stage 6: handback email sent (' + n + ') for', entry.staffName, '- due', entry.handbackDueDate);
+  return true;
+}
+
 // Monitor leave entries — new flow requiring Kandia confirmation before any emails
 async function monitorLeaveEntries() {
   if (!tokenStore.access_token) return;
@@ -6169,7 +6319,13 @@ async function monitorLeaveEntries() {
   const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
 
   for (const entry of (state.leaveEntries||[])) {
-    if (['cancelled','returned'].includes(entry.status)) continue;
+    if (['cancelled','archived'].includes(entry.status)) continue;
+
+    // Leave has concluded: only the handback stage applies
+    if (['returned','handback_pending'].includes(entry.status)) {
+      if (await runHandbackStage(entry, state, todayBrisStr, bHour, kandiaEmail)) changed = true;
+      continue;
+    }
 
     const startDate  = new Date(entry.startDate);
     const endDate    = new Date(entry.endDate);
@@ -6414,7 +6570,7 @@ async function monitorLeaveEntries() {
     }
 
     // ── STAGE 4: Leave starts ──
-    if (!['on_leave','returned'].includes(entry.status) && daysToStart <= 0 && daysToStart > -200 && !entry.activationSentAt) {
+    if (!['on_leave','returned'].includes(entry.status) && daysToStart <= 0 && daysToStart > -200 && !entry.activationSentAt && todayBrisStr <= leaveYmd(entry.endDate)) {
       entry.activationSentAt = now.toISOString();
       entry.status = 'on_leave';
       changed = true;
@@ -6446,24 +6602,17 @@ async function monitorLeaveEntries() {
       }
     }
 
-    // ── STAGE 5: Return day ──
-    if (entry.status === 'on_leave' && now >= endDate && now < new Date(endDate.getTime()+24*60*60*1000) && !entry.returnAlertAt) {
-      entry.returnAlertAt = now.toISOString();
+    // ── STAGE 5: Leave concluded ──
+    // The day after the last day of leave, mark it returned. The handback email goes out on the
+    // first business day after the last day of leave (runHandbackStage).
+    if (entry.status !== 'pending_confirmation' && leaveYmd(entry.endDate) && todayBrisStr > leaveYmd(entry.endDate)) {
       entry.status = 'returned';
+      entry.leaveConcludedAt = now.toISOString();
+      entry.returnDate = nextBusinessDay(leaveYmd(entry.endDate));
       changed = true;
       saveLeaveState(state);
-      // Handback: send to staff member + individually to each covering colleague
-      if (staffEmail) {
-        const retHtml = buildLeaveEmail('return_day', entry);
-        await sendLeaveAlert([staffEmail], [kandiaEmail], '✅ Welcome back: ' + entry.staffName + ' — handback process today', retHtml, 'normal');
-      }
-      await sendToEachColleague(entry, 'return_day', '✅ Handback: ' + entry.staffName + ' returns today', staffEmail, kandiaEmail, 'normal');
-      console.log('[Leave] Stage 5: Return day handback sent');
-    }
-
-    // Mark returned if past end date
-    if (entry.status === 'on_leave' && now > new Date(endDate.getTime()+24*60*60*1000)) {
-      entry.status = 'returned'; changed = true;
+      console.log('[Leave] Stage 5: leave concluded for', entry.staffName, '- back on', entry.returnDate);
+      if (await runHandbackStage(entry, state, todayBrisStr, bHour, kandiaEmail)) changed = true;
     }
   }
 
@@ -6562,6 +6711,35 @@ app.put('/leave/:id', requireAuth, (req, res) => {
     }
     saveLeaveState(state);
     res.json({success:true, entry:state.leaveEntries[idx]});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+// Archive a leave entry by hand (for example the handback was confirmed in person)
+app.post('/leave/:id/archive', requireAuth, (req, res) => {
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    if (entry.status === 'archived') return res.json({success:true, entry});
+    if (entry.status === 'handback_pending') { entry.handbackCompletedAt = new Date().toISOString(); entry.handbackCompletedBy = 'Kandia (marked in Cinderella)'; }
+    archiveLeaveEntry(entry, entry.status === 'handback_pending' ? 'Handover back marked complete in Cinderella' : 'Archived manually in Cinderella');
+    saveLeaveState(state);
+    res.json({success:true, entry});
+  } catch(e) { res.status(500).json({error:e.message}); }
+});
+
+// Restore an archived leave entry to the status it had before
+app.post('/leave/:id/unarchive', requireAuth, (req, res) => {
+  try {
+    const state = loadLeaveState();
+    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
+    if (!entry) return res.status(404).json({error:'Not found'});
+    if (entry.status !== 'archived') return res.json({success:true, entry});
+    entry.status = entry.statusBeforeArchive || 'returned';
+    delete entry.archivedAt; delete entry.archiveReason; delete entry.statusBeforeArchive;
+    if (entry.status === 'handback_pending') { delete entry.handbackCompletedAt; delete entry.handbackCompletedBy; }
+    saveLeaveState(state);
+    res.json({success:true, entry});
   } catch(e) { res.status(500).json({error:e.message}); }
 });
 
