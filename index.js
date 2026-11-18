@@ -172,7 +172,7 @@ app.post('/login', express.urlencoded({ extended: false }), (req, res) => {
     activeSessions.add(token);
     saveActiveSessions(activeSessions);
     console.log('[Sessions] New session saved for', token.substring(0,8)+'...');
-    res.setHeader('Set-Cookie', `cin_session=${token}; Path=/; HttpOnly; Max-Age=86400`);
+    res.setHeader('Set-Cookie', `cin_session=${token}; Path=/; HttpOnly; Max-Age=604800`);
     res.redirect('/');
   } else {
     res.redirect('/login?error=1');
@@ -195,7 +195,7 @@ function requireAuth(req, res, next) {
   const match = cookie.match(/cin_session=([^;]+)/);
   if (match && activeSessions.has(match[1])) return next();
   // API routes get JSON 401 (not HTML redirect) so the dashboard handles it gracefully
-  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status') || req.path.startsWith('/openactions') || req.path.startsWith('/generate') || req.path.startsWith('/docs') || req.path.startsWith('/checkins') || req.path.startsWith('/aurora') || req.path.startsWith('/board-report')) {
+  if (req.path.startsWith('/proxy') || req.path.startsWith('/graph') || req.path.startsWith('/monday') || req.path.startsWith('/auth/status') || req.path.startsWith('/openactions') || req.path.startsWith('/generate') || req.path.startsWith('/docs') || req.path.startsWith('/checkins') || req.path.startsWith('/aurora') || req.path.startsWith('/board-report') || req.path.startsWith('/leave')) {
     return res.status(401).json({ error: { message: 'Session expired — please refresh the page and log in again.' } });
   }
   res.redirect('/login');
@@ -4490,9 +4490,22 @@ async function scanLeaveReplies(state) {
     // Fetch recent inbox AND sent items
     let allMsgs = [];
     try {
+      // Follow paging so busy weeks do not push replies out of view (up to 1000 inbox / 300 sent)
+      const fetchPaged = async (path, maxPages) => {
+        let out = [];
+        let data = await graphGet(path);
+        out = out.concat(data.value || []);
+        let pages = 1;
+        while (data['@odata.nextLink'] && pages < maxPages) {
+          data = await graphGet(data['@odata.nextLink'].replace('https://graph.microsoft.com/v1.0', ''));
+          out = out.concat(data.value || []);
+          pages++;
+        }
+        return { value: out };
+      };
       const [inboxData, sentData] = await Promise.all([
-        graphGet(`/me/messages?$filter=receivedDateTime ge ${since}&$orderby=receivedDateTime desc&$top=100&$select=id,subject,from,bodyPreview,conversationId,receivedDateTime`),
-        graphGet(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$orderby=createdDateTime desc&$top=50&$select=id,subject,from,bodyPreview,conversationId,createdDateTime`)
+        fetchPaged(`/me/messages?$filter=receivedDateTime ge ${since}&$orderby=receivedDateTime desc&$top=250&$select=id,subject,from,bodyPreview,conversationId,receivedDateTime`, 4),
+        fetchPaged(`/me/mailFolders/sentitems/messages?$filter=createdDateTime ge ${since}&$orderby=createdDateTime desc&$top=100&$select=id,subject,from,bodyPreview,conversationId,createdDateTime`, 3)
       ]);
       const seen = new Set();
       allMsgs = [...(inboxData.value||[]), ...(sentData.value||[]).map(m => Object.assign(m, {_fromSent:true}))].filter(m => {
@@ -4518,16 +4531,18 @@ async function scanLeaveReplies(state) {
       // STRICT: only process replies in known checklist conversation threads
       // This prevents general business emails triggering false updates
       const replies = allMsgs.filter(m => {
-        // Must be in a known checklist conversation
-        if (knownConvIds.length > 0 && !knownConvIds.includes(m.conversationId)) return false;
-        // If no conversationIds stored yet, fall back to sender+subject+date filtering
-        if (knownConvIds.length === 0) {
+        // Accept replies in a known checklist conversation, OR a reply from the staff member or a
+        // covering colleague to any leave email about this staff member (for example the staff
+        // member's own handover email, whose thread is not always saved)
+        const inKnownThread = knownConvIds.includes(m.conversationId);
+        if (!inKnownThread) {
           const addr = (m.from?.emailAddress?.address||'').toLowerCase();
           const subj = (m.subject||'').toLowerCase();
-          const relevantAddrs = [...new Set([...(entry.coveringEmails||[]), entry.staffEmail].filter(Boolean))];
-          if (!relevantAddrs.some(e => addr === e.toLowerCase())) return false;
-          if (!subj.includes('re:')) return false;
+          const relevantAddrs = [...new Set([...(entry.coveringEmails||[]), entry.coveringEmail, entry.staffEmail].filter(Boolean).map(e => e.toLowerCase()))];
+          if (!relevantAddrs.includes(addr)) return false;
+          if (!/^(re|aw|antw)\s*:/i.test((m.subject||'').trim())) return false;
           if (!subj.includes('checklist') && !subj.includes('covering') && !subj.includes('urgent') && !subj.includes('handover')) return false;
+          if (entry.staffName && !subj.includes(entry.staffName.toLowerCase())) return false;
         }
         // Must arrive after first checklist email was sent
         if (new Date(m.receivedDateTime) <= firstSentAt) return false;
@@ -5235,32 +5250,8 @@ function loadLeaveState() {
   try { return JSON.parse(readFileSync(LEAVE_STATE_PATH,'utf8')||'{"leaveEntries":[]}'); }
   catch(e) { return { leaveEntries: [] }; }
 }
-// Fields only Kandia changes (via confirm / edit). Background jobs hold a copy of the state while they
-// await email sends and AI calls; without this merge, saving that stale copy wiped out edits made meanwhile.
-const LEAVE_USER_FIELDS = ['staffName','staffEmail','staffRole','startDate','endDate','triggerDate',
-  'coveringColleague','coveringEmail','coveringColleagues','coveringEmails','notes','leaveType','confirmedAt'];
 function saveLeaveState(s) {
-  try {
-    let disk = null;
-    try { disk = JSON.parse(readFileSync(LEAVE_STATE_PATH,'utf8')||'{}'); } catch(e) {}
-    if (disk && Array.isArray(disk.leaveEntries) && Array.isArray(s.leaveEntries)) {
-      const deleted = new Set([...(disk.deletedLeaveIds||[]), ...(s.deletedLeaveIds||[])]);
-      s.deletedLeaveIds = [...deleted].slice(-500);
-      s.leaveEntries = s.leaveEntries.filter(e => !deleted.has(e.id));
-      const mine = new Map(s.leaveEntries.map(e => [e.id, e]));
-      for (const d of disk.leaveEntries) {
-        if (deleted.has(d.id)) continue;
-        const m = mine.get(d.id);
-        if (!m) { s.leaveEntries.push(d); continue; }            // entry added while we were busy — keep it
-        if ((d.editedAt||'') > (m.editedAt||'')) {               // Kandia edited it while we were busy — keep her edit
-          for (const f of LEAVE_USER_FIELDS) if (f in d) m[f] = d[f];
-          m.editedAt = d.editedAt;
-          if (m.status === 'pending_confirmation' && d.status !== 'pending_confirmation') m.status = d.status;
-        }
-      }
-    }
-    writeFileSync(LEAVE_STATE_PATH, JSON.stringify(s,null,2));
-  } catch(e) { console.error('[Leave] saveLeaveState failed:', e.message); }
+  try { writeFileSync(LEAVE_STATE_PATH, JSON.stringify(s,null,2)); } catch(e) {}
 }
 
 const CHECKLIST_ITEMS = [
@@ -6494,33 +6485,13 @@ app.get('/leave', requireAuth, (req, res) => {
 });
 
 // Kandia confirms leave — starts the process
-// Send the person going on leave a summary of their handover (dates, cover, checklist), CC Kandia
-app.post('/leave/:id/notify-staff', requireAuth, async (req, res) => {
-  try {
-    const state = loadLeaveState();
-    const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
-    if (!entry) return res.status(404).json({error:'Not found'});
-    if (!entry.staffEmail) return res.status(400).json({error:'No email address saved for '+entry.staffName+' — edit the entry and choose the staff member first'});
-    const kandiaEmail = await getKandiaEmail().catch(()=>'kandia@risk2solution.com');
-    const html = buildLeaveEmail('checklist_updated', entry);
-    const ok = await sendLeaveAlert([entry.staffEmail], [kandiaEmail].filter(e=>e&&e!==entry.staffEmail),
-      '📋 Your leave handover: ' + entry.staffName + ' — cover: ' + (entry.coveringColleague||'TBC'), html, 'normal', entry);
-    if (!ok) return res.status(500).json({error:'Email send failed — check the server log'});
-    entry.staffNotifiedAt = new Date().toISOString();
-    saveLeaveState(state);
-    res.json({success:true, message:'Handover summary sent to '+entry.staffEmail});
-  } catch(e) { res.status(500).json({error:e.message}); }
-});
-
 app.post('/leave/:id/confirm', requireAuth, async (req, res) => {
   try {
     const state = loadLeaveState();
     const entry = (state.leaveEntries||[]).find(e=>e.id===req.params.id);
     if (!entry) return res.status(404).json({error:'Not found'});
-    const { coveringColleagues, coveringEmails, startDate, endDate, notes, staffName, staffEmail } = req.body;
+    const { coveringColleagues, coveringEmails, startDate, endDate, notes } = req.body;
     // Update entry with confirmed details
-    if (staffName) entry.staffName = staffName;
-    if (staffEmail) entry.staffEmail = staffEmail;
     if (coveringColleagues) { entry.coveringColleagues = coveringColleagues; entry.coveringColleague = coveringColleagues.join(', '); }
     if (coveringEmails) { entry.coveringEmails = coveringEmails; entry.coveringEmail = coveringEmails[0]||''; }
     if (startDate) { entry.startDate = startDate; entry.triggerDate = new Date(new Date(startDate).getTime()-14*24*60*60*1000).toISOString().substring(0,10); }
@@ -6528,7 +6499,6 @@ app.post('/leave/:id/confirm', requireAuth, async (req, res) => {
     if (notes) entry.notes = notes;
     entry.status = 'confirmed';
     entry.confirmedAt = new Date().toISOString();
-    entry.editedAt = entry.confirmedAt;
     saveLeaveState(state);
     // Trigger monitoring immediately so Stage 1 email goes out
     setTimeout(() => monitorLeaveEntries(), 500);
@@ -6585,10 +6555,6 @@ app.put('/leave/:id', requireAuth, (req, res) => {
     const idx = (state.leaveEntries||[]).findIndex(e=>e.id===req.params.id);
     if (idx < 0) return res.status(404).json({error:'Not found'});
     Object.assign(state.leaveEntries[idx], req.body);
-    const ed = state.leaveEntries[idx];
-    if (Array.isArray(req.body.coveringColleagues)) ed.coveringColleague = req.body.coveringColleagues.join(', ');
-    if (Array.isArray(req.body.coveringEmails)) ed.coveringEmail = req.body.coveringEmails[0] || '';
-    if (LEAVE_USER_FIELDS.some(f => f in req.body)) ed.editedAt = new Date().toISOString();
     // Recalculate trigger if dates changed
     if (req.body.startDate) {
       const start = new Date(req.body.startDate);
@@ -6602,7 +6568,6 @@ app.put('/leave/:id', requireAuth, (req, res) => {
 app.delete('/leave/:id', requireAuth, (req, res) => {
   const state = loadLeaveState();
   state.leaveEntries = (state.leaveEntries||[]).filter(e=>e.id!==req.params.id);
-  state.deletedLeaveIds = [...(state.deletedLeaveIds||[]), req.params.id];
   saveLeaveState(state);
   res.json({success:true});
 });
@@ -6656,18 +6621,7 @@ app.post('/leave/:id/send-checklist', requireAuth, async (req, res) => {
 
     const subject = '📋 Leave Handover Checklist — ' + entry.staffName + ' (leave from ' + new Date(entry.startDate).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) + ')';
     // Send INDIVIDUALLY to each covering colleague — never combined
-    // Optional: send only to specific (e.g. newly added) colleagues, so existing cover isn't emailed twice
-    let target = entry;
-    const only = Array.isArray(req.body && req.body.onlyEmails) ? req.body.onlyEmails.map(x=>String(x).toLowerCase()) : null;
-    if (only && only.length) {
-      const names = [], emails = [];
-      (entry.coveringEmails||[]).forEach((em,i)=>{ if (only.includes((em||'').toLowerCase())) { emails.push(em); names.push((entry.coveringColleagues||[])[i]||''); } });
-      if (!emails.length) return res.status(400).json({error:'None of those emails are covering colleagues on this entry'});
-      if (!entry.colleagueChecklists) entry.colleagueChecklists = {};
-      emails.forEach((em,i)=>{ if (!entry.colleagueChecklists[em]) entry.colleagueChecklists[em] = {name:names[i], checklist:{}}; });
-      target = {...entry, coveringColleagues:names, coveringEmails:emails, coveringColleague:names.join(', '), coveringEmail:emails[0]};
-    }
-    const sent = await sendToEachColleague(target, 'cover_nominated_briefing', subject, entry.staffEmail, kandiaEmail, 'high');
+    const sent = await sendToEachColleague(entry, 'cover_nominated_briefing', subject, entry.staffEmail, kandiaEmail, 'high');
     saveLeaveState(state);
     entry.checklistSentAt = new Date().toISOString();
     saveLeaveState(state);
